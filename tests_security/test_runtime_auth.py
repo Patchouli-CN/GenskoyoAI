@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from GensokyoAI.backends.web_server.http_adapter import create_app
+from GensokyoAI.backends.web_server.http_adapter import (
+    RUNTIME_AUTH_RATE_LIMIT_APP_KEY,
+    create_app,
+)
+from GensokyoAI.backends.web_server.main import _is_loopback_host
 
 
 class _FakeRuntimeService:
@@ -103,5 +107,38 @@ async def test_auth_not_required_when_no_token(fake_service: _FakeRuntimeService
     try:
         response = await client.get("/health")
         assert response.status == 200
+    finally:
+        await client.close()
+
+
+def test_remote_binding_requires_auth_token(fake_service: _FakeRuntimeService) -> None:
+    with pytest.raises(RuntimeError, match="required for non-loopback"):
+        create_app(service=fake_service, require_auth=True)
+
+
+def test_builtin_server_requires_auth_for_non_loopback_hosts() -> None:
+    assert _is_loopback_host("127.0.0.1")
+    assert _is_loopback_host("::1")
+    assert _is_loopback_host("localhost")
+    assert not _is_loopback_host("0.0.0.0")
+    assert not _is_loopback_host("::")
+
+
+@pytest.mark.asyncio
+async def test_successful_auth_clears_peer_failures(fake_service: _FakeRuntimeService) -> None:
+    app = create_app(service=fake_service, auth_token="supersecrettoken123")
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        failed = await client.get("/health")
+        assert failed.status == 401
+        assert app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY]
+
+        allowed = await client.get(
+            "/health", headers={"Authorization": "Bearer supersecrettoken123"}
+        )
+        assert allowed.status == 200
+        assert app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY] == {}
     finally:
         await client.close()

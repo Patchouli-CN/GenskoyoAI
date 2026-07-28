@@ -326,7 +326,11 @@ class Agent:
             try:
                 full_response = await asyncio.wait_for(response_future, timeout=60.0)
                 if full_response:
-                    return UnifiedMessage(role="assistant", content=full_response)
+                    return UnifiedMessage(
+                        role="assistant",
+                        content=full_response,
+                        reasoning_content=self.response_handler.last_assistant_reasoning,
+                    )
             except TimeoutError:
                 logger.warning(timeout_log)
                 self._action_executor.cancel_response(cancel_reason)  # type: ignore
@@ -425,11 +429,13 @@ class Agent:
                         # 可能还积着最后几个 chunk（生产快于 0.1s 轮询），
                         # 先全部排空再退出，避免丢失流尾。
                         if get_chunk_task in done and (tail_chunk := get_chunk_task.result()):
-                            full_response += tail_chunk
-                            yield StreamChunk(content=tail_chunk)
-                        while tail_chunk := self._action_executor.get_chunk_nowait():  # type: ignore
-                            full_response += tail_chunk
-                            yield StreamChunk(content=tail_chunk)
+                            full_response += tail_chunk.content
+                            yield tail_chunk
+                        while (
+                            tail_chunk := self._action_executor.get_chunk_nowait()  # type: ignore
+                        ) is not None:
+                            full_response += tail_chunk.content
+                            yield tail_chunk
                         break
 
                     if get_chunk_task in done:
@@ -437,8 +443,8 @@ class Agent:
                         if chunk:
                             saw_chunk = True
                             last_chunk_at = loop.time()
-                            full_response += chunk
-                            yield StreamChunk(content=chunk)
+                            full_response += chunk.content
+                            yield chunk
                         continue
 
                     # 超时：两个都没完成
@@ -773,14 +779,21 @@ class Agent:
                     break
                 if chunk.content:
                     full_response += chunk.content
-                    await self._action_executor.feed_chunk(chunk.content)  # type: ignore
+                await self._action_executor.feed_chunk(chunk)  # type: ignore
 
         except Exception as e:
             logger.error(f"生成响应异常: {e}")
             error_msg = "\n[出了点问题]\n"
             if not full_response:
                 full_response = error_msg
-                await self._action_executor.feed_chunk(error_msg)  # type: ignore
+                await self._action_executor.feed_chunk(  # type: ignore
+                    StreamChunk(
+                        type="error",
+                        content=error_msg,
+                        error=str(e),
+                        error_code="agent.response.failed",
+                    )
+                )
 
         finally:
             if full_response and "响应中断" not in full_response:

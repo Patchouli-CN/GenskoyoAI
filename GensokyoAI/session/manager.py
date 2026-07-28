@@ -2,6 +2,10 @@
 
 # GensokyoAI\session\manager.py
 
+from copy import deepcopy
+from typing import Any
+from uuid import uuid4
+
 from ..core.config import SessionConfig
 from ..memory.working import WorkingMemoryManager
 from ..utils.logger import logger
@@ -31,9 +35,11 @@ class SessionManager:
             # 加载工作记忆
             messages = self._persistence.load_messages(sess.session_id)
             if messages:
+                messages, changed = self._merge_message_model([], messages)
+                if changed:
+                    self._persistence.save_messages(sess.session_id, messages)
                 wm = WorkingMemoryManager(max_turns=self._working_max_turns)
-                for msg in messages:
-                    wm.add_message(msg["role"], msg["content"])
+                wm.replace_messages(messages)
                 self._working_memories[sess.session_id] = wm
         logger.info(f"加载了 {len(self._sessions)} 个历史会话")
 
@@ -103,8 +109,7 @@ class SessionManager:
             # 尝试从持久化加载
             messages = self._persistence.load_messages(sid)
             wm = WorkingMemoryManager(max_turns=self._working_max_turns)
-            for msg in messages:
-                wm.add_message(msg["role"], msg["content"])
+            wm.replace_messages(messages)
             self._working_memories[sid] = wm
 
         return self._working_memories[sid]
@@ -118,6 +123,10 @@ class SessionManager:
         wm = self._working_memories.get(sid)
         if wm:
             messages = wm.get_context()
+            previous = self._persistence.load_messages(sid)
+            messages, changed = self._merge_message_model(previous, messages)
+            if changed:
+                wm.replace_messages(messages)
             self._persistence.save_messages(sid, messages)
             logger.debug(f"保存工作记忆: {sid}, {len(messages)} 条消息")
 
@@ -125,6 +134,8 @@ class SessionManager:
             session = self._sessions.get(sid)
             if session:
                 session.total_turns = len(messages) // 2
+                if changed:
+                    session.revision += 1
                 # 立即保存会话信息
                 self._persistence.save_session(session)
 
@@ -134,13 +145,16 @@ class SessionManager:
         if session is None:
             return False
 
-        normalized_messages = [dict(message) for message in messages]
+        previous = self._persistence.load_messages(session_id)
+        normalized_messages, changed = self._merge_message_model(previous, messages)
         wm = WorkingMemoryManager(max_turns=self._working_max_turns)
         wm.replace_messages(normalized_messages)
         self._working_memories[session_id] = wm
 
         session.total_turns = len(normalized_messages) // 2
-        session.touch()
+        if changed:
+            session.revision += 1
+            session.touch()
         self._persistence.replace_messages(session_id, normalized_messages)
         self._persistence.save_session(session)
         logger.debug(f"替换会话消息: {session_id}, {len(normalized_messages)} 条")
@@ -157,12 +171,18 @@ class SessionManager:
             return False
 
         messages = wm.get_context()
+        previous = await self._persistence.load_messages_async(sid)
+        messages, changed = self._merge_message_model(previous, messages)
+        if changed:
+            wm.replace_messages(messages)
         await self._persistence.async_save_message(sid, messages)
         logger.debug(f"异步保存工作记忆: {sid}, {len(messages)} 条消息")
 
         session = self._sessions.get(sid)
         if session:
             session.total_turns = len(messages) // 2
+            if changed:
+                session.revision += 1
             await self._persistence.save_session_async(session)
 
         return True
@@ -185,3 +205,51 @@ class SessionManager:
             # 保存工作记忆（会自动更新 total_turns 和保存会话）
             self.save_working_memory()
         logger.debug(f"会话已保存: {self._current_session_id}")
+
+    def assert_revision(self, session_id: str, expected_revision: int | None) -> SessionContext:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ValueError(f"Session does not exist: {session_id}")
+        if expected_revision is not None and session.revision != expected_revision:
+            from GensokyoAI.runtime.rpc import RpcError
+
+            raise RpcError(
+                f"Session revision conflict: expected {expected_revision}, current {session.revision}",
+                code="session.revision_conflict",
+                user_message="会话已被其他请求修改。",
+                recoverable=True,
+                action_hint="请重新读取 session.messages 后重试。",
+                details={
+                    "session_id": session_id,
+                    "expected_revision": expected_revision,
+                    "current_revision": session.revision,
+                },
+            )
+        return session
+
+    @staticmethod
+    def _merge_message_model(
+        previous: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        previous_by_id = {
+            message.get("message_id"): message
+            for message in previous
+            if isinstance(message.get("message_id"), str)
+        }
+        normalized: list[dict[str, Any]] = []
+        for raw in messages:
+            message = deepcopy(dict(raw))
+            message_id = message.get("message_id")
+            if not isinstance(message_id, str) or not message_id:
+                message_id = str(uuid4())
+                message["message_id"] = message_id
+            old = previous_by_id.get(message_id)
+            old_revision = int(old.get("revision", 1)) if old else 0
+            comparable = {key: value for key, value in message.items() if key != "revision"}
+            old_comparable = (
+                {key: value for key, value in old.items() if key != "revision"} if old else None
+            )
+            message["revision"] = old_revision if comparable == old_comparable else old_revision + 1
+            normalized.append(message)
+        return normalized, normalized != previous

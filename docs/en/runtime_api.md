@@ -5,11 +5,25 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 ## Versioning and Compatibility
 
 - Current package version: `2026.7.14.0`
-- Current protocol version: `1.1.0`
-- Current protocol major version: `1`
+- Current protocol version: `2.0.0`
+- Current protocol major version: `2`
 - Compatibility policy: within the same major version, new fields and methods may be added; removing fields, changing semantics, or changing error structures requires a breaking change.
 - Clients should call `runtime.info` first, then decide available features based on `protocol_version`, `capabilities`, `methods`, `legacy_methods`, and `method_specs`.
 - The method list in this document should be taken as a guide; the authoritative source is `runtime.info.methods` and `runtime.info.method_specs`. Examples will list the complete non-legacy methods from the current `GensokyoAI.runtime.rpc.RPC_METHOD_SPECS` as much as possible to avoid clients misunderstanding due to subset display.
+
+## Remote Multi-User Resource Model
+
+HTTP, WebSocket, and SSE use `user_id -> agent_id -> session_id -> message_id`. The JWT `sub` claim is the stable `user_id`; clients cannot submit or override it. Equal Agent or session IDs owned by different users are fully isolated.
+
+- `agent.init` accepts an optional `agent_id`; the server generates one when omitted. `agent.list` only returns the caller's Agents, and `agent.delete` requires `admin`.
+- Network Agent/session RPCs require `agent_id`. Conversation-context operations also require `session_id` and never rely on a process-global current session.
+- Session writes require the last observed `expected_revision`. Conflicts return `session.revision_conflict`.
+- Message sends also require a 1-128 character `idempotency_key`; retries must reuse it.
+- The trusted local JSON Lines bridge retains single-user implicit-current-session compatibility.
+
+For remote authentication, use a TLS reverse proxy/OIDC gateway to issue short-lived HS256 JWTs. Configure `GENSOKYOAI_RUNTIME_JWT_SECRET` (at least 32 characters), plus optional strict `GENSOKYOAI_RUNTIME_JWT_ISSUER` and `GENSOKYOAI_RUNTIME_JWT_AUDIENCE`. JWTs require `sub` and `exp`, and may carry `read`, `chat`, or `admin` roles. The legacy shared `GENSOKYOAI_RUNTIME_TOKEN` maps to one `runtime-admin` identity and does not provide multi-user identity.
+
+The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/` and supports a single-node remote multi-user deployment. `BlobStore` is the object-storage replacement boundary. Multi-node deployments still need PostgreSQL for session/Agent metadata and shared object storage for blobs; the file backend does not claim multi-node consistency.
 
 ## Discovery Interface
 
@@ -19,11 +33,11 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 {
   "name": "GensokyoAI Runtime",
   "package_version": "2026.7.14.0",
-  "protocol": "json-lines-rpc",
-  "protocol_version": "1.1.0",
-  "protocol_major_version": 1,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "protocol": "gensokyo-runtime-rpc",
+  "protocol_version": "2.0.0",
+  "protocol_major_version": 2,
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
+  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -31,7 +45,7 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
   ],
   "schema_versions": {
     "config": 1,
-    "session": 1,
+    "session": 2,
     "memory": 2,
     "session_export": 1,
     "character_package": 1
@@ -44,7 +58,41 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
       "remove_after": "2.0.0"
     }
   ],
-  "breaking_changes": [],
+  "breaking_changes": [
+    {
+      "scope": "runtime.rpc.error_envelope",
+      "change": "RPC method failures now use the transport-level ok=false envelope instead of a nested result.ok=false payload.",
+      "migration": "Check the top-level ok field and read the top-level error object."
+    },
+    {
+      "scope": "runtime.websocket.stream_start",
+      "change": "WebSocket streaming requests now receive a start acknowledgement before stream events.",
+      "migration": "Read result.stream_id and result.generation_id from the acknowledgement frame before consuming event frames."
+    },
+    {
+      "scope": "runtime.info.protocol",
+      "change": "runtime.info.protocol now identifies the shared RPC protocol instead of naming one transport.",
+      "migration": "Discover concrete transports through runtime.info.transports."
+    },
+    {
+      "scope": "runtime.reasoning_visibility",
+      "change": "Reasoning content is public by default in non-streaming and streaming agent responses.",
+      "migration": "Render reasoning_content separately from content and apply client-side visibility policy when needed."
+    }
+  ],
+  "transports": [
+    {"name": "json-lines", "streaming": "aggregate"},
+    {"name": "http", "streaming": "aggregate"},
+    {"name": "websocket", "streaming": "incremental"},
+    {"name": "sse", "streaming": "runtime-events"}
+  ],
+  "stream_protocol": {
+    "version": 2,
+    "reasoning_default": "public",
+    "start_acknowledgement": true,
+    "correlation_fields": ["stream_id", "generation_id"],
+    "replay_supported": true
+  },
   "deprecated_fields": [],
   "compatibility_notes": [
     {
@@ -71,19 +119,22 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 }
 ```
 
+`method_specs[].params_schema` and `result_schema` are generated from actual Runtime handler signatures and expose JSON Schema base types, required fields, defaults, and result types. Client generators should not infer parameters from prose.
+
 Non-legacy methods grouped by current namespace:
 
 - `runtime.info`, `runtime.health`, `runtime.shutdown`
 - `config.validate`
 - `character.validate`, `character.list`
 - `character_package.validate`, `character_package.preview`, `character_package.import`, `character_package.export`
-- `agent.init`, `agent.send_message`, `agent.send_message_stream`
+- `agent.init`, `agent.list`, `agent.delete`, `agent.send_message`, `agent.send_message_stream`
 - `model.list`, `model.info`
 - `session.create`, `session.list`, `session.current`, `session.resume`, `session.delete`, `session.export`, `session.rename`, `session.messages`, `session.replace_messages`, `session.regenerate_from`, `session.rollback`
 - `dependency.status`, `dependency.install`
 - `external_tool.status`
 - `initiative_timer.current`, `initiative_timer.update`, `initiative_timer.cancel`, `initiative_timer.trigger`, `initiative_timer.hesitation`, `initiative_timer.hesitation.set`
 - `memory.list`, `memory.search`, `memory.get`, `memory.update`, `memory.delete`, `memory.graph`
+- `media.list`, `media.delete`
 - `scene.current`, `scene.list`, `scene.get`, `scene.switch`, `scene.graph`
 
 Legacy compatibility methods remain available but are deprecated: `init`, `send_message`, `send_message_stream`, `list_characters`, `create_session`, `list_sessions`, `current_session`, `resume_session`, `delete_session`, `export_session`, `rename_session`, `rollback_session`, `shutdown`, `dependency_status`, `install_dependencies`, `external_tool_status`. New clients should migrate to namespaced methods according to `method_specs[].replacement`.
@@ -189,9 +240,9 @@ When resource control is triggered, `resource.limit_exceeded` is returned:
 ```json
 {
   "ok": false,
-  "error_code": "resource.limit_exceeded",
-  "error_object": {
+  "error": {
     "code": "resource.limit_exceeded",
+    "error_code": "resource.limit_exceeded",
     "message": "Runtime is currently busy, please retry later.",
     "recoverable": true,
     "action_hint": "Please retry later, or increase the corresponding concurrency / queue configuration in resource_control.",
@@ -221,17 +272,23 @@ WebSocket client sends:
 {
   "id": "stream-1",
   "method": "agent.send_message_stream",
-  "params": {"message": "Hello"}
+  "params": {
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
+    "idempotency_key": "send-018f...",
+    "message": "Hello"
+  }
 }
 ```
 
-The server first returns a start confirmation frame, where `result` is the assigned `stream_id`:
+The server first returns a start confirmation frame containing the assigned `stream_id` and `generation_id`:
 
 ```json
 {
   "id": "stream-1",
   "ok": true,
-  "result": {"stream_id": "..."}
+  "result": {"stream_id": "...", "generation_id": "..."}
 }
 ```
 
@@ -242,7 +299,8 @@ Then event frames are returned as generation progresses:
   "id": "stream-1",
   "ok": true,
   "stream_id": "...",
-  "event": {"type": "content", "index": 0, "content": "..."}
+  "generation_id": "...",
+  "event": {"type": "content", "index": 0, "content": "...", "generation_id": "..."}
 }
 ```
 
@@ -253,10 +311,13 @@ End frame:
   "id": "stream-1",
   "ok": true,
   "stream_id": "...",
+  "generation_id": "...",
   "done": true,
   "result": {
     "role": "assistant",
     "content": "...",
+    "reasoning_content": "...",
+    "generation_id": "...",
     "events": [
       {"type": "content", "index": 0, "content": "..."},
       {"type": "finish", "index": 1, "content": "..."}
@@ -280,6 +341,12 @@ End frame:
   }
 }
 ```
+
+`reasoning_content` is public by default in protocol `2.0.0`. Reasoning-only chunks use `type: "reasoning"`; answer chunks use `type: "content"`. Both carry the same `generation_id`, and clients must not merge reasoning into `content`.
+
+RPC method failures use the top-level `ok: false` envelope and top-level `error` object. Protocol `2.0.0` no longer returns nested `ok: true`, `result.ok: false` failures.
+
+Non-loopback HTTP/WebSocket binding requires either a JWT secret or a shared Runtime token. Browser access also requires an exact scheme/host/port entry through `--allowed-origin`; CORS `OPTIONS` preflight is supported.
 
 Cancellation semantics:
 
@@ -461,6 +528,12 @@ Return fields:
 
 `character.list` entries also include `ok`, `preview`, and `diagnostics`, making it easy for clients to display broken character files in the list.
 
+## Media and Character Package Uploads
+
+Remote media uses `POST /media?agent_id=...` with a `multipart/form-data` file field named `file`. The response contains a stable `media_id`, MIME type, size, SHA-256, and ownership. Reference it from a message content-parts array with `{"type":"media","media_id":"..."}`. Images are mapped to provider-neutral multimodal input; other stored MIME types are currently rejected as model input. `media.list` and `media.delete` enforce the same user/Agent ownership. The file backend implements the replaceable `BlobStore` boundary.
+
+Remote character packages use the admin-only `POST /character-packages` endpoint. The upload is checked for zip path safety, size, manifest, YAML, and checksums before import. Current manifest signatures are format-checked rather than cryptographically verified, so remote import fails closed with `character_package.untrusted` unless an administrator explicitly supplies `allow_untrusted=true` after reviewing provenance.
+
 ## Character Package API
 
 Character packages use the `.gensokyo-character` extension. They are essentially security-restricted zip archives; the root directory must contain `manifest.yaml`. The current format name is `gensokyoai.character.package` and the schema version is `1`. After the P3 ecosystem specification expansion, the manifest supports source, author homepage, license link, attribution, external links, repository index metadata, optional signature field, and `checksums.sha256`.
@@ -549,16 +622,16 @@ Runtime resource control is governed by the `resource_control` configuration sec
 
 ## Session Message Editing API
 
-`session.messages` returns the complete editable history of the specified session; if `session_id` is not passed, the current session is used:
+`session.messages` returns a stable page of editable history. Network calls require `agent_id` and `session_id`, and accept `limit` (1-500) plus `cursor`:
 
 ```json
 {
   "method": "session.messages",
-  "params": {"session_id": "optional-session-id"}
+  "params": {"agent_id": "agent-1", "session_id": "session-1", "limit": 100, "cursor": null}
 }
 ```
 
-The response contains `session`, `session_id`, `is_current`, `messages`, and `message_count`. `messages` preserves message extension fields such as `reasoning_content`, `tool_calls`, `tool_call_id`; frontend editing should preserve fields it does not understand as much as possible.
+The response contains `session`, `session_id`, session `revision`, page `messages` / `message_count`, `total_message_count`, `has_more`, and `next_cursor`. Every message has a stable `message_id` and its own `revision`, while preserving `reasoning_content`, tool fields, and unknown extensions.
 
 `session.replace_messages` is used to submit the edited complete message array, enabling editing, deleting, or inserting any historical message:
 
@@ -566,7 +639,9 @@ The response contains `session`, `session_id`, `is_current`, `messages`, and `me
 {
   "method": "session.replace_messages",
   "params": {
-    "session_id": "optional-session-id",
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
     "messages": [
       {"role": "user", "content": "Rewritten user message"},
       {"role": "assistant", "content": "Inserted or edited assistant message"}
@@ -578,7 +653,7 @@ The response contains `session`, `session_id`, `is_current`, `messages`, and `me
 Validation rules:
 
 - `messages` must be an array.
-- Each message must be an object containing string `content`.
+- Each message must be an object containing text or a structured content-parts array in `content`.
 - `role` only allows `system`, `user`, `assistant`, `tool`.
 - Runtime fully replaces target session messages, updates `message_count` / `total_turns`, and synchronizes the current session working memory cache.
 
@@ -588,7 +663,9 @@ Validation rules:
 {
   "method": "session.regenerate_from",
   "params": {
-    "session_id": "optional-session-id",
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
     "message_index": 6,
     "system_contexts": ["Optional temporary system context"]
   }
@@ -602,7 +679,7 @@ The response additionally contains:
 - `user_message_index`: actual user message index used for regeneration.
 - `content`: the newly generated assistant reply.
 
-Recommended frontend flow: first call `session.messages` to pull complete history; after the user edits, deletes, or inserts messages in the UI, call `session.replace_messages` to save; if the user chooses "regenerate from here," call `session.regenerate_from`, then refresh the UI with the returned `messages`.
+Recommended frontend flow: page through `session.messages` and retain the returned session `revision`; submit it as `expected_revision` for edits, regeneration, rollback, and sends. On `session.revision_conflict`, reread authoritative state instead of overwriting it. Reuse the original `idempotency_key` after a send timeout.
 
 The built-in console CLI provides equivalent history editing entry points:
 
@@ -637,6 +714,8 @@ CLI `/history import`, `/history delete`, `/history insert`, and `/history regen
 - `runtime`: basic path and startup state of the Runtime at export time.
 
 ## Event Subscription
+
+Tenant events carry stable `event_id`, monotonic `sequence`, `user_id`, `agent_id`, and `recorded_at`. SSE requires `agent_id` and resumes through `Last-Event-ID` or `after_sequence`; WS `runtime.subscribe` accepts the same `after_sequence` / `replay_limit`. Each Agent retains the latest 10,000 events and replays at most 1,000 per request. When a cursor predates retention, reread authoritative session state.
 
 SSE `/events` pushes Runtime events. Event fields are sanitized for sensitive information; fields such as `api_key`, `authorization`, `token`, `password` are replaced with `[redacted]`.
 

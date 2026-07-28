@@ -26,7 +26,7 @@
 
 ## 项目定位
 
-GensokyoAI 是一个 Python 纯后端工具包。它不绑定任何具体 UI、桌面程序、Web 程序或聊天平台（但自带CLI，所以也可以直接用），而是把角色扮演 Agent 的核心能力封装为可复用的 Python 包与 Runtime API。
+GensokyoAI 是一个 Python 纯后端工具包。它不绑定任何具体 UI、桌面程序、Web 程序或聊天平台（但自带CLI，所以也可以直接用），而是把角色扮演 Agent 的核心能力封装为可复用的 Python 包与 Runtime API。HTTP / WS Runtime 已支持单节点远程多用户隔离、JWT/RBAC、显式 Agent/Session 资源、乐观并发、幂等发送和事件回放；多节点部署仍需要 PostgreSQL 与共享对象存储后端。
 
 核心边界：
 
@@ -38,7 +38,7 @@ GensokyoAI 是一个 Python 纯后端工具包。它不绑定任何具体 UI、�
 
 ## 版本管理与更新日志
 
-GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.7.14.0`；Python 包版本不带 `v`，为 `2026.7.14.0`。Runtime 协议版本采用独立语义版本，当前为 `1.1.0`，主版本保持 `1`；memory schema 当前为 `2`，其他公开 schema 为 `1`。
+GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.7.14.0`；Python 包版本不带 `v`，为 `2026.7.14.0`。Runtime 协议版本采用独立语义版本，当前开发分支为 `2.0.0`、主版本为 `2`；memory schema 当前为 `2`，其他公开 schema 为 `1`。
 
 [Changelog 索引](./docs/changelog.md) 说明正式发布与开发快照；当前最新正式累计发布记录见 [`docs/changelog/v2026.7.14.0.md`](./docs/changelog/v2026.7.14.0.md)。
 
@@ -184,7 +184,7 @@ GensokyoAI 针对外部 AI 服务调用做了稳定性优化：
 
 ### Runtime 资源控制
 
-`resource_control` 配置用于限制 Runtime 入口级高成本动作，避免异常客户端造成请求堆积、内存上涨或 API 额度异常消耗。当前已覆盖 `agent.send_message`、`agent.send_message_stream` 和 `dependency.install` 的 Runtime 总并发、消息并发、流式并发、依赖安装并发、队列与等待超时；Provider / 工具 / web_search / image_generation 的深层限流字段已预留。
+`resource_control` 配置用于限制 Runtime 入口级高成本动作，避免异常客户端造成请求堆积、内存上涨或 API 额度异常消耗。当前已覆盖 `agent.send_message`、`agent.send_message_stream` 和 `dependency.install` 的 Runtime 总并发、消息并发、流式并发、依赖安装并发、队列与等待超时；Provider / 工具 / web_search / image_generation 也使用同一组深层 gate。
 
 ```yaml
 resource_control:
@@ -459,13 +459,13 @@ GensokyoAI 提供前端无关的 Runtime 服务边界，当前可通过 [`bridge
 - `character_package.validate` / `character_package.preview` / `character_package.import` / `character_package.export`：校验、预览、导入和导出 `.gensokyo-character` 角色包。
 - `model.list` / `model.info`：查询当前 Provider 的模型列表和模型元信息。
 - `session.create` / `session.list` / `session.current` / `session.resume`：创建、列出、查询当前和恢复会话。
-- `session.delete`：删除会话；删除当前会话后返回空当前会话，并附带剩余会话数量和列表。
+- `session.delete`：按显式 `session_id` 删除会话，并附带剩余会话数量和列表。
 - `session.messages` / `session.replace_messages` / `session.regenerate_from`：读取完整历史、全量替换编辑后的消息，并从指定历史位置重新生成后续助手回复。
-- `session.rollback`：回滚当前会话，返回回滚前后的轮数与消息数，便于客户端刷新界面。
+- `session.rollback`：按显式 `session_id` 回滚会话，返回回滚前后的轮数与消息数，便于客户端刷新界面。
 - `session.export`：导出完整机器可读会话包，包含格式版本、schema version、导出时间、角色、会话元信息、消息列表、消息数量和 Runtime 基本信息。
 - `session.rename`：重命名会话，标题保存到会话 `metadata.title` 中，不改变旧会话文件结构。
 - `initiative_timer.current` / `initiative_timer.update` / `initiative_timer.cancel` / `initiative_timer.trigger`：查看、编辑、取消或立即触发 AI 主动定时器摘要。
-- `memory.list` / `memory.search` / `memory.get` / `memory.update` / `memory.delete` / `memory.graph`：管理当前会话语义记忆与话题图。
+- `memory.list` / `memory.search` / `memory.get` / `memory.update` / `memory.delete` / `memory.graph`：管理显式 `session_id` 对应的语义记忆与话题图。
 - `scene.current` / `scene.list` / `scene.get` / `scene.switch` / `scene.graph`：查询、切换当前场景，列出场景库与连通图，供前端程序化编排舞台。
 - `dependency.status` / `dependency.install`：查询和安装白名单内 Provider 可选依赖；安装动作受 Runtime 资源闸门保护。
 - `external_tool.status`：查询外部工具来源状态。
@@ -498,6 +498,15 @@ HTTP / WebSocket adapter 启动示例（推荐）：
 python -m GensokyoAI.backends.web_server --host 127.0.0.1 --port 8765
 ```
 
+远程多用户部署应放在 TLS/OIDC 网关后，并配置网关与 Runtime 共享的 JWT 校验参数：
+
+```bash
+GENSOKYOAI_RUNTIME_JWT_SECRET=<至少32字符> \
+GENSOKYOAI_RUNTIME_JWT_ISSUER=https://auth.example \
+GENSOKYOAI_RUNTIME_JWT_AUDIENCE=gensokyo-runtime \
+python -m GensokyoAI.backends.web_server --host 0.0.0.0 --port 8765 --allowed-origin https://app.example
+```
+
 兼容旧命令：
 
 ```bash
@@ -511,6 +520,8 @@ python runtime_http.py --host 127.0.0.1 --port 8765
 - `POST /rpc`：接收 `{"id": 1, "method": "runtime.health", "params": {}}` 形式的 JSON RPC 请求；`agent.send_message_stream` 在 HTTP RPC 中会聚合为一次响应，响应内包含 `events` 列表。
 - `WebSocket /ws`：接收同样的 JSON RPC 请求；普通方法返回单帧响应，`agent.send_message_stream` 会通过 `RuntimeService.iter_message_stream()` 边生成边产出事件帧，最后发送 `done: true` 的结果帧。
 - `GET /events`：Runtime 事件订阅 SSE 端点，可按事件类型或类别过滤。
+- `POST /media?agent_id=...` / `GET /media/{agent_id}/{media_id}`：租户媒体上传与读取。
+- `POST /character-packages`：管理员角色包上传、校验和显式信任导入。
 
 说明：JSON Lines RPC 与 HTTP `POST /rpc` 仍是一请求一响应；WebSocket `/ws` 会逐帧转发 Runtime 流式事件，适合需要实时 token / 工具调用 / finish 事件的客户端。RuntimeService 当前已经提供 async iterator 形式的 `iter_message_stream()`；`send_message_stream()` 保留聚合事件列表的响应形态，便于兼容现有 JSON Lines 与 HTTP 调用方。
 

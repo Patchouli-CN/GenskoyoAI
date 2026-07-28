@@ -166,6 +166,9 @@ def migrate_session_file_payload(data: dict[str, Any]) -> tuple[dict[str, Any], 
     )
     migrated["migration_history"] = history
     migrated.setdefault("messages", [])
+    session = migrated.get("session")
+    if isinstance(session, dict):
+        session.setdefault("revision", 0)
     return migrated, True
 
 

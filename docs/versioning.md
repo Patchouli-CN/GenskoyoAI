@@ -42,7 +42,7 @@ vYYYY.M.D.N
 | changelog 文件名 | 带 | `docs/changelog/v2026.7.14.0.md` | 对外更新日志 |
 | changelog 标题 | 带 | `# GensokyoAI v2026.7.14.0 更新日志` | 普通用户阅读 |
 | UI 展示版本 | 建议带 | `v2026.7.14.0` | 用户更容易识别 |
-| Runtime protocol version | 不带 | `1.1.0` | Runtime API 独立协议版本，JSON 字段值不带 `v` |
+| Runtime protocol version | 不带 | `2.0.0` | Runtime API 独立协议版本，JSON 字段值不带 `v` |
 
 注意：[`pyproject.toml`](../pyproject.toml) 中的 Python 包版本应遵循 PEP 440，不能写 `v2026.7.14.0`，应写 `2026.7.14.0`。
 
@@ -87,8 +87,8 @@ Changelog: docs/changelog/v2026.7.14.0.md
 Runtime 协议版本写在 [`rpc.py`](../GensokyoAI/runtime/rpc.py)：
 
 ```python
-RUNTIME_PROTOCOL_VERSION = "1.1.0"
-RUNTIME_PROTOCOL_MAJOR_VERSION = 1
+RUNTIME_PROTOCOL_VERSION = "2.0.0"
+RUNTIME_PROTOCOL_MAJOR_VERSION = 2
 ```
 
 规则：
@@ -126,7 +126,7 @@ RUNTIME_PROTOCOL_MAJOR_VERSION = 1
 
 ```python
 CONFIG_SCHEMA_VERSION = 1
-SESSION_SCHEMA_VERSION = 1
+SESSION_SCHEMA_VERSION = 2
 MEMORY_SCHEMA_VERSION = 2
 SESSION_EXPORT_SCHEMA_VERSION = 1
 CHARACTER_PACKAGE_SCHEMA_VERSION = 1
@@ -151,7 +151,7 @@ v1 -> v2 -> v3
 | schema | 递增条件 |
 | --- | --- |
 | config schema | 配置文件结构出现不兼容变化，或需要迁移旧配置 |
-| session schema | 会话文件结构出现不兼容变化 |
+| session schema | 会话文件结构出现不兼容变化；v2 增加会话 revision 与稳定消息身份 |
 | memory schema | 记忆 topic store 结构出现不兼容变化 |
 | session export schema | 会话导出包结构出现不兼容变化 |
 | character package schema | 角色包格式正式定义或出现不兼容变化 |
@@ -343,10 +343,10 @@ docs/
 | package version | `YYYY.M.D.N` | `2026.7.14.0` | [`pyproject.toml`](../pyproject.toml) |
 | Git tag | `vYYYY.M.D.N` | `v2026.7.14.0` | Git tag |
 | changelog | `vYYYY.M.D.N` | [`docs/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md) | [`docs/changelog`](changelog) |
-| Runtime protocol version | 独立语义版本 | `1.1.0` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
+| Runtime protocol version | 独立语义版本 | `2.0.0` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
 | Runtime protocol major | integer | `1` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
 | config schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
-| session schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
+| session schema | integer | `2` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | memory schema | integer | `2` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | session export schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | character package schema | integer 或 `None` | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
@@ -356,7 +356,7 @@ docs/
 `v2026.5.13.0` 是此前唯一正式 release；当前累计正式发布状态：
 
 - package version 当前见 [`pyproject.toml`](../pyproject.toml)，应为 `2026.7.14.0`。
-- Runtime protocol version 当前见 [`rpc.py`](../GensokyoAI/runtime/rpc.py)，应为 `1.1.0`，major 为 `1`。
+- Runtime protocol version 当前见 [`rpc.py`](../GensokyoAI/runtime/rpc.py)，应为 `2.0.0`，major 为 `2`。
 - schema versions 当前见 [`schema_versions.py`](../GensokyoAI/core/schema_versions.py)：memory 为 `2`，其余公开 schema 为 `1`。
 - release changelog 为 [`docs/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md)。
 - 对应 Git tag 为 `v2026.7.14.0`；发布准备阶段不创建 tag。

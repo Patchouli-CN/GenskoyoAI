@@ -101,15 +101,18 @@ class DeepSeekReasoningFlowTests(unittest.TestCase):
 
         async def collect():
             output = ""
+            reasoning = ""
             async for chunk in handler.process_stream(
                 [{"role": "system", "content": "sys"}, {"role": "user", "content": "你好"}],
                 None,
             ):
                 output += chunk.content
-            return output
+                reasoning += chunk.reasoning_content or ""
+            return output, reasoning
 
-        content = asyncio.run(collect())
+        content, streamed_reasoning = asyncio.run(collect())
         self.assertEqual(content, "你好。")
+        self.assertEqual(streamed_reasoning, "第一轮思考。")
         self.assertEqual(handler.last_assistant_reasoning, "第一轮思考。")
 
         self._record_message_sent(working_memory, content, handler.last_assistant_reasoning)

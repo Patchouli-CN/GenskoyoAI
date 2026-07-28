@@ -135,6 +135,7 @@ class ResponseHandler:
                 break
             if chunk.reasoning_content:
                 assistant_reasoning += chunk.reasoning_content
+                yield chunk
                 continue
             if chunk.is_tool_call and chunk.tool_info:
                 message = chunk.tool_info.get("message")
@@ -178,6 +179,7 @@ class ResponseHandler:
                 break
             if chunk.reasoning_content:
                 continuation_reasoning += chunk.reasoning_content
+                yield chunk
                 continue
             yield self._clean_chunk(chunk)
 
@@ -226,5 +228,5 @@ class ResponseHandler:
         if chunk.content and _XML_TAG_PATTERN.search(chunk.content):
             cleaned = _XML_TAG_PATTERN.sub("", chunk.content)
             if cleaned.strip():
-                return StreamChunk(content=cleaned)
+                chunk.content = cleaned
         return chunk

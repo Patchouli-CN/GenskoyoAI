@@ -19,6 +19,7 @@ class SessionContext(Struct):
     created_at: datetime = field(default_factory=utc_now)
     last_active: datetime = field(default_factory=utc_now)
     total_turns: int = 0
+    revision: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
 
@@ -38,6 +39,7 @@ class SessionContext(Struct):
             "created_at": self.created_at.isoformat(),
             "last_active": self.last_active.isoformat(),
             "total_turns": self.total_turns,
+            "revision": self.revision,
             "metadata": self.metadata,
             "is_active": self.is_active,
         }
@@ -51,6 +53,7 @@ class SessionContext(Struct):
             created_at=ensure_utc(datetime.fromisoformat(data["created_at"])),
             last_active=ensure_utc(datetime.fromisoformat(data["last_active"])),
             total_turns=data["total_turns"],
+            revision=int(data.get("revision", 0)),
             metadata=data.get("metadata", {}),
             is_active=data.get("is_active", True),
         )

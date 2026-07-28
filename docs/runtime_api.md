@@ -5,11 +5,33 @@
 ## 版本与兼容性
 
 - 当前 package 版本：`2026.7.14.0`
-- 当前协议版本：`1.1.0`
-- 当前协议主版本：`1`
+- 当前协议版本：`2.0.0`
+- 当前协议主版本：`2`
 - 兼容性策略：同一主版本内可以新增字段和方法；删除字段、修改语义或改变错误结构需要进入 breaking changes。
 - 客户端应优先调用 `runtime.info`，再根据 `protocol_version`、`capabilities`、`methods`、`legacy_methods` 与 `method_specs` 决定可用功能。
 - 文档中的方法清单应以 `runtime.info.methods` 和 `runtime.info.method_specs` 为准；示例会尽量列出当前 `GensokyoAI.runtime.rpc.RPC_METHOD_SPECS` 的完整非 legacy 方法，避免只展示子集导致客户端误解。
+
+## 远程多用户资源模型
+
+HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id` 资源层级。JWT 的 `sub` 是稳定 `user_id`；客户端不能提交或覆盖 `user_id`。同名 `agent_id` 和 `session_id` 在不同用户下完全隔离。
+
+- `agent.init` 可传 `agent_id`；省略时由服务生成。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。
+- 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
+- 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。
+- `agent.send_message` 和 `agent.send_message_stream` 还必须传 1-128 字符的 `idempotency_key`；网络重试必须复用同一键。
+- JSON Lines bridge 是本机受信任入口，继续保留单用户和隐式当前会话兼容行为。
+
+远程认证推荐由 TLS 反向代理/OIDC 网关签发短期 HS256 JWT，并配置：
+
+```text
+GENSOKYOAI_RUNTIME_JWT_SECRET=<至少 32 字符>
+GENSOKYOAI_RUNTIME_JWT_ISSUER=<可选，严格匹配 iss>
+GENSOKYOAI_RUNTIME_JWT_AUDIENCE=<可选，严格匹配 aud>
+```
+
+JWT 必须包含 `sub`、`exp`，可包含 `roles`。支持 `read`、`chat`、`admin`；`admin` 包含其他权限。旧 `GENSOKYOAI_RUNTIME_TOKEN` 仍可用，但只代表一个共享的 `runtime-admin` 管理身份，不提供多用户区分。
+
+默认文件后端将数据写入 `runtime_data/users/<user-hash>/agents/<agent-hash>/`，可用于单节点远程多用户服务。`BlobStore` 已定义对象存储替换边界；多节点部署仍需将会话/Agent catalog 迁移到 PostgreSQL，并将 blob 后端切换为共享对象存储。当前文件后端不能宣称支持多节点一致性。
 
 ## 发现接口
 
@@ -19,11 +41,11 @@
 {
   "name": "GensokyoAI Runtime",
   "package_version": "2026.7.14.0",
-  "protocol": "json-lines-rpc",
-  "protocol_version": "1.1.0",
-  "protocol_major_version": 1,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "protocol": "gensokyo-runtime-rpc",
+  "protocol_version": "2.0.0",
+  "protocol_major_version": 2,
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
+  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -31,7 +53,7 @@
   ],
   "schema_versions": {
     "config": 1,
-    "session": 1,
+    "session": 2,
     "memory": 2,
     "session_export": 1,
     "character_package": 1
@@ -44,7 +66,41 @@
       "remove_after": "2.0.0"
     }
   ],
-  "breaking_changes": [],
+  "breaking_changes": [
+    {
+      "scope": "runtime.rpc.error_envelope",
+      "change": "RPC method failures now use the transport-level ok=false envelope instead of a nested result.ok=false payload.",
+      "migration": "Check the top-level ok field and read the top-level error object."
+    },
+    {
+      "scope": "runtime.websocket.stream_start",
+      "change": "WebSocket streaming requests now receive a start acknowledgement before stream events.",
+      "migration": "Read result.stream_id and result.generation_id from the acknowledgement frame before consuming event frames."
+    },
+    {
+      "scope": "runtime.info.protocol",
+      "change": "runtime.info.protocol now identifies the shared RPC protocol instead of naming one transport.",
+      "migration": "Discover concrete transports through runtime.info.transports."
+    },
+    {
+      "scope": "runtime.reasoning_visibility",
+      "change": "Reasoning content is public by default in non-streaming and streaming agent responses.",
+      "migration": "Render reasoning_content separately from content and apply client-side visibility policy when needed."
+    }
+  ],
+  "transports": [
+    {"name": "json-lines", "streaming": "aggregate"},
+    {"name": "http", "streaming": "aggregate"},
+    {"name": "websocket", "streaming": "incremental"},
+    {"name": "sse", "streaming": "runtime-events"}
+  ],
+  "stream_protocol": {
+    "version": 2,
+    "reasoning_default": "public",
+    "start_acknowledgement": true,
+    "correlation_fields": ["stream_id", "generation_id"],
+    "replay_supported": true
+  },
   "deprecated_fields": [],
   "compatibility_notes": [
     {
@@ -71,19 +127,22 @@
 }
 ```
 
+`method_specs[].params_schema` 与 `result_schema` 从实际 Runtime handler 签名生成，使用 JSON Schema 基础类型描述参数、必填项、默认值和返回类型；客户端生成器不应再根据自然语言文档猜测参数。
+
 非 legacy 方法清单按当前命名空间分组如下：
 
 - `runtime.info`、`runtime.health`、`runtime.shutdown`
 - `config.validate`
 - `character.validate`、`character.list`
 - `character_package.validate`、`character_package.preview`、`character_package.import`、`character_package.export`
-- `agent.init`、`agent.send_message`、`agent.send_message_stream`
+- `agent.init`、`agent.list`、`agent.delete`、`agent.send_message`、`agent.send_message_stream`
 - `model.list`、`model.info`
 - `session.create`、`session.list`、`session.current`、`session.resume`、`session.delete`、`session.export`、`session.rename`、`session.messages`、`session.replace_messages`、`session.regenerate_from`、`session.rollback`
 - `dependency.status`、`dependency.install`
 - `external_tool.status`
 - `initiative_timer.current`、`initiative_timer.update`、`initiative_timer.cancel`、`initiative_timer.trigger`、`initiative_timer.hesitation`、`initiative_timer.hesitation.set`
 - `memory.list`、`memory.search`、`memory.get`、`memory.update`、`memory.delete`、`memory.graph`
+- `media.list`、`media.delete`
 - `scene.current`、`scene.list`、`scene.get`、`scene.switch`、`scene.graph`
 
 Legacy 兼容方法仍可用但已废弃：`init`、`send_message`、`send_message_stream`、`list_characters`、`create_session`、`list_sessions`、`current_session`、`resume_session`、`delete_session`、`export_session`、`rename_session`、`rollback_session`、`shutdown`、`dependency_status`、`install_dependencies`、`external_tool_status`。新客户端应使用 `method_specs[].replacement` 迁移到命名空间方法。
@@ -189,9 +248,9 @@ HTTP `/rpc` 与 WebSocket 普通 RPC 使用相同请求格式：
 ```json
 {
   "ok": false,
-  "error_code": "resource.limit_exceeded",
-  "error_object": {
+  "error": {
     "code": "resource.limit_exceeded",
+    "error_code": "resource.limit_exceeded",
     "message": "Runtime 当前资源繁忙，请稍后重试。",
     "recoverable": true,
     "action_hint": "请稍后重试，或调大 resource_control 中对应并发 / 队列配置。",
@@ -221,17 +280,23 @@ WebSocket 客户端发送：
 {
   "id": "stream-1",
   "method": "agent.send_message_stream",
-  "params": {"message": "你好"}
+  "params": {
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
+    "idempotency_key": "send-018f...",
+    "message": "你好"
+  }
 }
 ```
 
-服务端会先返回启动确认帧，其中 `result` 是分配到的 `stream_id`：
+服务端会先返回启动确认帧，其中包含服务端分配的 `stream_id` 和本次生成的 `generation_id`：
 
 ```json
 {
   "id": "stream-1",
   "ok": true,
-  "result": {"stream_id": "..."}
+  "result": {"stream_id": "...", "generation_id": "..."}
 }
 ```
 
@@ -242,7 +307,8 @@ WebSocket 客户端发送：
   "id": "stream-1",
   "ok": true,
   "stream_id": "...",
-  "event": {"type": "content", "index": 0, "content": "..."}
+  "generation_id": "...",
+  "event": {"type": "content", "index": 0, "content": "...", "generation_id": "..."}
 }
 ```
 
@@ -253,10 +319,13 @@ WebSocket 客户端发送：
   "id": "stream-1",
   "ok": true,
   "stream_id": "...",
+  "generation_id": "...",
   "done": true,
   "result": {
     "role": "assistant",
     "content": "...",
+    "reasoning_content": "...",
+    "generation_id": "...",
     "events": [
       {"type": "content", "index": 0, "content": "..."},
       {"type": "finish", "index": 1, "content": "..."}
@@ -280,6 +349,12 @@ WebSocket 客户端发送：
   }
 }
 ```
+
+`reasoning_content` 在协议 `2.0.0` 中默认公开。纯 reasoning chunk 使用 `type: "reasoning"`，正文 chunk 使用 `type: "content"`；两者携带相同的 `generation_id`。客户端不应再从正文中猜测 reasoning，也不应把 reasoning 拼入 `content`。
+
+RPC 方法失败统一使用顶层 `ok: false` 与顶层 `error` 对象。协议 `2.0.0` 不再返回 `ok: true`、`result.ok: false` 的嵌套错误。
+
+HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Runtime token。浏览器跨域访问还必须通过 `--allowed-origin` 明确配置完整的 scheme、host 和 port；服务支持 CORS `OPTIONS` 预检。
 
 取消语义：
 
@@ -461,6 +536,27 @@ Provider 字段矩阵会区分两类兼容性诊断：
 
 `character.list` 条目也会包含 `ok`、`preview` 和 `diagnostics`，便于客户端在列表中展示坏角色文件。
 
+## 媒体与角色包上传
+
+远程媒体使用 `POST /media?agent_id=...`，请求体为 `multipart/form-data`，文件字段名为 `file`。成功返回稳定 `media_id`、MIME、大小、SHA-256 和当前用户/Agent 归属。随后可在发送参数中引用：
+
+```json
+{
+  "agent_id": "agent-1",
+  "session_id": "session-1",
+  "expected_revision": 4,
+  "idempotency_key": "send-with-image-1",
+  "message": [
+    {"type": "text", "text": "看看这张图"},
+    {"type": "media", "media_id": "...", "detail": "auto"}
+  ]
+}
+```
+
+当前上传可保存常见图片、音频、PDF 和文本；公开模型输入已完成图片映射，其他 MIME 会明确拒绝，不会把服务器本地路径暴露给客户端。`media.list` / `media.delete` 同样受用户和 Agent 归属控制。文件后端实现 `BlobStore`，生产部署可替换为对象存储。
+
+远程角色包使用管理员端点 `POST /character-packages`。上传包先执行 zip 路径、大小、manifest、YAML、checksum 等校验。现有 manifest 签名只有格式校验，不会伪装成密码学验签，因此默认返回 `character_package.untrusted`；管理员审阅来源后必须显式传 `allow_untrusted=true` 才能导入。
+
 ## 角色包 API
 
 角色包使用 `.gensokyo-character` 扩展名，本质为安全受限的 zip 包，根目录必须包含 `manifest.yaml`，当前格式名为 `gensokyoai.character.package`，schema version 为 `1`。P3 生态规范扩展后，manifest 支持来源、作者主页、许可证链接、引用来源、外部链接、仓库索引元数据、可选签名字段和 `checksums.sha256`。
@@ -549,16 +645,16 @@ Runtime 资源控制由配置段 `resource_control` 控制。当前 Runtime gate
 
 ## 会话消息编辑 API
 
-`session.messages` 返回指定会话的完整可编辑历史消息；未传 `session_id` 时使用当前会话：
+`session.messages` 分页返回指定会话的可编辑历史消息。网络调用必须传 `agent_id` 和 `session_id`，可传 `limit`（1-500）与 `cursor`：
 
 ```json
 {
   "method": "session.messages",
-  "params": {"session_id": "optional-session-id"}
+  "params": {"agent_id": "agent-1", "session_id": "session-1", "limit": 100, "cursor": null}
 }
 ```
 
-响应包含 `session`、`session_id`、`is_current`、`messages` 和 `message_count`。`messages` 会保留消息扩展字段，例如 `reasoning_content`、`tool_calls`、`tool_call_id`，前端编辑时应尽量原样保留不理解的字段。
+响应包含 `session`、`session_id`、`revision`、当前页 `messages` / `message_count`、`total_message_count`、`has_more` 和 `next_cursor`。每条消息包含稳定 `message_id` 与消息自身 `revision`，并保留 `reasoning_content`、`tool_calls`、`tool_call_id` 和未知扩展字段。
 
 `session.replace_messages` 用于提交编辑后的完整消息数组，可实现编辑、删除、插入任意历史消息：
 
@@ -566,7 +662,9 @@ Runtime 资源控制由配置段 `resource_control` 控制。当前 Runtime gate
 {
   "method": "session.replace_messages",
   "params": {
-    "session_id": "optional-session-id",
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
     "messages": [
       {"role": "user", "content": "改写后的用户消息"},
       {"role": "assistant", "content": "插入或编辑后的助手消息"}
@@ -578,7 +676,7 @@ Runtime 资源控制由配置段 `resource_control` 控制。当前 Runtime gate
 校验规则：
 
 - `messages` 必须是数组。
-- 每条消息必须是对象，且包含字符串 `content`。
+- 每条消息必须是对象，且包含字符串或结构化 content-parts 数组 `content`。
 - `role` 仅允许 `system`、`user`、`assistant`、`tool`。
 - Runtime 会全量替换目标会话消息，更新 `message_count` / `total_turns`，并同步当前会话工作记忆缓存。
 
@@ -588,7 +686,9 @@ Runtime 资源控制由配置段 `resource_control` 控制。当前 Runtime gate
 {
   "method": "session.regenerate_from",
   "params": {
-    "session_id": "optional-session-id",
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "expected_revision": 4,
     "message_index": 6,
     "system_contexts": ["可选临时系统上下文"]
   }
@@ -602,7 +702,7 @@ Runtime 资源控制由配置段 `resource_control` 控制。当前 Runtime gate
 - `user_message_index`：实际用于重生成的用户消息索引。
 - `content`：本次新生成的助手回复。
 
-前端推荐流程：先调用 `session.messages` 拉取完整历史；用户在 UI 中编辑、删除或插入消息后调用 `session.replace_messages` 保存；若用户选择“从这里重新生成”，调用 `session.regenerate_from`，然后用返回的 `messages` 刷新 UI。
+前端推荐流程：分页读取 `session.messages` 并保存返回的会话 `revision`；编辑、重生成、回滚或发送时提交 `expected_revision`。发生 `session.revision_conflict` 后重新读取权威状态，不要静默覆盖。发送超时后使用原 `idempotency_key` 重试。
 
 自带控制台 CLI 提供同等历史编辑入口：
 
@@ -639,6 +739,8 @@ CLI 的 `/history import`、`/history delete`、`/history insert` 和 `/history 
 ## 事件订阅
 
 SSE `/events` 会推送 Runtime 事件。事件字段会经过敏感信息清洗，`api_key`、`authorization`、`token`、`password` 等字段会替换为 `[redacted]`。
+
+租户事件带稳定 `event_id`、单调 `sequence`、`user_id`、`agent_id` 和 `recorded_at`。SSE 必须传 `agent_id`，可通过 `Last-Event-ID` 或 `after_sequence` 恢复；WS `runtime.subscribe` 使用相同的 `after_sequence` / `replay_limit`。事件日志默认每个 Agent 保留最近 10,000 条，单次最多回放 1,000 条；游标早于保留窗口时客户端应重新读取权威 session 状态。
 
 ## 记忆管理 API
 

@@ -104,3 +104,48 @@ async def test_origin_with_port_is_matched_by_hostname(fake_service: _FakeRuntim
         assert response.status == 200
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_origin_scheme_and_port_must_match(fake_service: _FakeRuntimeService) -> None:
+    server = TestServer(
+        create_app(service=fake_service, allowed_origins=["https://allowed.example:443"])
+    )
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        wrong_scheme = await client.get("/health", headers={"Origin": "http://allowed.example"})
+        wrong_port = await client.get("/health", headers={"Origin": "https://allowed.example:444"})
+        default_port = await client.get("/health", headers={"Origin": "https://allowed.example"})
+        assert wrong_scheme.status == 403
+        assert wrong_port.status == 403
+        assert default_port.status == 200
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_returns_allow_headers(fake_service: _FakeRuntimeService) -> None:
+    server = TestServer(
+        create_app(
+            service=fake_service,
+            auth_token="supersecrettoken123",
+            allowed_origins=["https://allowed.example"],
+        )
+    )
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.options(
+            "/rpc",
+            headers={
+                "Origin": "https://allowed.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert response.status == 204
+        assert response.headers["Access-Control-Allow-Origin"] == "https://allowed.example"
+        assert "Authorization" in response.headers["Access-Control-Allow-Headers"]
+    finally:
+        await client.close()

@@ -24,7 +24,7 @@ ROOT_FOR_IMPORT = Path(__file__).resolve().parent
 if str(ROOT_FOR_IMPORT) not in sys.path:
     sys.path.insert(0, str(ROOT_FOR_IMPORT))
 
-from GensokyoAI.runtime import DependencyError  # noqa: E402
+from GensokyoAI.runtime.rpc import runtime_error_to_dict  # noqa: E402
 from GensokyoAI.runtime.service import RuntimeService  # noqa: E402
 
 
@@ -77,25 +77,8 @@ async def run_bridge(root: Path) -> int:
 
 
 def _error_payload(exc: Exception) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "type": type(exc).__name__,
-        "message": str(exc),
-        "code": "internal_error",
-        "details": {},
-        "recoverable": False,
-    }
-    if isinstance(exc, DependencyError):
-        payload.update(
-            {
-                "code": exc.code,
-                "details": exc.details,
-                "recoverable": exc.recoverable,
-            }
-        )
-    elif isinstance(exc, ValueError):
-        payload.update({"code": "bad_request", "recoverable": True})
-    elif isinstance(exc, (FileNotFoundError, ImportError, ModuleNotFoundError)):
-        payload.update({"code": "missing_resource", "recoverable": True})
+    payload = runtime_error_to_dict(exc)
+    payload.setdefault("type", type(exc).__name__)
     return payload
 
 

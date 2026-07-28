@@ -9,10 +9,14 @@ transport such as ``bridge_main.py`` or a future HTTP/WebSocket adapter.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 from msgspec import Struct
@@ -35,7 +39,10 @@ from GensokyoAI.core.schema_versions import (
     schema_versions_payload,
 )
 from GensokyoAI.core.version import package_version
+from GensokyoAI.runtime.auth import authorize_rpc, current_principal
 from GensokyoAI.runtime.dependencies import InstallScope, dependency_status, install_dependencies
+from GensokyoAI.runtime.event_store import RuntimeEventStore
+from GensokyoAI.runtime.media_store import MediaStore
 from GensokyoAI.runtime.resource_control import (
     ResourceGate,
     ResourceLimitError,
@@ -57,6 +64,7 @@ from GensokyoAI.tools.external_manager import ExternalToolManager
 from GensokyoAI.utils.helpers import utc_now
 
 RUNTIME_EVENT_BACKPRESSURE_DROPPED = "runtime.backpressure.dropped"
+MAX_TENANT_AGENTS_PER_USER = 8
 RUNTIME_DEPRECATED_FIELDS: tuple[dict[str, str | None], ...] = ()
 RUNTIME_COMPATIBILITY_NOTES: tuple[dict[str, str], ...] = (
     {
@@ -115,8 +123,25 @@ class RuntimeService:
     toolkit. The current Flutter client is only one caller of this API.
     """
 
-    def __init__(self, root_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        root_dir: Path | None = None,
+        *,
+        tenant_key: tuple[str, str] | None = None,
+        storage_root: Path | None = None,
+    ) -> None:
         self.state = RuntimeState(root_dir=(root_dir or Path.cwd()).resolve())
+        self._tenant_key = tenant_key
+        self._storage_root = storage_root
+        self._tenant_services: dict[tuple[str, str], RuntimeService] = {}
+        self._tenant_subscription_owners: dict[str, tuple[RuntimeService, str]] = {}
+        self._tenant_operation_lock = asyncio.Lock()
+        self._event_store = (
+            RuntimeEventStore(storage_root / "events.jsonl") if storage_root is not None else None
+        )
+        self._media_store = MediaStore(storage_root / "media") if storage_root is not None else None
+        self._event_store_subscription_ids: list[str] = []
+        self._recorded_event_payloads: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = asyncio.Lock()
         self._model_registry = ModelRegistryService()
         self.external_tool_manager = ExternalToolManager()
@@ -125,15 +150,308 @@ class RuntimeService:
         self._character_validator = CharacterValidator()
         self._character_package_service = CharacterPackageService()
         self._resource_gates = self._build_resource_gates()
+        if self._tenant_key is None:
+            self._load_tenant_catalog()
 
     async def handle(
         self,
         method: str,
         params: dict[str, Any] | None = None,
         *,
-        structured_errors: bool = True,
+        structured_errors: bool = False,
     ) -> Any:
+        principal = current_principal()
+        if self._uses_network_tenancy(principal.network):
+            authorize_rpc(method, principal)
+            return await self._handle_tenant_rpc(method, dict(params or {}))
         return await dispatch_rpc(self, method, params, structured_errors=structured_errors)
+
+    async def _handle_tenant_rpc(self, method: str, params: dict[str, Any]) -> Any:
+        principal = current_principal()
+        if method in {"runtime.info", "runtime.health"}:
+            return await dispatch_rpc(self, method, params)
+        if method in {"runtime.shutdown", "shutdown"}:
+            return await self.shutdown()
+        if method == "agent.list":
+            return self._tenant_agent_list(principal.user_id)
+        if method == "agent.delete":
+            return await self._delete_tenant_agent(principal.user_id, params)
+        if method in {"agent.init", "init"}:
+            return await self._init_tenant_agent(principal.user_id, params)
+
+        if not self._is_tenant_method(method):
+            return await dispatch_rpc(self, method, params)
+        agent_id = self._pop_required_id(params, "agent_id")
+        service = self._require_tenant_service(principal.user_id, agent_id)
+        session_id = params.get("session_id")
+        if self._requires_explicit_session(method) and not session_id:
+            raise RpcError(
+                f"Runtime method '{method}' requires session_id",
+                code="session.explicit_id_required",
+                user_message="网络调用必须明确指定会话。",
+                recoverable=True,
+                action_hint="请传入 session_id，不要依赖当前会话。",
+            )
+        if self._requires_expected_revision(method):
+            expected_revision = params.get("expected_revision")
+            if not isinstance(expected_revision, int) or expected_revision < 0:
+                raise RpcError(
+                    f"Runtime method '{method}' requires expected_revision",
+                    code="session.expected_revision_required",
+                    user_message="写操作必须携带读取时的会话修订号。",
+                    recoverable=True,
+                    action_hint="请从 session.messages 响应读取 revision 后重试。",
+                )
+        if method in {"agent.send_message", "agent.send_message_stream", "send_message", "send_message_stream"}:
+            idempotency_key = params.get("idempotency_key")
+            if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+                raise RpcError(
+                    "Network message sends require idempotency_key",
+                    code="message.idempotency_key_required",
+                    user_message="网络发送必须携带幂等键。",
+                    recoverable=True,
+                )
+        async with service._tenant_operation_lock:
+            if isinstance(session_id, str) and method.startswith(
+                ("memory.", "scene.", "initiative_timer.")
+            ):
+                service._activate_tenant_session(session_id)
+                params.pop("session_id", None)
+            result = await service.handle(method, params)
+        return self._attach_resource_ids(result, principal.user_id, agent_id)
+
+    async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        principal = current_principal()
+        if not principal.has_role("admin") and any(
+            params.get(name) is not None
+            for name in ("config_path", "character_path", "model_overrides", "embedding_overrides")
+        ):
+            raise RpcError(
+                "Custom Agent paths and model overrides require the admin role",
+                code="authorization.forbidden",
+                user_message="普通聊天身份只能从服务端角色目录初始化 Agent。",
+                recoverable=False,
+                details={"required_role": "admin"},
+            )
+        agent_id = params.pop("agent_id", None) or str(uuid4())
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Runtime agent_id must be a non-empty string")
+        if len(agent_id.strip()) > 128:
+            raise ValueError("Runtime agent_id must not exceed 128 characters")
+        agent_id = agent_id.strip()
+        key = (user_id, agent_id)
+        service = self._tenant_services.get(key)
+        if service is None:
+            owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
+            if owned_count >= MAX_TENANT_AGENTS_PER_USER:
+                raise RpcError(
+                    "Runtime per-user Agent limit exceeded",
+                    code="agent.limit_exceeded",
+                    user_message="当前用户创建的 Agent 数量已达到上限。",
+                    recoverable=True,
+                    details={"maximum": MAX_TENANT_AGENTS_PER_USER},
+                )
+            storage_root = self._tenant_storage_root(user_id, agent_id)
+            service = RuntimeService(
+                self.state.root_dir,
+                tenant_key=key,
+                storage_root=storage_root,
+            )
+            self._tenant_services[key] = service
+        result = await service.handle("agent.init", params)
+        self._save_tenant_manifest(user_id, agent_id, service)
+        return self._attach_resource_ids(result, user_id, agent_id)
+
+    def _tenant_agent_list(self, user_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "initialized": service.state.agent is not None,
+                "started": service.state.started,
+            }
+            for (owner_id, agent_id), service in sorted(self._tenant_services.items())
+            if owner_id == user_id
+        ]
+
+    async def _delete_tenant_agent(
+        self,
+        user_id: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        agent_id = self._pop_required_id(params, "agent_id")
+        service = self._tenant_services.pop((user_id, agent_id), None)
+        if service is None:
+            raise ValueError(f"Runtime Agent does not exist: {agent_id}")
+        await service.shutdown()
+        manifest = service._storage_root / "agent.json" if service._storage_root else None
+        if manifest is not None:
+            manifest.unlink(missing_ok=True)
+        return {
+            "deleted": True,
+            "data_retained": True,
+            "user_id": user_id,
+            "agent_id": agent_id,
+        }
+
+    def _require_tenant_service(self, user_id: str, agent_id: str) -> RuntimeService:
+        service = self._tenant_services.get((user_id, agent_id))
+        if service is None:
+            raise RpcError(
+                f"Runtime Agent does not exist: {agent_id}",
+                code="agent.not_found",
+                user_message="指定的 Agent 不存在或不属于当前用户。",
+                recoverable=True,
+                action_hint="请先调用 agent.list 或 agent.init。",
+            )
+        return service
+
+    def _tenant_storage_root(self, user_id: str, agent_id: str) -> Path:
+        def component(value: str) -> str:
+            digest = hashlib.sha256(value.encode()).hexdigest()[:24]
+            return digest
+
+        return (
+            self.state.root_dir
+            / "runtime_data"
+            / "users"
+            / component(user_id)
+            / "agents"
+            / component(agent_id)
+        )
+
+    def _load_tenant_catalog(self) -> None:
+        catalog_root = self.state.root_dir / "runtime_data" / "users"
+        if not catalog_root.exists():
+            return
+        for manifest_path in catalog_root.glob("*/agents/*/agent.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                user_id = manifest["user_id"]
+                agent_id = manifest["agent_id"]
+                if not isinstance(user_id, str) or not isinstance(agent_id, str):
+                    continue
+            except (OSError, KeyError, json.JSONDecodeError):
+                continue
+            key = (user_id, agent_id)
+            self._tenant_services[key] = RuntimeService(
+                self.state.root_dir,
+                tenant_key=key,
+                storage_root=manifest_path.parent,
+            )
+
+    @staticmethod
+    def _save_tenant_manifest(
+        user_id: str,
+        agent_id: str,
+        service: RuntimeService,
+    ) -> None:
+        if service._storage_root is None:
+            return
+        service._storage_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = service._storage_root / "agent.json"
+        temporary = manifest_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "user_id": user_id,
+                    "agent_id": agent_id,
+                    "character_path": (
+                        str(service.state.character_path) if service.state.character_path else None
+                    ),
+                    "created_at": utc_now().isoformat(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(manifest_path)
+
+    def _uses_network_tenancy(self, network_request: bool) -> bool:
+        return network_request and self._tenant_key is None and self.state.agent is None
+
+    @staticmethod
+    def _pop_required_id(params: dict[str, Any], name: str) -> str:
+        value = params.pop(name, None)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Runtime {name} is required")
+        return value.strip()
+
+    @staticmethod
+    def _is_tenant_method(method: str) -> bool:
+        return method.startswith(
+            (
+                "agent.",
+                "session.",
+                "memory.",
+                "scene.",
+                "initiative_timer.",
+                "model.",
+                "media.",
+            )
+        ) or method in {
+            "send_message",
+            "send_message_stream",
+            "create_session",
+            "list_sessions",
+            "current_session",
+            "resume_session",
+            "delete_session",
+            "export_session",
+            "rename_session",
+            "rollback_session",
+        }
+
+    @staticmethod
+    def _requires_explicit_session(method: str) -> bool:
+        return method.startswith(("memory.", "scene.", "initiative_timer.")) or method in {
+            "agent.send_message",
+            "agent.send_message_stream",
+            "send_message",
+            "send_message_stream",
+            "session.current",
+            "session.delete",
+            "session.export",
+            "session.rename",
+            "session.messages",
+            "session.replace_messages",
+            "session.regenerate_from",
+            "session.rollback",
+            "current_session",
+            "delete_session",
+            "export_session",
+            "rename_session",
+            "rollback_session",
+        }
+
+    @staticmethod
+    def _requires_expected_revision(method: str) -> bool:
+        return method in {
+            "agent.send_message",
+            "agent.send_message_stream",
+            "send_message",
+            "send_message_stream",
+            "session.delete",
+            "session.rename",
+            "session.replace_messages",
+            "session.regenerate_from",
+            "session.rollback",
+            "delete_session",
+            "rename_session",
+            "rollback_session",
+        }
+
+    @staticmethod
+    def _attach_resource_ids(result: Any, user_id: str, agent_id: str) -> Any:
+        if isinstance(result, dict):
+            return {"user_id": user_id, "agent_id": agent_id, **result}
+        return result
+
+    def _activate_tenant_session(self, session_id: str) -> None:
+        agent = self._require_agent()
+        if not agent.resume_session(session_id):
+            raise ValueError(f"Session does not exist: {session_id}")
 
     async def health(self) -> dict[str, Any]:
         """Return a lightweight runtime health payload."""
@@ -141,8 +459,11 @@ class RuntimeService:
         return {
             "ok": True,
             "root_dir": str(self.state.root_dir),
-            "initialized": self.state.agent is not None,
-            "started": self.state.started,
+            "initialized": self.state.agent is not None or bool(self._tenant_services),
+            "started": self.state.started or any(
+                service.state.started for service in self._tenant_services.values()
+            ),
+            "active_tenant_agents": len(self._tenant_services),
         }
 
     async def info(self) -> dict[str, Any]:
@@ -152,11 +473,12 @@ class RuntimeService:
         return {
             "name": "GensokyoAI Runtime",
             "package_version": package_version(self.state.root_dir),
-            "protocol": "json-lines-rpc",
+            "protocol": "gensokyo-runtime-rpc",
             **protocol_metadata,
             "capabilities": [
                 "agent.lifecycle",
                 "agent.messaging",
+                "agent.reasoning.public",
                 "agent.streaming",
                 "character.discovery",
                 "character.validation",
@@ -166,19 +488,57 @@ class RuntimeService:
                 "memory.management",
                 "memory.search",
                 "memory.graph",
+                "media.upload",
+                "media.image_input",
                 "model.discovery",
                 "config.validation",
                 "migration.diagnostics",
                 "resource_control.runtime_gates",
                 "runtime.events",
                 "runtime.health",
+                "runtime.transport_discovery",
+                "runtime.multi_user",
+                "runtime.rbac",
                 "runtime.versioning",
                 "session.management",
                 "initiative_timer.management",
             ],
             "methods": rpc_methods(),
             "legacy_methods": legacy_rpc_methods(),
-            "method_specs": rpc_method_specs(),
+            "method_specs": rpc_method_specs(self),
+            "transports": [
+                {"name": "json-lines", "streaming": "aggregate"},
+                {"name": "http", "streaming": "aggregate"},
+                {"name": "websocket", "streaming": "incremental"},
+                {"name": "sse", "streaming": "runtime-events"},
+            ],
+            "stream_protocol": {
+                "version": 2,
+                "reasoning_default": "public",
+                "start_acknowledgement": True,
+                "correlation_fields": ["stream_id", "generation_id"],
+                "replay_supported": True,
+            },
+            "event_replay": {
+                "scope": "user_id/agent_id",
+                "cursor": "sequence",
+                "sse_resume_header": "Last-Event-ID",
+                "max_replay_events": 1000,
+            },
+            "resource_hierarchy": ["user_id", "agent_id", "session_id", "message_id"],
+            "authentication": {
+                "identity_claim": "sub",
+                "roles": ["read", "chat", "admin"],
+                "network_requires_explicit_agent": True,
+                "network_requires_explicit_session": True,
+            },
+            "media": {
+                "upload_path": "/media?agent_id={agent_id}",
+                "multipart_field": "file",
+                "content_part": {"type": "media", "media_id": "..."},
+                "allowed_content_types": sorted(MediaStore.ALLOWED_CONTENT_TYPES),
+                "model_input_content_types": ["image/*"],
+            },
             "schema_versions": schema_versions_payload(),
             "config_schema_version": CONFIG_SCHEMA_VERSION,
             "deprecated_fields": runtime_deprecated_fields(),
@@ -285,6 +645,61 @@ class RuntimeService:
             overwrite=overwrite,
         )
 
+    async def import_uploaded_character_package(
+        self,
+        data: bytes,
+        *,
+        filename: str,
+        locale: str | None = None,
+        overwrite: bool = False,
+        allow_untrusted: bool = False,
+    ) -> dict[str, Any]:
+        """Validate and import a remotely uploaded character package."""
+
+        if not filename.endswith(".gensokyo-character"):
+            raise ValueError("Uploaded character package must use .gensokyo-character")
+        upload_dir = self.state.root_dir / "runtime_data" / "character_uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        package_path = upload_dir / f"{uuid4()}.gensokyo-character"
+        package_path.write_bytes(data)
+        try:
+            validation = self._character_package_service.validate_package(package_path)
+            if not validation.get("ok"):
+                raise RpcError(
+                    "Uploaded character package failed validation",
+                    code="character_package.validation_failed",
+                    user_message="角色包未通过安全与格式校验。",
+                    recoverable=False,
+                    details={"diagnostics": validation.get("diagnostics", [])},
+                )
+            security = validation.get("security", {})
+            verification = security.get("signature_verification", "none")
+            if verification != "verified" and not allow_untrusted:
+                raise RpcError(
+                    "Uploaded character package has no cryptographically verified signature",
+                    code="character_package.untrusted",
+                    user_message="角色包签名尚未得到密码学验证。",
+                    recoverable=True,
+                    action_hint="管理员审阅来源与校验结果后，可显式设置 allow_untrusted=true。",
+                    details={"signature_verification": verification},
+                )
+            imported = self._character_package_service.import_package(
+                package_path,
+                self.state.root_dir / "characters",
+                locale=locale,
+                overwrite=overwrite,
+            )
+            return {
+                **imported,
+                "uploaded_filename": Path(filename).name,
+                "trust": {
+                    "signature_verification": verification,
+                    "untrusted_override": verification != "verified" and allow_untrusted,
+                },
+            }
+        finally:
+            package_path.unlink(missing_ok=True)
+
     async def export_character_package(
         self,
         character_path: str,
@@ -357,6 +772,9 @@ class RuntimeService:
 
             loader = ConfigLoader()
             config = loader.load(config_file)
+            if self._storage_root is not None:
+                config.session.save_path = self._storage_root / "sessions"
+                config.session.save_path.mkdir(parents=True, exist_ok=True)
             self._apply_model_overrides(config.model, model_overrides)
             self._apply_embedding_overrides(config.embedding, embedding_overrides)
             agent = Agent(config=config, config_file=config_file, character_file=char_file)
@@ -381,6 +799,7 @@ class RuntimeService:
             self._resource_gates = agent.runtime_context.resource_gates
             agent.runtime_context.model_client.update_resource_gates(self._resource_gates)
             agent.runtime_context.tool_executor.update_resource_gates(self._resource_gates)
+            self._start_event_recording(agent)
 
             current = agent.session_manager.get_current_session()
             character_name = agent.config.character.name if agent.config.character else None
@@ -466,6 +885,55 @@ class RuntimeService:
                     )
         return characters
 
+    async def list_agents(self) -> list[dict[str, Any]]:
+        """List the local bridge Agent; network callers are routed per user."""
+
+        if self.state.agent is None:
+            return []
+        return [{"agent_id": "local", "initialized": True, "started": self.state.started}]
+
+    async def delete_agent(self, agent_id: str = "local") -> dict[str, Any]:
+        """Delete the local bridge Agent; network callers are routed per user."""
+
+        if agent_id != "local" or self.state.agent is None:
+            raise ValueError(f"Runtime Agent does not exist: {agent_id}")
+        await self.shutdown()
+        return {"deleted": True, "agent_id": agent_id}
+
+    async def upload_media(
+        self,
+        agent_id: str,
+        data: bytes,
+        *,
+        filename: str,
+        content_type: str,
+    ) -> dict[str, Any]:
+        principal = current_principal()
+        if not self._uses_network_tenancy(principal.network):
+            raise RuntimeError("Media upload is only available on the network Runtime")
+        service = self._require_tenant_service(principal.user_id, agent_id)
+        if service._media_store is None:
+            raise RuntimeError("Runtime media storage is unavailable")
+        item = service._media_store.put(data, filename=filename, content_type=content_type)
+        return {"user_id": principal.user_id, "agent_id": agent_id, **item}
+
+    async def get_media(self, agent_id: str, media_id: str) -> tuple[dict[str, Any], bytes]:
+        principal = current_principal()
+        service = self._require_tenant_service(principal.user_id, agent_id)
+        if service._media_store is None:
+            raise RuntimeError("Runtime media storage is unavailable")
+        return service._media_store.get(media_id)
+
+    async def media_list(self) -> list[dict[str, Any]]:
+        if self._media_store is None:
+            return []
+        return self._media_store.list()
+
+    async def media_delete(self, media_id: str) -> dict[str, Any]:
+        if self._media_store is None or not self._media_store.delete(media_id):
+            raise ValueError(f"Runtime media does not exist: {media_id}")
+        return {"deleted": True, "media_id": media_id}
+
     async def list_models(
         self,
         refresh: bool = False,
@@ -512,13 +980,38 @@ class RuntimeService:
             session = agent.create_session()
             return self._session_payload(session)
 
-    async def list_sessions(self) -> list[dict[str, Any]]:
+    async def list_sessions(
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
         agent = self._require_agent()
-        return [self._session_payload(session) for session in agent.session_manager.list_sessions()]
+        limit = self._validate_page_limit(limit, maximum=200)
+        sessions = sorted(
+            agent.session_manager.list_sessions(),
+            key=lambda item: (item.last_active, item.session_id),
+            reverse=True,
+        )
+        start = self._cursor_start(
+            [session.session_id for session in sessions],
+            cursor,
+            resource="session",
+        )
+        page = sessions[start : start + limit]
+        has_more = start + len(page) < len(sessions)
+        return {
+            "sessions": [self._session_payload(session) for session in page],
+            "next_cursor": page[-1].session_id if page and has_more else None,
+            "has_more": has_more,
+        }
 
-    async def current_session(self) -> dict[str, Any] | None:
+    async def current_session(self, session_id: str | None = None) -> dict[str, Any] | None:
         agent = self._require_agent()
-        session = agent.session_manager.get_current_session()
+        session = (
+            agent.session_manager.get_session(session_id)
+            if session_id
+            else agent.session_manager.get_current_session()
+        )
         return self._session_payload(session) if session else None
 
     async def resume_session(self, session_id: str) -> dict[str, Any]:
@@ -529,12 +1022,17 @@ class RuntimeService:
             session = agent.session_manager.get_current_session()
             return self._session_payload(session) if session else {}
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self,
+        session_id: str,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
         if not session_id:
             raise ValueError("Session id is required")
 
         agent = self._require_agent()
         async with self._lock:
+            self._assert_session_revision(agent.session_manager, session_id, expected_revision)
             current = agent.session_manager.get_current_session()
             was_current = bool(current and current.session_id == session_id)
             deleted = agent.session_manager.delete_session(session_id)
@@ -581,7 +1079,7 @@ class RuntimeService:
             "is_current": is_current,
             "character": self._character_payload(self.state.character_path, character_name),
             "session": self._session_payload(session),
-            "messages": messages,
+            "messages": [self._public_message(message) for message in messages],
             "message_count": len(messages),
             "runtime": {
                 "root_dir": str(self.state.root_dir),
@@ -597,6 +1095,7 @@ class RuntimeService:
         self,
         title: str,
         session_id: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         normalized_title = title.strip()
         if not normalized_title:
@@ -613,13 +1112,20 @@ class RuntimeService:
             session = manager.get_session(target_session_id)
             if session is None:
                 raise ValueError(f"Session does not exist: {target_session_id}")
+            self._assert_session_revision(manager, target_session_id, expected_revision)
             session.metadata["title"] = normalized_title
+            session.revision += 1
             session.touch()
             manager.persistence.save_session(session)
             return self._session_payload(session)
 
-    async def session_messages(self, session_id: str | None = None) -> dict[str, Any]:
-        """Return complete editable messages for one session."""
+    async def session_messages(
+        self,
+        session_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Return one stable page of editable messages for a session."""
         agent = self._require_agent()
         manager = agent.session_manager
         current = manager.get_current_session()
@@ -631,13 +1137,27 @@ class RuntimeService:
         if session is None:
             raise ValueError(f"Session does not exist: {target_session_id}")
 
+        limit = self._validate_page_limit(limit, maximum=500)
         messages = manager.persistence.load_messages(target_session_id)
-        return self._session_messages_payload(manager, session, messages)
+        start = self._cursor_start(
+            [str(message.get("message_id", "")) for message in messages],
+            cursor,
+            resource="message",
+        )
+        page = messages[start : start + limit]
+        has_more = start + len(page) < len(messages)
+        return {
+            **self._session_messages_payload(manager, session, page),
+            "total_message_count": len(messages),
+            "next_cursor": page[-1].get("message_id") if page and has_more else None,
+            "has_more": has_more,
+        }
 
     async def session_replace_messages(
         self,
         messages: list[dict[str, Any]],
         session_id: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         """Replace all messages in a session after frontend-side edits."""
         agent = self._require_agent()
@@ -651,8 +1171,12 @@ class RuntimeService:
         if session is None:
             raise ValueError(f"Session does not exist: {target_session_id}")
 
-        normalized_messages = self._normalize_session_messages(messages)
+        normalized_messages = [
+            self._resolve_persisted_message(message)
+            for message in self._normalize_session_messages(messages)
+        ]
         async with self._lock:
+            self._assert_session_revision(manager, target_session_id, expected_revision)
             if not manager.replace_messages(target_session_id, normalized_messages):
                 raise ValueError(f"Session does not exist: {target_session_id}")
             updated_session = manager.get_session(target_session_id) or session
@@ -667,6 +1191,7 @@ class RuntimeService:
         message_index: int,
         session_id: str | None = None,
         system_contexts: list[str] | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         """Truncate from a historical user message and regenerate following assistant reply."""
         if message_index < 0:
@@ -686,6 +1211,7 @@ class RuntimeService:
             session = manager.get_session(target_session_id)
             if session is None:
                 raise ValueError(f"Session does not exist: {target_session_id}")
+            self._assert_session_revision(manager, target_session_id, expected_revision)
 
             original_messages = manager.persistence.load_messages(target_session_id)
             if message_index >= len(original_messages):
@@ -727,6 +1253,8 @@ class RuntimeService:
         self,
         num: int = 1,
         mode: str = "turns",
+        session_id: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         if num < 1:
             raise ValueError("Rollback num must be greater than or equal to 1")
@@ -735,9 +1263,16 @@ class RuntimeService:
 
         agent = self._require_agent()
         async with self._lock:
+            if session_id:
+                self._activate_tenant_session(session_id)
             session = agent.session_manager.get_current_session()
             if session is None:
                 raise ValueError("No active session to rollback")
+            self._assert_session_revision(
+                agent.session_manager,
+                session.session_id,
+                expected_revision,
+            )
             before_messages = agent.session_manager.get_working_memory().get_context()
             before_total_turns = session.total_turns
             agent.rollback(num=num, mode=mode)  # type: ignore[arg-type]
@@ -758,53 +1293,160 @@ class RuntimeService:
 
     async def send_message(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         system_contexts: list[str] | None = None,
+        session_id: str | None = None,
+        idempotency_key: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         async with (
             self._resource_scope("runtime", "agent_message"),
             self._resource_scope("agent_message", "agent_message"),
         ):
             agent = await self._ensure_started()
-            response = await agent.send(message, system_contexts)
-            content = response.content if response else ""
-            session = agent.session_manager.get_current_session()
-            return {
-                "role": "assistant",
-                "content": content,
-                "session": self._session_payload(session) if session else None,
-                "initiative_timer": self._agent_initiative_timer_payload(agent),
-            }
+            async with self._lock:
+                if session_id:
+                    self._activate_tenant_session(session_id)
+                session = agent.session_manager.get_current_session()
+                if session is None:
+                    raise ValueError("No active session to send a message")
+                replay = self._idempotent_response(agent, session.session_id, idempotency_key)
+                if replay is not None:
+                    return replay
+                self._assert_session_revision(
+                    agent.session_manager,
+                    session.session_id,
+                    expected_revision,
+                )
+                resolved_message = self._resolve_message_input(message)
+                response = (
+                    await agent.send_multimodal(resolved_message, system_contexts)
+                    if isinstance(resolved_message, list)
+                    else await agent.send(resolved_message, system_contexts)
+                )
+                content = response.content if response else ""
+                message_payload = self._finalize_message_operation(
+                    agent,
+                    session.session_id,
+                    idempotency_key,
+                )
+                session = agent.session_manager.get_current_session()
+                return {
+                    "role": "assistant",
+                    "content": content,
+                    "reasoning_content": getattr(response, "reasoning_content", None),
+                    "message_id": message_payload.get("message_id"),
+                    "idempotent_replay": False,
+                    "session": self._session_payload(session) if session else None,
+                    "initiative_timer": self._agent_initiative_timer_payload(agent),
+                }
 
     async def iter_message_stream(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         system_contexts: list[str] | None = None,
+        session_id: str | None = None,
+        idempotency_key: str | None = None,
+        agent_id: str | None = None,
+        expected_revision: int | None = None,
+        *,
+        generation_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield Runtime stream events as soon as Agent stream chunks are produced."""
 
+        principal = current_principal()
+        if self._uses_network_tenancy(principal.network):
+            if not agent_id:
+                raise ValueError("Runtime agent_id is required")
+            if not session_id:
+                raise ValueError("Runtime session_id is required")
+            if not isinstance(expected_revision, int) or expected_revision < 0:
+                raise ValueError("Runtime expected_revision is required")
+            if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+                raise ValueError("Runtime idempotency_key is required")
+            service = self._require_tenant_service(principal.user_id, agent_id)
+            async with service._tenant_operation_lock:
+                async for event in service.iter_message_stream(
+                    message,
+                    system_contexts,
+                    session_id=session_id,
+                    idempotency_key=idempotency_key,
+                    expected_revision=expected_revision,
+                    generation_id=generation_id,
+                ):
+                    yield {
+                        "user_id": principal.user_id,
+                        "agent_id": agent_id,
+                        **event,
+                    }
+            return
+
+        await self._ensure_started()
         async with (
             self._resource_scope("runtime", "agent_stream"),
             self._resource_scope("agent_message", "agent_stream"),
             self._resource_scope("stream", "agent_stream"),
+            self._lock,
         ):
-            async for event in self._iter_message_stream_locked(message, system_contexts):
+            if session_id:
+                self._activate_tenant_session(session_id)
+            agent = await self._ensure_started()
+            session = agent.session_manager.get_current_session()
+            if session is None:
+                raise ValueError("No active session to send a message")
+            replay = self._idempotent_response(agent, session.session_id, idempotency_key)
+            if replay is not None:
+                yield {
+                    "type": "finish",
+                    "index": 0,
+                    "content": replay.get("content", ""),
+                    "reasoning_content": replay.get("reasoning_content"),
+                    "message_id": replay.get("message_id"),
+                    "generation_id": generation_id or str(uuid4()),
+                    "idempotent_replay": True,
+                    "session": replay.get("session"),
+                }
+                return
+            self._assert_session_revision(
+                agent.session_manager,
+                session.session_id,
+                expected_revision,
+            )
+            async for event in self._iter_message_stream_locked(
+                message,
+                system_contexts,
+                generation_id=generation_id or str(uuid4()),
+                idempotency_key=idempotency_key,
+            ):
                 yield event
 
     async def _iter_message_stream_locked(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         system_contexts: list[str] | None = None,
+        *,
+        generation_id: str,
+        idempotency_key: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         agent = await self._ensure_started()
         full_content = ""
+        full_reasoning = ""
         index = 0
 
         try:
-            async for chunk in agent.send_stream(message, system_contexts):
+            resolved_message = self._resolve_message_input(message)
+            stream = (
+                agent.send_multimodal_stream(resolved_message, system_contexts)
+                if isinstance(resolved_message, list)
+                else agent.send_stream(resolved_message, system_contexts)
+            )
+            async for chunk in stream:
                 event = self._stream_chunk_payload(chunk, index)
+                event["generation_id"] = generation_id
                 if event.get("type") == "content":
                     full_content += event.get("content", "")
+                if reasoning := event.get("reasoning_content"):
+                    full_reasoning += reasoning
                 yield event
                 index += 1
         except asyncio.CancelledError:
@@ -812,6 +1454,8 @@ class RuntimeService:
                 "type": "cancelled",
                 "index": index,
                 "content": full_content,
+                "reasoning_content": full_reasoning or None,
+                "generation_id": generation_id,
             }
             raise
         except Exception as error:
@@ -819,27 +1463,48 @@ class RuntimeService:
                 "type": "error",
                 "index": index,
                 "content": full_content,
+                "reasoning_content": full_reasoning or None,
+                "generation_id": generation_id,
                 "error": runtime_error_to_dict(error),
             }
             raise
 
         session = agent.session_manager.get_current_session()
+        message_payload = self._finalize_message_operation(
+            agent,
+            session.session_id if session else "",
+            idempotency_key,
+            generation_id=generation_id,
+        )
         yield {
             "type": "finish",
             "index": index,
             "content": full_content,
+            "reasoning_content": full_reasoning or None,
+            "generation_id": generation_id,
+            "message_id": message_payload.get("message_id"),
+            "idempotent_replay": False,
             "session": self._session_payload(session) if session else None,
             "initiative_timer": self._agent_initiative_timer_payload(agent),
         }
 
     async def send_message_stream(
         self,
-        message: str,
+        message: str | list[dict[str, Any]],
         system_contexts: list[str] | None = None,
+        session_id: str | None = None,
+        idempotency_key: str | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         events: list[dict[str, Any]] = []
 
-        async for event in self.iter_message_stream(message, system_contexts):
+        async for event in self.iter_message_stream(
+            message,
+            system_contexts,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            expected_revision=expected_revision,
+        ):
             events.append(event)
 
         finish_event = events[-1] if events else {}
@@ -847,6 +1512,8 @@ class RuntimeService:
         return {
             "role": "assistant",
             "content": finish_event.get("content", ""),
+            "reasoning_content": finish_event.get("reasoning_content"),
+            "generation_id": finish_event.get("generation_id"),
             "events": events,
             "session": session_payload,
         }
@@ -1128,8 +1795,35 @@ class RuntimeService:
         event_types: list[str] | None = None,
         categories: list[str] | None = None,
         queue_size: int = 100,
+        agent_id: str | None = None,
+        after_sequence: int = 0,
+        replay_limit: int = 500,
     ) -> dict[str, Any]:
         """Create an EventBus-backed Runtime event subscription."""
+
+        principal = current_principal()
+        if self._uses_network_tenancy(principal.network):
+            if not agent_id:
+                raise ValueError("Runtime agent_id is required")
+            service = self._require_tenant_service(principal.user_id, agent_id)
+            subscription = await service.create_event_subscription(
+                event_types,
+                categories,
+                queue_size,
+                after_sequence=after_sequence,
+                replay_limit=replay_limit,
+            )
+            public_id = str(uuid4())
+            self._tenant_subscription_owners[public_id] = (
+                service,
+                subscription["subscription_id"],
+            )
+            return {
+                **subscription,
+                "subscription_id": public_id,
+                "user_id": principal.user_id,
+                "agent_id": agent_id,
+            }
 
         agent = self._require_agent()
         resolved_events = self._resolve_runtime_event_types(event_types, categories)
@@ -1142,7 +1836,15 @@ class RuntimeService:
 
         async def enqueue_event(event: Event) -> None:
             nonlocal dropped_count
-            payload = self._runtime_event_payload(event)
+            payload = self._recorded_event_payloads.get(event.id)
+            if payload is None:
+                payload = self._runtime_event_payload(event)
+                if self._tenant_key is not None:
+                    payload = {
+                        "user_id": self._tenant_key[0],
+                        "agent_id": self._tenant_key[1],
+                        **payload,
+                    }
             if queue.full():
                 dropped_count += 1
                 try:
@@ -1163,6 +1865,15 @@ class RuntimeService:
                         pass
             queue.put_nowait(payload)
 
+        if self._event_store is not None:
+            replayed = await self._event_store.replay(
+                after_sequence=after_sequence,
+                event_types={event_type.value for event_type in resolved_events},
+                limit=min(replay_limit, queue_size),
+            )
+            for payload in replayed:
+                queue.put_nowait(payload)
+
         for event_type in resolved_events:
             subscription_ids.append(agent.event_bus.subscribe(event_type, enqueue_event))
 
@@ -1173,10 +1884,25 @@ class RuntimeService:
             "event_types": [event_type.value for event_type in resolved_events],
             "queue": queue,
             "queue_size": queue_size,
+            "after_sequence": after_sequence,
+            "replayed_count": len(replayed) if self._event_store is not None else 0,
+            "earliest_sequence": (
+                self._event_store.earliest_sequence if self._event_store is not None else None
+            ),
+            "latest_sequence": (
+                self._event_store.latest_sequence if self._event_store is not None else None
+            ),
         }
 
     async def close_event_subscription(self, subscription_id: str) -> dict[str, Any]:
         """Close a previously created Runtime event subscription."""
+
+        if self._tenant_key is None:
+            owner = self._tenant_subscription_owners.pop(subscription_id, None)
+            if owner is not None:
+                service, inner_id = owner
+                result = await service.close_event_subscription(inner_id)
+                return {**result, "subscription_id": subscription_id}
 
         agent = self._require_agent()
         subscription_ids = self._runtime_event_subscriptions.pop(subscription_id, None)
@@ -1190,6 +1916,10 @@ class RuntimeService:
         return {"subscription_id": subscription_id, "closed": True, "removed": removed}
 
     async def shutdown(self) -> dict[str, Any]:
+        if self._tenant_key is None and self._tenant_services:
+            services = list(self._tenant_services.values())
+            self._tenant_services.clear()
+            await asyncio.gather(*(service.shutdown() for service in services))
         async with self._lock:
             await self._shutdown_locked()
         return {"ok": True}
@@ -1265,8 +1995,34 @@ class RuntimeService:
                 except Exception:
                     self._runtime_event_subscriptions.pop(subscription_id, None)
             await agent.shutdown()
+        self._event_store_subscription_ids.clear()
+        self._recorded_event_payloads.clear()
         self.state.agent = None
         self.state.started = False
+
+    def _start_event_recording(self, agent: Agent) -> None:
+        if self._event_store is None or self._event_store_subscription_ids:
+            return
+        for event_type in SystemEvent:
+            self._event_store_subscription_ids.append(
+                agent.event_bus.subscribe(event_type, self._record_runtime_event)
+            )
+
+    async def _record_runtime_event(self, event: Event) -> None:
+        if self._event_store is None:
+            return
+        payload = self._runtime_event_payload(event)
+        if self._tenant_key is not None:
+            payload = {
+                "user_id": self._tenant_key[0],
+                "agent_id": self._tenant_key[1],
+                **payload,
+            }
+        stored = await self._event_store.append(payload)
+        self._recorded_event_payloads[event.id] = stored
+        self._recorded_event_payloads.move_to_end(event.id)
+        while len(self._recorded_event_payloads) > 1000:
+            self._recorded_event_payloads.popitem(last=False)
 
     def _require_agent(self) -> Agent:
         if self.state.agent is None:
@@ -1406,7 +2162,10 @@ class RuntimeService:
     @staticmethod
     def _stream_chunk_payload(chunk: Any, index: int) -> dict[str, Any]:
         chunk_type = getattr(chunk, "type", "text") or "text"
+        reasoning_content = getattr(chunk, "reasoning_content", None)
         event_type = "content" if chunk_type == "text" else chunk_type
+        if reasoning_content and not getattr(chunk, "content", ""):
+            event_type = "reasoning"
         event: dict[str, Any] = {
             "type": event_type,
             "index": index,
@@ -1426,7 +2185,7 @@ class RuntimeService:
         for field_name in optional_fields:
             value = getattr(chunk, field_name, None)
             if value not in (None, False, "", [], {}):
-                event[field_name] = value
+                event[field_name] = RuntimeService._sanitize_runtime_event_value(value)
         if getattr(chunk, "timing", None) is not None:
             event["timing"] = str(chunk.timing)
         references = getattr(chunk, "web_search_references", None)
@@ -1618,8 +2377,12 @@ class RuntimeService:
             content = message.get("content")
             if role not in allowed_roles:
                 raise ValueError(f"Message at index {index} has invalid role")
-            if not isinstance(content, str):
-                raise ValueError(f"Message at index {index} content must be a string")
+            if not isinstance(content, str | list):
+                raise ValueError(
+                    f"Message at index {index} content must be text or a content-parts array"
+                )
+            if isinstance(content, list) and not all(isinstance(part, dict) for part in content):
+                raise ValueError(f"Message at index {index} contains an invalid content part")
             normalized.append(dict(message))
         return normalized
 
@@ -1652,13 +2415,198 @@ class RuntimeService:
         return {
             "session": self._session_payload(session),
             "session_id": session.session_id,
+            "revision": session.revision,
             "is_current": is_current,
-            "messages": [dict(m) for m in messages],
+            "messages": [self._public_message(message) for message in messages],
             "message_count": len(messages),
         }
+
+    def _idempotent_response(
+        self,
+        agent: Agent,
+        session_id: str,
+        idempotency_key: str | None,
+    ) -> dict[str, Any] | None:
+        if idempotency_key is None:
+            return None
+        key = idempotency_key.strip()
+        if not key or len(key) > 128:
+            raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        messages = agent.session_manager.persistence.load_messages(session_id)
+        for index, message in enumerate(messages):
+            if message.get("role") != "user" or message.get("idempotency_key") != key:
+                continue
+            assistant = next(
+                (
+                    candidate
+                    for candidate in messages[index + 1 :]
+                    if candidate.get("role") == "assistant"
+                ),
+                None,
+            )
+            if assistant is None:
+                raise RpcError(
+                    f"Idempotency key is already in progress: {key}",
+                    code="message.idempotency_in_progress",
+                    user_message="同一发送请求仍在处理中。",
+                    recoverable=True,
+                    action_hint="请稍后使用同一 idempotency_key 重试。",
+                )
+            session = agent.session_manager.get_session(session_id)
+            return {
+                "role": "assistant",
+                "content": assistant.get("content", ""),
+                "reasoning_content": assistant.get("reasoning_content"),
+                "message_id": assistant.get("message_id"),
+                "generation_id": assistant.get("generation_id"),
+                "idempotent_replay": True,
+                "session": self._session_payload(session),
+                "initiative_timer": self._agent_initiative_timer_payload(agent),
+            }
+        return None
+
+    def _resolve_message_input(
+        self,
+        message: str | list[dict[str, Any]],
+    ) -> str | list[dict[str, Any]]:
+        if isinstance(message, str):
+            if not message:
+                raise ValueError("Runtime message must not be empty")
+            return message
+        if not isinstance(message, list) or not message:
+            raise ValueError("Runtime message must be text or a non-empty content-parts array")
+        if self._media_store is None:
+            raise RuntimeError("Runtime media storage is unavailable")
+        return self._media_store.resolve_content_parts(message)
+
+    def _resolve_persisted_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        resolved = dict(message)
+        content = resolved.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict) and part.get("type") == "media" for part in content
+        ):
+            if self._media_store is None:
+                raise RuntimeError("Runtime media storage is unavailable")
+            resolved["content"] = self._media_store.resolve_content_parts(content)
+        return resolved
+
+    @staticmethod
+    def _public_message(message: dict[str, Any]) -> dict[str, Any]:
+        public = dict(message)
+        content = public.get("content")
+        if not isinstance(content, list):
+            return public
+        public_parts: list[Any] = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("media_id"), str):
+                public_parts.append(
+                    {
+                        "type": "media",
+                        "media_id": part["media_id"],
+                        **({"detail": part["image"]["detail"]} if isinstance(part.get("image"), dict) and part["image"].get("detail") else {}),
+                    }
+                )
+            else:
+                public_parts.append(part)
+        public["content"] = public_parts
+        return public
+
+    def _finalize_message_operation(
+        self,
+        agent: Agent,
+        session_id: str,
+        idempotency_key: str | None,
+        *,
+        generation_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not session_id:
+            return {}
+        key = idempotency_key.strip() if idempotency_key else None
+        if key is not None and (not key or len(key) > 128):
+            raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        manager = agent.session_manager
+        messages = manager.get_working_memory(session_id).get_context()
+        assistant_index = next(
+            (
+                index
+                for index in range(len(messages) - 1, -1, -1)
+                if messages[index].get("role") == "assistant"
+            ),
+            None,
+        )
+        if assistant_index is None:
+            return {}
+        if generation_id:
+            messages[assistant_index]["generation_id"] = generation_id
+        user_index = next(
+            (
+                index
+                for index in range(assistant_index - 1, -1, -1)
+                if messages[index].get("role") == "user"
+            ),
+            None,
+        )
+        if key and user_index is not None:
+            messages[user_index]["idempotency_key"] = key
+        manager.replace_messages(session_id, messages)
+        persisted = manager.persistence.load_messages(session_id)
+        return next(
+            (
+                message
+                for message in reversed(persisted)
+                if message.get("role") == "assistant"
+            ),
+            {},
+        )
 
     @staticmethod
     def _session_payload(session: SessionContext | None) -> dict[str, Any]:
         if session is None:
             return {}
         return session.to_dict()
+
+    @staticmethod
+    def _validate_page_limit(limit: int, *, maximum: int) -> int:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= maximum:
+            raise ValueError(f"Page limit must be between 1 and {maximum}")
+        return limit
+
+    @staticmethod
+    def _assert_session_revision(
+        manager: Any,
+        session_id: str,
+        expected_revision: int | None,
+    ) -> Any:
+        if hasattr(manager, "assert_revision"):
+            return manager.assert_revision(session_id, expected_revision)
+        session = manager.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session does not exist: {session_id}")
+        current_revision = int(getattr(session, "revision", 0))
+        if expected_revision is not None and expected_revision != current_revision:
+            raise RpcError(
+                "Session revision conflict",
+                code="session.revision_conflict",
+                details={
+                    "session_id": session_id,
+                    "expected_revision": expected_revision,
+                    "current_revision": current_revision,
+                },
+            )
+        return session
+
+    @staticmethod
+    def _cursor_start(values: list[str], cursor: str | None, *, resource: str) -> int:
+        if cursor is None:
+            return 0
+        try:
+            return values.index(cursor) + 1
+        except ValueError as error:
+            raise RpcError(
+                f"Runtime {resource} cursor is invalid or stale",
+                code="pagination.invalid_cursor",
+                user_message="分页游标无效或对应资源已发生变化。",
+                recoverable=True,
+                action_hint="请从第一页重新读取。",
+                details={"resource": resource},
+            ) from error

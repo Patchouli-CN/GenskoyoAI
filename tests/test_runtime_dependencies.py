@@ -618,17 +618,25 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
 
         info = asyncio.run(run())
 
-        self.assertEqual(RUNTIME_PROTOCOL_VERSION, "1.1.0")
-        self.assertEqual(RUNTIME_PROTOCOL_MAJOR_VERSION, 1)
-        self.assertEqual(RUNTIME_BREAKING_CHANGES, ())
-        self.assertEqual(info["protocol_version"], "1.1.0")
-        self.assertEqual(info["protocol_major_version"], 1)
+        self.assertEqual(RUNTIME_PROTOCOL_VERSION, "2.0.0")
+        self.assertEqual(RUNTIME_PROTOCOL_MAJOR_VERSION, 2)
+        self.assertTrue(RUNTIME_BREAKING_CHANGES)
+        self.assertEqual(info["protocol_version"], "2.0.0")
+        self.assertEqual(info["protocol_major_version"], 2)
         self.assertEqual(info["package_version"], "2026.7.14.0")
         self.assertEqual(info["schema_versions"]["memory"], 2)
         self.assertIn("agent.streaming", info["capabilities"])
+        self.assertIn("agent.reasoning.public", info["capabilities"])
         self.assertIn("runtime.events", info["capabilities"])
+        self.assertIn("runtime.transport_discovery", info["capabilities"])
         self.assertIn("memory.management", info["capabilities"])
-        self.assertEqual(info["breaking_changes"], [])
+        self.assertEqual(info["stream_protocol"]["reasoning_default"], "public")
+        self.assertIn("generation_id", info["stream_protocol"]["correlation_fields"])
+        self.assertEqual(
+            {transport["name"] for transport in info["transports"]},
+            {"json-lines", "http", "websocket", "sse"},
+        )
+        self.assertEqual(info["breaking_changes"], list(RUNTIME_BREAKING_CHANGES))
         self.assertTrue(info["method_specs"])
         self.assertEqual(info["deprecated_fields"], [])
         self.assertEqual(info["compatibility_notes"], runtime_compatibility_notes())
@@ -717,20 +725,14 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
         self.assertEqual(ctx.exception.details["method"], "not.registered")
         self.assertIn("runtime.info", ctx.exception.details["allowed_methods"])
 
-    def test_runtime_service_handle_returns_structured_error_response_by_default(self):
+    def test_runtime_service_handle_raises_rpc_error_by_default(self):
         service = RuntimeService()
 
         async def run():
             return await service.handle("not.registered", {})
 
-        response = asyncio.run(run())
-
-        self.assertFalse(response["ok"])
-        self.assertEqual(response["error_code"], "method_not_found")
-        self.assertIn("Unknown method", response["error"])
-        self.assertEqual(response["error_object"]["code"], "method_not_found")
-        self.assertEqual(response["error_object"]["details"]["method"], "not.registered")
-        self.assertIn("user_message", response["error_object"])
+        with self.assertRaises(RpcMethodNotFoundError):
+            asyncio.run(run())
 
     def test_dispatch_rpc_can_wrap_tool_execution_error_as_runtime_error_response(self):
         class ToolFailingService:
@@ -903,7 +905,9 @@ class RuntimeMemoryRpcTests(unittest.TestCase):
             )
             graph = await service.handle("memory.graph")
             deleted = await service.handle("memory.delete", {"memory_id": "memory-1"})
-            missing = await service.handle("memory.get", {"memory_id": "memory-1"})
+            missing = await service.handle(
+                "memory.get", {"memory_id": "memory-1"}, structured_errors=True
+            )
             return listed, searched, fetched, updated, graph, deleted, missing
 
         listed, searched, fetched, updated, graph, deleted, missing = asyncio.run(run())
@@ -922,7 +926,7 @@ class RuntimeMemoryRpcTests(unittest.TestCase):
     def test_memory_rpc_requires_initialized_agent(self):
         service = RuntimeService()
 
-        response = asyncio.run(service.handle("memory.list"))
+        response = asyncio.run(service.handle("memory.list", structured_errors=True))
 
         self.assertFalse(response["ok"])
         self.assertEqual(response["error_code"], "runtime.error")
@@ -940,7 +944,9 @@ class RuntimeSessionRpcTests(unittest.TestCase):
         async def run():
             current = await service.handle("session.current")
             deleted = await service.handle("session.delete", {"session_id": session_id})
-            missing = await service.handle("session.delete", {"session_id": session_id})
+            missing = await service.handle(
+                "session.delete", {"session_id": session_id}, structured_errors=True
+            )
             return current, deleted, missing
 
         current, deleted, missing = asyncio.run(run())
@@ -966,7 +972,9 @@ class RuntimeSessionRpcTests(unittest.TestCase):
 
         async def run():
             exported = await service.handle("session.export")
-            missing = await service.handle("session.export", {"session_id": "missing"})
+            missing = await service.handle(
+                "session.export", {"session_id": "missing"}, structured_errors=True
+            )
             return exported, missing
 
         exported, missing = asyncio.run(run())
@@ -995,7 +1003,9 @@ class RuntimeSessionRpcTests(unittest.TestCase):
 
         async def run():
             renamed = await service.handle("session.rename", {"title": " 新标题 "})
-            invalid = await service.handle("session.rename", {"title": "   "})
+            invalid = await service.handle(
+                "session.rename", {"title": "   "}, structured_errors=True
+            )
             return renamed, invalid
 
         renamed, invalid = asyncio.run(run())
@@ -1026,7 +1036,7 @@ class RuntimeSessionRpcTests(unittest.TestCase):
                 "session.rollback",
                 {"num": 2, "mode": "messages"},
             )
-            invalid = await service.handle("session.rollback", {"num": 0})
+            invalid = await service.handle("session.rollback", {"num": 0}, structured_errors=True)
             return rolled_back, invalid
 
         rolled_back, invalid = asyncio.run(run())
@@ -1065,6 +1075,7 @@ class RuntimeSessionRpcTests(unittest.TestCase):
             invalid = await service.handle(
                 "session.replace_messages",
                 {"session_id": session_id, "messages": [{"role": "bad", "content": "x"}]},
+                structured_errors=True,
             )
             return before, replaced, invalid
 
@@ -1127,6 +1138,24 @@ class RuntimeSessionRpcTests(unittest.TestCase):
 
 
 class RuntimeStreamingRpcTests(unittest.TestCase):
+    def test_send_message_exposes_reasoning_by_default(self):
+        service = RuntimeService()
+        manager = FakeRuntimeSessionManager()
+
+        async def send(message, system_contexts=None):
+            return SimpleNamespace(content="回答", reasoning_content="思考")
+
+        cast(Any, service.state).agent = SimpleNamespace(
+            send=send,
+            session_manager=manager,
+        )
+        service.state.started = True
+
+        result = asyncio.run(service.handle("agent.send_message", {"message": "问题"}))
+
+        self.assertEqual(result["content"], "回答")
+        self.assertEqual(result["reasoning_content"], "思考")
+
     def test_send_message_stream_returns_stable_event_list_and_finish_event(self):
         service = RuntimeService()
         manager = FakeRuntimeSessionManager()
@@ -1136,6 +1165,7 @@ class RuntimeStreamingRpcTests(unittest.TestCase):
             start_calls.append(True)
 
         async def send_stream(message, system_contexts=None):
+            yield StreamChunk(reasoning_content="先思考")
             yield StreamChunk(content="你")
             yield StreamChunk(content="好", status="streaming")
 
@@ -1157,9 +1187,14 @@ class RuntimeStreamingRpcTests(unittest.TestCase):
         self.assertEqual(start_calls, [True])
         self.assertEqual(result["role"], "assistant")
         self.assertEqual(result["content"], "你好")
-        self.assertEqual(result["events"][0], {"type": "content", "index": 0, "content": "你"})
+        self.assertEqual(result["reasoning_content"], "先思考")
+        self.assertTrue(result["generation_id"])
+        self.assertEqual(result["events"][0]["type"], "reasoning")
+        self.assertEqual(result["events"][0]["reasoning_content"], "先思考")
         self.assertEqual(result["events"][1]["type"], "content")
-        self.assertEqual(result["events"][1]["status"], "streaming")
+        self.assertEqual(result["events"][1]["content"], "你")
+        self.assertEqual(result["events"][2]["type"], "content")
+        self.assertEqual(result["events"][2]["status"], "streaming")
         self.assertEqual(result["events"][-1]["type"], "finish")
         self.assertEqual(result["events"][-1]["content"], "你好")
         assert manager.current is not None
@@ -1322,7 +1357,9 @@ class RuntimeResourceControlTests(unittest.TestCase):
         async def run():
             first = asyncio.create_task(service.handle("agent.send_message", {"message": "one"}))
             await started.wait()
-            second = await service.handle("agent.send_message", {"message": "two"})
+            second = await service.handle(
+                "agent.send_message", {"message": "two"}, structured_errors=True
+            )
             release.set()
             first_result = await first
             return first_result, second
@@ -1364,7 +1401,9 @@ class RuntimeResourceControlTests(unittest.TestCase):
         async def run():
             first = asyncio.create_task(service.handle("agent.send_message", {"message": "one"}))
             await started.wait()
-            second = await service.handle("agent.send_message", {"message": "two"})
+            second = await service.handle(
+                "agent.send_message", {"message": "two"}, structured_errors=True
+            )
             release.set()
             first_result = await first
             return first_result, second

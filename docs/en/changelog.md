@@ -12,7 +12,7 @@ Brief rules:
 
 - Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.7.14.0`, and the only previous official release was `v2026.5.13.0`.
 - Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.7.14.0`.
-- Runtime protocol version uses independent semantic versioning without `v`; it is currently `1.1.0` with major `1`; client compatibility prioritizes `protocol_major_version`.
+- Runtime protocol version uses independent semantic versioning without `v`; the current development branch uses `2.0.0` with major `2`; client compatibility prioritizes `protocol_major_version`.
 - Schema versions continue to use integers, e.g. `1`, `2`, `3`.
 
 ## Usage
@@ -27,6 +27,15 @@ Each change entry should ideally include:
 - Whether old config, old sessions, old memory, character files, or client integration are affected.
 - Whether Runtime methods, capabilities, response fields, error structures, or schema versions changed.
 - Whether deprecated, removal_pending, removed, or breaking changes are involved; if so, alternatives and migration methods must be given.
+
+---
+
+## Current Development Compatibility Summary
+
+- Runtime Protocol `2.0.0` performs one concentrated incompatible revision: network resources use `user_id -> agent_id -> session_id`, writes require `expected_revision`, and sends require `idempotency_key`.
+- Adds JWT/RBAC, tenant storage isolation, stable `message_id`, pagination, persistent event replay, multipart media upload, and a fail-closed remote character-package trust gate.
+- Session schema moves from `1` to `2`; legacy files gain revision/message identity while unknown extension fields are preserved.
+- The file backend targets single-node remote multi-user service. Multi-node production still requires PostgreSQL and shared object storage.
 
 ---
 
@@ -93,7 +102,7 @@ Use one or two sentences to explain the most important changes in this version, 
 ## Runtime / Client Compatibility
 
 - Runtime protocol version: YYYY.M.D.N
-- Runtime protocol major: 1
+- Runtime protocol major: N
 - Supported clients: explain recommended client versions or minimum compatible versions.
 - Method changes: list added, deprecated, or removed methods; write "None" if no changes.
 - Capability changes: list added, deprecated, or removed capabilities; write "None" if no changes.
@@ -107,7 +116,7 @@ Use one or two sentences to explain the most important changes in this version, 
 | Type | Version | Note |
 | --- | --- | --- |
 | config schema | 1 | Config file format version |
-| session schema | 1 | Session file format version |
+| session schema | 2 | Session format; v2 includes session revision and message identity |
 | memory schema | 1 | Memory storage format version |
 | session export schema | 1 | Session export package format version |
 | character package schema | TBD | Character package format version |

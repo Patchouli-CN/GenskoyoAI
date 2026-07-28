@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...utils.logger import logger
 from ..events import Event, EventBus, EventPriority, SystemEvent
+from .types import StreamChunk
 
 if TYPE_CHECKING:
     from ._impl import Agent
@@ -24,7 +25,7 @@ class ActionExecutor:
         self.event_bus = event_bus
 
         # 流式响应管理
-        self._stream_queue: asyncio.Queue | None = None
+        self._stream_queue: asyncio.Queue[StreamChunk] | None = None
         self._response_future: asyncio.Future | None = None
 
         self._subscribe_events()
@@ -162,25 +163,25 @@ class ActionExecutor:
         self._stream_queue = asyncio.Queue()
         return self._response_future
 
-    async def feed_chunk(self, chunk: str) -> None:
+    async def feed_chunk(self, chunk: StreamChunk) -> None:
         """喂入流式块。"""
         if self._stream_queue:
             await self._stream_queue.put(chunk)
 
-    async def get_chunk(self) -> str:
+    async def get_chunk(self) -> StreamChunk | None:
         """获取下一个流式块。"""
         if self._stream_queue:
             return await self._stream_queue.get()
-        return ""
+        return None
 
-    def get_chunk_nowait(self) -> str:
-        """非阻塞获取下一个流式块；无队列或队列为空时返回 ""。"""
+    def get_chunk_nowait(self) -> StreamChunk | None:
+        """非阻塞获取下一个流式块；无队列或队列为空时返回 None。"""
         if self._stream_queue:
             try:
                 return self._stream_queue.get_nowait()
             except asyncio.QueueEmpty:
-                return ""
-        return ""
+                return None
+        return None
 
     def complete_response(self, full_response: str = "") -> None:
         """响应完成。只解析 future，不清空流式队列——消费方可能还没排完

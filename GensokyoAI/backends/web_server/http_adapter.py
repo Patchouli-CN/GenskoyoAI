@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import hmac
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -18,9 +19,17 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from aiohttp import WSMsgType, web
+from aiohttp.multipart import BodyPartReader
 from msgspec import Struct
 
-from GensokyoAI.runtime.rpc import runtime_error_to_dict
+from GensokyoAI.runtime.auth import (
+    RUNTIME_ROLES,
+    RuntimePrincipal,
+    authorize_rpc,
+    decode_hs256_jwt,
+    set_current_principal,
+)
+from GensokyoAI.runtime.rpc import RpcError, runtime_error_to_dict
 from GensokyoAI.runtime.service import RuntimeService
 from GensokyoAI.utils.helpers import utc_now
 
@@ -30,23 +39,31 @@ RUNTIME_SERVICE_APP_KEY: web.AppKey[RuntimeService] = web.AppKey(
 )
 
 DEFAULT_WS_HEARTBEAT_INTERVAL = 30.0
+MIN_WS_HEARTBEAT_INTERVAL = 5.0
+MAX_WS_HEARTBEAT_INTERVAL = 120.0
 DEFAULT_MAX_REQUEST_BODY_SIZE = 1024 * 1024
+DEFAULT_MAX_MEDIA_SIZE = 10 * 1024 * 1024
 DEFAULT_WS_MAX_MSG_SIZE = 1024 * 1024
 MIN_AUTH_TOKEN_LENGTH = 16
 AUTH_RATE_LIMIT_MAX_FAILURES = 10
 AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
+AUTH_RATE_LIMIT_MAX_PEERS = 10_000
 
 
 class RuntimeHttpSecurityConfig(Struct, frozen=True):
     token: str | None = None
+    jwt_secret: str | None = None
+    jwt_issuer: str | None = None
+    jwt_audience: str | None = None
     allowed_origins: tuple[str, ...] = ()
     allow_all_origins: bool = False
     max_request_body_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE
+    max_media_size: int = DEFAULT_MAX_MEDIA_SIZE
 
     @property
     def auth_enabled(self) -> bool:
         # 空字符串视为未启用认证，避免 compare_digest("", "") == True 的绕过
-        return bool(self.token)
+        return bool(self.token or self.jwt_secret)
 
 
 RUNTIME_SECURITY_APP_KEY: web.AppKey[RuntimeHttpSecurityConfig] = web.AppKey(
@@ -73,10 +90,24 @@ def rpc_success(request_id: Any, result: Any) -> dict[str, Any]:
 
 
 def rpc_error(request_id: Any, error: Exception) -> dict[str, Any]:
+    error_object = runtime_error_to_dict(error)
+    if isinstance(error, web.HTTPException):
+        error_object.update(
+            {
+                "code": f"http.{error.status}",
+                "error_code": f"http.{error.status}",
+                "message": error.reason,
+                "error": error.reason,
+                "technical_message": error.reason,
+                "user_message": error.reason,
+                "recoverable": error.status in {401, 403, 408, 409, 429},
+                "details": {"http_status": error.status},
+            }
+        )
     return {
         "id": request_id,
         "ok": False,
-        "error": runtime_error_to_dict(error),
+        "error": error_object,
     }
 
 
@@ -102,33 +133,108 @@ def _normalize_token(value: str | None) -> str | None:
     return stripped if stripped else None
 
 
+def _normalize_origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname.lower() if parsed.hostname else None
+    if scheme not in {"http", "https", "ws", "wss"} or host is None:
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    if parsed.path not in {"", "/"}:
+        return None
+    if port is None:
+        port = 443 if scheme in {"https", "wss"} else 80
+    return scheme, host, port
+
+
+@web.middleware
+async def _cors_middleware(
+    request: web.Request,
+    handler: Any,
+) -> web.StreamResponse:
+    origin = request.headers.get("Origin")
+    if origin:
+        _validate_origin(request, request.app[RUNTIME_SECURITY_APP_KEY])
+    try:
+        response = await handler(request)
+    except web.HTTPException as error:
+        if origin:
+            _apply_cors_headers(error, origin, request.app[RUNTIME_SECURITY_APP_KEY])
+        raise
+    if origin:
+        _apply_cors_headers(response, origin, request.app[RUNTIME_SECURITY_APP_KEY])
+    return response
+
+
+def _apply_cors_headers(
+    response: web.StreamResponse,
+    origin: str,
+    security: RuntimeHttpSecurityConfig,
+) -> None:
+    response.headers["Access-Control-Allow-Origin"] = "*" if security.allow_all_origins else origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = (
+        "Authorization, Content-Type, Last-Event-ID, X-Runtime-Token"
+    )
+    response.headers["Vary"] = "Origin"
+
+
 def create_app(
     root_dir: Path | None = None,
     *,
     service: RuntimeService | None = None,
     auth_token: str | None = None,
+    jwt_secret: str | None = None,
+    jwt_issuer: str | None = None,
+    jwt_audience: str | None = None,
     allowed_origins: list[str] | tuple[str, ...] | None = None,
     allow_all_origins: bool = False,
+    require_auth: bool = False,
     max_request_body_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE,
+    max_media_size: int = DEFAULT_MAX_MEDIA_SIZE,
 ) -> web.Application:
     token = _normalize_token(auth_token or os.environ.get("GENSOKYOAI_RUNTIME_TOKEN"))
+    jwt_secret = _normalize_token(jwt_secret or os.environ.get("GENSOKYOAI_RUNTIME_JWT_SECRET"))
+    jwt_issuer = _normalize_token(jwt_issuer or os.environ.get("GENSOKYOAI_RUNTIME_JWT_ISSUER"))
+    jwt_audience = _normalize_token(
+        jwt_audience or os.environ.get("GENSOKYOAI_RUNTIME_JWT_AUDIENCE")
+    )
+    if require_auth and token is None and jwt_secret is None:
+        raise RuntimeError(
+            "Runtime authentication is required for non-loopback binding; "
+            "set GENSOKYOAI_RUNTIME_JWT_SECRET or GENSOKYOAI_RUNTIME_TOKEN"
+        )
     if token is not None and len(token) < MIN_AUTH_TOKEN_LENGTH:
         raise RuntimeError(
             f"Runtime auth token must be at least {MIN_AUTH_TOKEN_LENGTH} characters"
         )
+    if jwt_secret is not None and len(jwt_secret) < 32:
+        raise RuntimeError("Runtime JWT secret must be at least 32 characters")
 
     origins = tuple(allowed_origins or ())
     if origins and "*" in origins:
         allow_all_origins = True
         origins = ()
 
-    app = web.Application(client_max_size=max_request_body_size)
+    app = web.Application(
+        client_max_size=max(max_request_body_size, max_media_size),
+        middlewares=[_cors_middleware],
+    )
     app[RUNTIME_SERVICE_APP_KEY] = service or RuntimeService(root_dir=root_dir)
     app[RUNTIME_SECURITY_APP_KEY] = RuntimeHttpSecurityConfig(
         token=token,
+        jwt_secret=jwt_secret,
+        jwt_issuer=jwt_issuer,
+        jwt_audience=jwt_audience,
         allowed_origins=origins,
         allow_all_origins=allow_all_origins,
         max_request_body_size=max_request_body_size,
+        max_media_size=max_media_size,
     )
     app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY] = {}
     app.router.add_get("/health", handle_health)
@@ -136,6 +242,10 @@ def create_app(
     app.router.add_post("/rpc", handle_rpc)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/events", handle_events)
+    app.router.add_post("/media", handle_media_upload)
+    app.router.add_get("/media/{agent_id}/{media_id}", handle_media_download)
+    app.router.add_post("/character-packages", handle_character_package_upload)
+    app.router.add_options("/{path:.*}", handle_options)
     app.on_cleanup.append(cleanup_runtime_service)
     return app
 
@@ -145,14 +255,39 @@ async def cleanup_runtime_service(app: web.Application) -> None:
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    _validate_runtime_request(request)
+    principal = _validate_runtime_request(request)
+    authorize_rpc("runtime.health", principal)
     result = await request.app[RUNTIME_SERVICE_APP_KEY].health()
     return json_response(result)
 
 
 async def handle_info(request: web.Request) -> web.Response:
-    _validate_runtime_request(request)
+    principal = _validate_runtime_request(request)
+    authorize_rpc("runtime.info", principal)
     result = await request.app[RUNTIME_SERVICE_APP_KEY].info()
+    security = request.app[RUNTIME_SECURITY_APP_KEY]
+    result = {
+        **result,
+        "active_transport": {
+            "name": "http-websocket",
+            "authentication": (
+                "jwt-hs256"
+                if security.jwt_secret
+                else "shared-bearer"
+                if security.token
+                else "none"
+            ),
+            "cors": "allow-all" if security.allow_all_origins else "allowlist",
+            "max_request_body_size": security.max_request_body_size,
+            "max_media_size": security.max_media_size,
+            "max_websocket_message_size": DEFAULT_WS_MAX_MSG_SIZE,
+            "websocket_heartbeat_seconds": {
+                "default": DEFAULT_WS_HEARTBEAT_INTERVAL,
+                "minimum": MIN_WS_HEARTBEAT_INTERVAL,
+                "maximum": MAX_WS_HEARTBEAT_INTERVAL,
+            },
+        },
+    }
     return json_response(result)
 
 
@@ -160,17 +295,32 @@ async def handle_rpc(request: web.Request) -> web.Response:
     request_id: Any = None
     try:
         _validate_runtime_request(request)
+        security = request.app[RUNTIME_SECURITY_APP_KEY]
+        if request.content_length and request.content_length > security.max_request_body_size:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=security.max_request_body_size,
+                actual_size=request.content_length,
+            )
         payload = await request.json()
         request_id, method, params = parse_rpc_payload(payload)
+        authorize_rpc(method, _validate_runtime_request(request))
         result = await request.app[RUNTIME_SERVICE_APP_KEY].handle(method, params)
         return json_response(rpc_success(request_id, result))
+    except web.HTTPException as error:
+        return json_response(rpc_error(request_id, error), status=error.status)
     except Exception as error:
         status = 400 if request_id is None else 200
         return json_response(rpc_error(request_id, error), status=status)
 
 
+async def handle_options(request: web.Request) -> web.Response:
+    _validate_origin(request, request.app[RUNTIME_SECURITY_APP_KEY])
+    return web.Response(status=204)
+
+
 async def handle_events(request: web.Request) -> web.StreamResponse:
-    _validate_runtime_request(request)
+    principal = _validate_runtime_request(request)
+    authorize_rpc("runtime.subscribe", principal)
     service = request.app[RUNTIME_SERVICE_APP_KEY]
     subscription = await service.create_event_subscription(
         **_event_subscription_params_from_request(request)
@@ -204,6 +354,88 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
     return response
 
 
+async def handle_media_upload(request: web.Request) -> web.Response:
+    principal = _validate_runtime_request(request)
+    authorize_rpc("agent.send_message", principal)
+    agent_id = request.query.get("agent_id")
+    if not agent_id:
+        raise web.HTTPBadRequest(reason="Runtime media upload requires agent_id")
+    reader = await request.multipart()
+    part = await reader.next()
+    if (
+        not isinstance(part, BodyPartReader)
+        or part.name != "file"
+        or not part.filename
+    ):
+        raise web.HTTPBadRequest(reason="Runtime media upload requires multipart field 'file'")
+    max_size = request.app[RUNTIME_SECURITY_APP_KEY].max_media_size
+    data = bytearray()
+    while chunk := await part.read_chunk():
+        data.extend(chunk)
+        if len(data) > max_size:
+            raise web.HTTPRequestEntityTooLarge(max_size=max_size, actual_size=len(data))
+    try:
+        result = await request.app[RUNTIME_SERVICE_APP_KEY].upload_media(
+            agent_id,
+            bytes(data),
+            filename=part.filename,
+            content_type=part.headers.get("Content-Type", "application/octet-stream"),
+        )
+    except (RpcError, ValueError) as error:
+        return json_response(rpc_error(None, error), status=400)
+    result["download_path"] = f"/media/{agent_id}/{result['media_id']}"
+    return json_response(result, status=201)
+
+
+async def handle_media_download(request: web.Request) -> web.Response:
+    principal = _validate_runtime_request(request)
+    authorize_rpc("media.list", principal)
+    try:
+        metadata, data = await request.app[RUNTIME_SERVICE_APP_KEY].get_media(
+            request.match_info["agent_id"],
+            request.match_info["media_id"],
+        )
+    except (RpcError, ValueError) as error:
+        return json_response(rpc_error(None, error), status=404)
+    return web.Response(
+        body=data,
+        content_type=metadata["content_type"],
+        headers={"Content-Disposition": f'inline; filename="{metadata["filename"]}"'},
+    )
+
+
+async def handle_character_package_upload(request: web.Request) -> web.Response:
+    principal = _validate_runtime_request(request)
+    authorize_rpc("character_package.import", principal)
+    reader = await request.multipart()
+    part = await reader.next()
+    if (
+        not isinstance(part, BodyPartReader)
+        or part.name != "file"
+        or not part.filename
+    ):
+        raise web.HTTPBadRequest(
+            reason="Character package upload requires multipart field 'file'"
+        )
+    max_size = request.app[RUNTIME_SECURITY_APP_KEY].max_media_size
+    data = bytearray()
+    while chunk := await part.read_chunk():
+        data.extend(chunk)
+        if len(data) > max_size:
+            raise web.HTTPRequestEntityTooLarge(max_size=max_size, actual_size=len(data))
+    try:
+        result = await request.app[RUNTIME_SERVICE_APP_KEY].import_uploaded_character_package(
+            bytes(data),
+            filename=part.filename,
+            locale=request.query.get("locale"),
+            overwrite=request.query.get("overwrite", "false").lower() == "true",
+            allow_untrusted=request.query.get("allow_untrusted", "false").lower() == "true",
+        )
+    except (RpcError, ValueError) as error:
+        return json_response(rpc_error(None, error), status=422)
+    return json_response(result, status=201)
+
+
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     _validate_runtime_request(request)
     ws = web.WebSocketResponse(max_msg_size=DEFAULT_WS_MAX_MSG_SIZE)
@@ -212,25 +444,31 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     send_lock = asyncio.Lock()
     subscription_tasks: dict[str, asyncio.Task[None]] = {}
     stream_tasks: dict[str, asyncio.Task[None]] = {}
+    request_tasks: set[asyncio.Task[None]] = set()
     heartbeat_interval = _heartbeat_interval_from_request(request)
     heartbeat_task = asyncio.create_task(_pump_ws_heartbeat(ws, send_lock, heartbeat_interval))
 
     try:
         async for message in ws:
             if message.type == WSMsgType.TEXT:
-                await _handle_ws_text(
-                    ws,
-                    service,
-                    message.data,
-                    send_lock,
-                    subscription_tasks,
-                    stream_tasks,
+                task = asyncio.create_task(
+                    _handle_ws_text(
+                        ws,
+                        service,
+                        message.data,
+                        send_lock,
+                        subscription_tasks,
+                        stream_tasks,
+                    )
                 )
+                request_tasks.add(task)
+                task.add_done_callback(request_tasks.discard)
             elif message.type == WSMsgType.ERROR:
                 break
     finally:
         heartbeat_task.cancel()
         await _await_cancelled_task(heartbeat_task)
+        await _cleanup_tasks(request_tasks)
         await _cleanup_ws_streams(stream_tasks)
         await _cleanup_ws_subscriptions(service, subscription_tasks)
 
@@ -249,6 +487,7 @@ async def _handle_ws_text(
     try:
         payload = json.loads(data)
         request_id, method, params = parse_rpc_payload(payload)
+        authorize_rpc(method, _current_request_principal())
         if method == "agent.send_message_stream":
             await _start_streaming_rpc_task(
                 ws, service, request_id, params, send_lock, stream_tasks
@@ -288,10 +527,27 @@ async def _start_streaming_rpc_task(
     stream_tasks: dict[str, asyncio.Task[None]] | None,
 ) -> str:
     stream_id = str(params.pop("stream_id", None) or uuid4())
+    generation_id = str(uuid4())
     if stream_tasks is not None and stream_id in stream_tasks:
         raise ValueError(f"Runtime stream already exists: {stream_id}")
+    await _send_ws_json(
+        ws,
+        send_lock,
+        rpc_success(
+            request_id,
+            {"stream_id": stream_id, "generation_id": generation_id},
+        ),
+    )
     task = asyncio.create_task(
-        _send_streaming_rpc_frames(ws, service, request_id, stream_id, params, send_lock)
+        _send_streaming_rpc_frames(
+            ws,
+            service,
+            request_id,
+            stream_id,
+            generation_id,
+            params,
+            send_lock,
+        )
     )
     if stream_tasks is not None:
         stream_tasks[stream_id] = task
@@ -319,18 +575,29 @@ async def _send_streaming_rpc_frames(
     service: RuntimeService,
     request_id: Any,
     stream_id: str,
+    generation_id: str,
     params: dict[str, Any],
     send_lock: asyncio.Lock,
 ) -> None:
     events: list[dict[str, Any]] = []
     final_content = ""
+    final_reasoning = ""
     session_payload: dict[str, Any] | None = None
 
     try:
-        async for event in service.iter_message_stream(**params):
+        async for event in service.iter_message_stream(
+            **params,
+            generation_id=generation_id,
+        ):
+            event.setdefault("generation_id", generation_id)
             events.append(event)
-            final_content = event.get("content", final_content)
+            if event.get("type") == "content":
+                final_content += event.get("content", "")
+            if reasoning := event.get("reasoning_content"):
+                final_reasoning += reasoning
             if event.get("type") == "finish":
+                final_content = event.get("content", final_content)
+                final_reasoning = event.get("reasoning_content", final_reasoning) or ""
                 session_payload = event.get("session")
             await _send_ws_json(
                 ws,
@@ -339,6 +606,7 @@ async def _send_streaming_rpc_frames(
                     "id": request_id,
                     "ok": True,
                     "stream_id": stream_id,
+                    "generation_id": generation_id,
                     "event": event,
                 },
             )
@@ -348,6 +616,8 @@ async def _send_streaming_rpc_frames(
                 "type": "cancelled",
                 "index": len(events),
                 "content": final_content,
+                "reasoning_content": final_reasoning or None,
+                "generation_id": generation_id,
             }
             events.append(cancelled_event)
             await _send_ws_json(
@@ -357,6 +627,7 @@ async def _send_streaming_rpc_frames(
                     "id": request_id,
                     "ok": True,
                     "stream_id": stream_id,
+                    "generation_id": generation_id,
                     "event": cancelled_event,
                 },
             )
@@ -367,6 +638,8 @@ async def _send_streaming_rpc_frames(
                 "type": "error",
                 "index": len(events),
                 "content": final_content,
+                "reasoning_content": final_reasoning or None,
+                "generation_id": generation_id,
                 "error": runtime_error_to_dict(error),
             }
             events.append(error_event)
@@ -377,6 +650,7 @@ async def _send_streaming_rpc_frames(
                     "id": request_id,
                     "ok": True,
                     "stream_id": stream_id,
+                    "generation_id": generation_id,
                     "event": error_event,
                 },
             )
@@ -390,10 +664,13 @@ async def _send_streaming_rpc_frames(
             "id": request_id,
             "ok": True,
             "stream_id": stream_id,
+            "generation_id": generation_id,
             "done": True,
             "result": {
                 "role": "assistant",
                 "content": final_content,
+                "reasoning_content": final_reasoning or None,
+                "generation_id": generation_id,
                 "events": events,
                 "session": session_payload,
             },
@@ -419,6 +696,9 @@ async def _start_event_subscription(
     result = {
         "subscription_id": subscription_id,
         "event_types": subscription["event_types"],
+        "replayed_count": subscription.get("replayed_count", 0),
+        "earliest_sequence": subscription.get("earliest_sequence"),
+        "latest_sequence": subscription.get("latest_sequence"),
     }
     await _send_ws_json(ws, send_lock, rpc_success(request_id, result))
 
@@ -488,6 +768,14 @@ async def _cleanup_ws_streams(stream_tasks: dict[str, asyncio.Task[None]]) -> No
     stream_tasks.clear()
 
 
+async def _cleanup_tasks(tasks: set[asyncio.Task[None]]) -> None:
+    for task in list(tasks):
+        task.cancel()
+    for task in list(tasks):
+        await _await_cancelled_task(task)
+    tasks.clear()
+
+
 async def _cleanup_ws_subscriptions(
     service: RuntimeService,
     subscription_tasks: dict[str, asyncio.Task[None]],
@@ -522,34 +810,32 @@ def _validate_origin(request: web.Request, security: RuntimeHttpSecurityConfig) 
     if security.allow_all_origins:
         return
 
-    parsed_origin = urlparse(origin)
-    if parsed_origin.scheme not in {"http", "https", "ws", "wss", "file"}:
-        raise web.HTTPForbidden(reason="Runtime request origin is not allowed")
-
-    origin_host = parsed_origin.hostname
-    if not origin_host:
+    normalized_origin = _normalize_origin(origin)
+    if normalized_origin is None:
         raise web.HTTPForbidden(reason="Runtime request origin is not allowed")
 
     if not security.allowed_origins:
         # 默认未配置 allowed_origins 时，拒绝所有跨域 Origin 请求
         raise web.HTTPForbidden(reason="Runtime request origin is not allowed")
 
-    origin_host_lower = origin_host.lower()
     for allowed in security.allowed_origins:
-        allowed_parsed = urlparse(allowed)
-        allowed_host = allowed_parsed.hostname
-        if not allowed_host:
-            continue
-        if origin_host_lower == allowed_host.lower():
+        if normalized_origin == _normalize_origin(allowed):
             return
 
     raise web.HTTPForbidden(reason="Runtime request origin is not allowed")
 
 
-def _validate_auth_token(request: web.Request, security: RuntimeHttpSecurityConfig) -> None:
+def _validate_auth_token(
+    request: web.Request,
+    security: RuntimeHttpSecurityConfig,
+) -> RuntimePrincipal:
     if not security.auth_enabled:
-        return
-    expected = security.token or ""
+        return RuntimePrincipal(
+            user_id="local",
+            roles=RUNTIME_ROLES,
+            auth_type="loopback",
+        )
+    expected = security.token
     candidates = []
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -557,15 +843,44 @@ def _validate_auth_token(request: web.Request, security: RuntimeHttpSecurityConf
     header_token = request.headers.get("X-Runtime-Token")
     if header_token:
         candidates.append(header_token.strip())
-    if not any(hmac.compare_digest(candidate, expected) for candidate in candidates):
-        _record_auth_failure(request)
-        raise web.HTTPUnauthorized(reason="Runtime authentication token is required")
+    for candidate in candidates:
+        if expected is not None and hmac.compare_digest(candidate, expected):
+            _clear_auth_failures(request)
+            return RuntimePrincipal(
+                user_id="runtime-admin",
+                roles=RUNTIME_ROLES,
+                auth_type="shared-token",
+            )
+        if security.jwt_secret is not None:
+            try:
+                principal = decode_hs256_jwt(
+                    candidate,
+                    security.jwt_secret,
+                    issuer=security.jwt_issuer,
+                    audience=security.jwt_audience,
+                )
+            except Exception:
+                continue
+            _clear_auth_failures(request)
+            return principal
+    _record_auth_failure(request)
+    raise web.HTTPUnauthorized(reason="Runtime authentication token is required or invalid")
 
 
 def _record_auth_failure(request: web.Request) -> None:
-    peer = request.remote or request.headers.get("X-Forwarded-For", "unknown")
+    peer = _request_peer(request)
     bucket = request.app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY]
     now = time.monotonic()
+    expired = [
+        stored_peer
+        for stored_peer, (_, started_at) in bucket.items()
+        if now - started_at > AUTH_RATE_LIMIT_WINDOW_SECONDS
+    ]
+    for stored_peer in expired:
+        bucket.pop(stored_peer, None)
+    if peer not in bucket and len(bucket) >= AUTH_RATE_LIMIT_MAX_PEERS:
+        oldest_peer = min(bucket, key=lambda item: bucket[item][1])
+        bucket.pop(oldest_peer, None)
     count, window_start = bucket.get(peer, (0, now))
     if now - window_start > AUTH_RATE_LIMIT_WINDOW_SECONDS:
         count = 0
@@ -576,15 +891,34 @@ def _record_auth_failure(request: web.Request) -> None:
         raise web.HTTPTooManyRequests(reason="Too many failed authentication attempts")
 
 
-def _validate_runtime_request(request: web.Request) -> None:
+def _clear_auth_failures(request: web.Request) -> None:
+    request.app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY].pop(_request_peer(request), None)
+
+
+def _request_peer(request: web.Request) -> str:
+    return request.remote or request.headers.get("X-Forwarded-For", "unknown")
+
+
+def _validate_runtime_request(request: web.Request) -> RuntimePrincipal:
     security = request.app[RUNTIME_SECURITY_APP_KEY]
     # 先校验 Origin，再校验 token；避免 token 被同源策略无关地泄露
     _validate_origin(request, security)
-    _validate_auth_token(request, security)
+    principal = _validate_auth_token(request, security)
+    set_current_principal(principal)
+    return principal
+
+
+def _current_request_principal() -> RuntimePrincipal:
+    from GensokyoAI.runtime.auth import current_principal
+
+    return current_principal()
 
 
 def _event_subscription_params_from_request(request: web.Request) -> dict[str, Any]:
     params: dict[str, Any] = {}
+    agent_id = request.query.get("agent_id")
+    after_sequence = request.query.get("after_sequence") or request.headers.get("Last-Event-ID")
+    replay_limit = request.query.get("replay_limit")
     event_types = _split_query_values(request.query.getall("event_types", []))
     categories = _split_query_values(request.query.getall("categories", []))
     queue_size = request.query.get("queue_size")
@@ -592,6 +926,18 @@ def _event_subscription_params_from_request(request: web.Request) -> dict[str, A
         params["event_types"] = event_types
     if categories:
         params["categories"] = categories
+    if agent_id:
+        params["agent_id"] = agent_id
+    if after_sequence:
+        try:
+            params["after_sequence"] = int(after_sequence)
+        except ValueError as error:
+            raise ValueError("SSE after_sequence/Last-Event-ID must be an integer") from error
+    if replay_limit:
+        try:
+            params["replay_limit"] = int(replay_limit)
+        except ValueError as error:
+            raise ValueError("SSE replay_limit must be an integer") from error
     if queue_size:
         try:
             params["queue_size"] = int(queue_size)
@@ -609,7 +955,9 @@ def _split_query_values(values: list[str]) -> list[str]:
 
 def _sse_frame(event_name: str, payload: dict[str, Any]) -> bytes:
     data = _json_dumps(payload)
-    return f"event: {event_name}\ndata: {data}\n\n".encode()
+    event_id = payload.get("sequence")
+    id_line = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{id_line}event: {event_name}\ndata: {data}\n\n".encode()
 
 
 def _heartbeat_interval_from_request(request: web.Request) -> float:
@@ -620,7 +968,9 @@ def _heartbeat_interval_from_request(request: web.Request) -> float:
         interval = float(raw_value)
     except ValueError:
         return DEFAULT_WS_HEARTBEAT_INTERVAL
-    return max(interval, 0.01)
+    if not math.isfinite(interval):
+        return DEFAULT_WS_HEARTBEAT_INTERVAL
+    return min(max(interval, MIN_WS_HEARTBEAT_INTERVAL), MAX_WS_HEARTBEAT_INTERVAL)
 
 
 def _json_dumps(payload: Any) -> str:

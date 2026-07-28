@@ -517,12 +517,12 @@ class SceneRuntimeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["name"], "魔法森林")
 
     async def test_scene_get_unknown_returns_structured_error(self):
-        # 默认 structured_errors=True：客户端拿到结构化错误而非异常
-        payload = await self.service.handle("scene.get", {"scene_id": "nope"})
+        payload = await self.service.handle(
+            "scene.get", {"scene_id": "nope"}, structured_errors=True
+        )
         self.assertIn("error", payload)
-        # structured_errors=False 时才抛出
         with self.assertRaises(ValueError):
-            await self.service.handle("scene.get", {"scene_id": "nope"}, structured_errors=False)
+            await self.service.handle("scene.get", {"scene_id": "nope"})
 
     async def test_scene_switch_persists_and_returns(self):
         from GensokyoAI.core.events import SystemEvent
@@ -544,14 +544,14 @@ class SceneRuntimeRpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(broadcasts[-1]["scene_id"], "magic_forest")
 
     async def test_scene_switch_unknown_returns_structured_error(self):
-        payload = await self.service.handle("scene.switch", {"scene_id": "nonexistent"})
+        payload = await self.service.handle(
+            "scene.switch", {"scene_id": "nonexistent"}, structured_errors=True
+        )
         self.assertIn("error", payload)
         # 当前场景保持不变
         self.assertEqual(self.agent.scene_manager.current_scene_id, "hakurei_shrine")
         with self.assertRaises(ValueError):
-            await self.service.handle(
-                "scene.switch", {"scene_id": "nonexistent"}, structured_errors=False
-            )
+            await self.service.handle("scene.switch", {"scene_id": "nonexistent"})
 
     async def test_scene_graph(self):
         graph = await self.service.handle("scene.graph")

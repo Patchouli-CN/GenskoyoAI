@@ -42,7 +42,7 @@ Examples:
 | Changelog filename | Yes | `docs/en/changelog/v2026.7.14.0.md` | Public release notes |
 | Changelog title | Yes | `# GensokyoAI v2026.7.14.0 Changelog` | For ordinary users |
 | UI display | Recommended | `v2026.7.14.0` | Easier for users to recognize |
-| Runtime protocol version | No | `1.1.0` | Independent protocol version for Runtime API; JSON field value has no `v` |
+| Runtime protocol version | No | `2.0.0` | Independent protocol version for Runtime API; JSON field value has no `v` |
 
 Note: the Python package version in [`pyproject.toml`](../pyproject.toml) must follow PEP 440, so it cannot be `v2026.7.14.0`; it should be `2026.7.14.0`.
 
@@ -87,8 +87,8 @@ Changelog: docs/en/changelog/v2026.7.14.0.md
 The Runtime protocol version is written in [`rpc.py`](../GensokyoAI/runtime/rpc.py):
 
 ```python
-RUNTIME_PROTOCOL_VERSION = "1.1.0"
-RUNTIME_PROTOCOL_MAJOR_VERSION = 1
+RUNTIME_PROTOCOL_VERSION = "2.0.0"
+RUNTIME_PROTOCOL_MAJOR_VERSION = 2
 ```
 
 Rules:
@@ -126,7 +126,7 @@ Persistent schema versions are written in [`schema_versions.py`](../GensokyoAI/c
 
 ```python
 CONFIG_SCHEMA_VERSION = 1
-SESSION_SCHEMA_VERSION = 1
+SESSION_SCHEMA_VERSION = 2
 MEMORY_SCHEMA_VERSION = 2
 SESSION_EXPORT_SCHEMA_VERSION = 1
 CHARACTER_PACKAGE_SCHEMA_VERSION = 1
@@ -151,7 +151,7 @@ Rather than:
 | Schema | Increment Condition |
 | --- | --- |
 | config schema | Incompatible change to configuration file structure, or need to migrate old config |
-| session schema | Incompatible change to session file structure |
+| session schema | Incompatible session file changes; v2 adds session revision and stable message identity |
 | memory schema | Incompatible change to memory topic store structure |
 | session export schema | Incompatible change to session export package structure |
 | character package schema | Formal definition or incompatible change to character package format |
@@ -343,10 +343,10 @@ Before each release, check in order:
 | package version | `YYYY.M.D.N` | `2026.7.14.0` | [`pyproject.toml`](../pyproject.toml) |
 | Git tag | `vYYYY.M.D.N` | `v2026.7.14.0` | Git tag |
 | changelog | `vYYYY.M.D.N` | [`docs/en/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md) | [`docs/en/changelog`](changelog) |
-| Runtime protocol version | independent semantic version | `1.1.0` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
-| Runtime protocol major | integer | `1` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
+| Runtime protocol version | independent semantic version | `2.0.0` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
+| Runtime protocol major | integer | `2` | [`rpc.py`](../GensokyoAI/runtime/rpc.py) |
 | config schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
-| session schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
+| session schema | integer | `2` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | memory schema | integer | `2` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | session export schema | integer | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
 | character package schema | integer or `None` | `1` | [`schema_versions.py`](../GensokyoAI/core/schema_versions.py) |
@@ -356,7 +356,7 @@ Before each release, check in order:
 `v2026.5.13.0` was the only previous official release. Current cumulative official release status:
 
 - Current package version is in [`pyproject.toml`](../pyproject.toml) and is `2026.7.14.0`.
-- Current Runtime protocol version is in [`rpc.py`](../GensokyoAI/runtime/rpc.py) and is `1.1.0`, with major `1`.
+- Current Runtime protocol version is in [`rpc.py`](../GensokyoAI/runtime/rpc.py) and is `2.0.0`, with major `2`.
 - Current schema versions are in [`schema_versions.py`](../GensokyoAI/core/schema_versions.py): memory is `2`; all other public schemas are `1`.
 - Release changelog is [`docs/en/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md).
 - The corresponding Git tag is `v2026.7.14.0`; release preparation does not create the tag.

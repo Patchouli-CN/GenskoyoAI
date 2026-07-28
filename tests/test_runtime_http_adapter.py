@@ -1,13 +1,17 @@
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
-from aiohttp import WSMsgType
+from aiohttp import FormData, WSMsgType
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 
 from GensokyoAI.backends.web_server.http_adapter import (
+    DEFAULT_WS_HEARTBEAT_INTERVAL,
     RUNTIME_SERVICE_APP_KEY,
+    _heartbeat_interval_from_request,
     create_app,
     parse_rpc_payload,
     rpc_error,
@@ -70,7 +74,7 @@ class FakeHttpRuntimeService:
             self.active_long_rpcs -= 1
             self.long_rpc_finished.set()
 
-    async def iter_message_stream(self, message, system_contexts=None):
+    async def iter_message_stream(self, message, system_contexts=None, generation_id=None):
         self.active_streams += 1
         self.stream_started.set()
         try:
@@ -100,6 +104,26 @@ class FakeHttpRuntimeService:
             "events": events,
             "session": None,
         }
+
+    async def upload_media(self, agent_id, data, *, filename, content_type):
+        self.uploaded_media = {
+            "agent_id": agent_id,
+            "data": data,
+            "filename": filename,
+            "content_type": content_type,
+        }
+        return {
+            "agent_id": agent_id,
+            "media_id": "media-1",
+            "filename": filename,
+            "content_type": content_type,
+            "size": len(data),
+        }
+
+    async def get_media(self, agent_id, media_id):
+        if media_id != "media-1":
+            raise ValueError("missing media")
+        return {"filename": "image.png", "content_type": "image/png"}, b"png"
 
     async def create_event_subscription(self, event_types=None, categories=None, queue_size=100):
         self.last_subscription_params = {
@@ -135,6 +159,14 @@ class FakeHttpRuntimeService:
 
 
 class RuntimeHttpAdapterHelperTests(unittest.TestCase):
+    def test_non_finite_heartbeat_uses_server_default(self):
+        for value in ("nan", "inf", "-inf"):
+            request = SimpleNamespace(query={"heartbeat_interval": value})
+            self.assertEqual(
+                _heartbeat_interval_from_request(cast(Any, request)),
+                DEFAULT_WS_HEARTBEAT_INTERVAL,
+            )
+
     def test_parse_rpc_payload_validates_shape(self):
         request_id, method, params = parse_rpc_payload(
             {"id": 1, "method": "runtime.health", "params": {"x": 1}}
@@ -172,6 +204,25 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         self.assertEqual((await health_response.json())["ok"], True)
         self.assertEqual(info_response.status, 200)
         self.assertEqual((await info_response.json())["name"], "Fake Runtime")
+
+    async def test_media_upload_and_download_use_stable_resource_route(self):
+        form = FormData()
+        form.add_field(
+            "file",
+            b"png",
+            filename="image.png",
+            content_type="image/png",
+        )
+        uploaded = await self.client.post("/media?agent_id=agent-1", data=form)
+        uploaded_payload = await uploaded.json()
+        downloaded = await self.client.get("/media/agent-1/media-1")
+
+        self.assertEqual(uploaded.status, 201)
+        self.assertEqual(uploaded_payload["media_id"], "media-1")
+        self.assertEqual(uploaded_payload["download_path"], "/media/agent-1/media-1")
+        self.assertEqual(self.fake_service.uploaded_media["data"], b"png")
+        self.assertEqual(downloaded.status, 200)
+        self.assertEqual(await downloaded.read(), b"png")
 
     async def test_post_rpc_returns_success_and_structured_error(self):
         response = await self.client.post(
@@ -238,19 +289,28 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         )
 
         frames = []
-        for _ in range(4):
+        for _ in range(5):
             message = await ws.receive(timeout=2)
             self.assertEqual(message.type, WSMsgType.TEXT)
             frames.append(json.loads(message.data))
         await ws.close()
 
-        self.assertEqual([frame["id"] for frame in frames], ["stream-1"] * 4)
-        self.assertTrue(all(frame["stream_id"] for frame in frames))
-        self.assertEqual(frames[0]["event"], {"type": "content", "index": 0, "content": "echo:"})
-        self.assertEqual(frames[1]["event"], {"type": "content", "index": 1, "content": "hi"})
-        self.assertEqual(frames[2]["event"]["type"], "finish")
-        self.assertTrue(frames[3]["done"])
-        self.assertEqual(frames[3]["result"]["content"], "echo:hi")
+        self.assertEqual([frame["id"] for frame in frames], ["stream-1"] * 5)
+        stream_id = frames[0]["result"]["stream_id"]
+        generation_id = frames[0]["result"]["generation_id"]
+        self.assertTrue(stream_id)
+        self.assertTrue(generation_id)
+        self.assertTrue(all(frame["stream_id"] == stream_id for frame in frames[1:]))
+        self.assertEqual(frames[1]["event"]["type"], "content")
+        self.assertEqual(frames[1]["event"]["index"], 0)
+        self.assertEqual(frames[1]["event"]["content"], "echo:")
+        self.assertEqual(frames[1]["event"]["generation_id"], generation_id)
+        self.assertEqual(frames[2]["event"]["type"], "content")
+        self.assertEqual(frames[2]["event"]["index"], 1)
+        self.assertEqual(frames[2]["event"]["content"], "hi")
+        self.assertEqual(frames[3]["event"]["type"], "finish")
+        self.assertTrue(frames[4]["done"])
+        self.assertEqual(frames[4]["result"]["content"], "echo:hi")
 
     async def test_websocket_streaming_rpc_sends_error_event_when_iterator_fails(self):
         ws = await self.client.ws_connect("/ws")
@@ -265,23 +325,31 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         )
 
         frames = []
-        for _ in range(3):
+        for _ in range(4):
             message = await ws.receive(timeout=2)
             self.assertEqual(message.type, WSMsgType.TEXT)
             frames.append(json.loads(message.data))
         await ws.close()
 
-        self.assertEqual(frames[0]["event"], {"type": "content", "index": 0, "content": "echo:"})
-        self.assertEqual(frames[1]["event"]["type"], "error")
+        self.assertIn("stream_id", frames[0]["result"])
+        self.assertEqual(frames[1]["event"]["type"], "content")
+        self.assertEqual(frames[1]["event"]["index"], 0)
         self.assertEqual(frames[1]["event"]["content"], "echo:")
-        self.assertEqual(frames[1]["event"]["error"]["code"], "runtime.error")
-        self.assertFalse(frames[2]["ok"])
-        self.assertEqual(frames[2]["error"]["technical_message"], "stream boom")
+        self.assertEqual(frames[1]["event"]["generation_id"], frames[0]["result"]["generation_id"])
+        self.assertEqual(frames[2]["event"]["type"], "error")
+        self.assertEqual(frames[2]["event"]["content"], "echo:")
+        self.assertEqual(frames[2]["event"]["error"]["code"], "runtime.error")
+        self.assertFalse(frames[3]["ok"])
+        self.assertEqual(frames[3]["error"]["technical_message"], "stream boom")
 
     async def test_websocket_sends_heartbeat_frame(self):
-        ws = await self.client.ws_connect("/ws?heartbeat_interval=0.01")
-        message = await ws.receive(timeout=2)
-        await ws.close()
+        with patch(
+            "GensokyoAI.backends.web_server.http_adapter.MIN_WS_HEARTBEAT_INTERVAL",
+            0.01,
+        ):
+            ws = await self.client.ws_connect("/ws?heartbeat_interval=0.01")
+            message = await ws.receive(timeout=2)
+            await ws.close()
 
         self.assertEqual(message.type, WSMsgType.TEXT)
         payload = json.loads(message.data)
@@ -302,8 +370,10 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         )
         first_message = await ws.receive(timeout=2)
         first_frame = json.loads(first_message.data)
-        self.assertEqual(first_frame["stream_id"], "stream-xyz")
-        self.assertEqual(first_frame["event"]["type"], "content")
+        self.assertEqual(first_frame["result"]["stream_id"], "stream-xyz")
+        content_frame = json.loads((await ws.receive(timeout=2)).data)
+        self.assertEqual(content_frame["stream_id"], "stream-xyz")
+        self.assertEqual(content_frame["event"]["type"], "content")
 
         await ws.send_str(
             json.dumps(
@@ -338,7 +408,9 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
             )
         )
         first_message = await ws.receive(timeout=2)
-        self.assertEqual(json.loads(first_message.data)["event"]["type"], "content")
+        self.assertEqual(json.loads(first_message.data)["result"]["stream_id"], "stream-close-id")
+        content_message = await ws.receive(timeout=2)
+        self.assertEqual(json.loads(content_message.data)["event"]["type"], "content")
         self.assertEqual(self.fake_service.active_streams, 1)
 
         await ws.close()
@@ -492,7 +564,11 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         self.assertEqual(self.fake_service.closed_subscription_ids, [subscription_id])
 
     async def test_websocket_subscription_backpressure_with_heartbeat_cleans_up_on_close(self):
-        ws = await self.client.ws_connect("/ws?heartbeat_interval=0.01")
+        with patch(
+            "GensokyoAI.backends.web_server.http_adapter.MIN_WS_HEARTBEAT_INTERVAL",
+            0.01,
+        ):
+            ws = await self.client.ws_connect("/ws?heartbeat_interval=0.01")
         await ws.send_str(
             json.dumps(
                 {
@@ -590,7 +666,9 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
                 )
             )
             stream_a = json.loads((await ws_a.receive(timeout=2)).data)
-            self.assertEqual(stream_a["stream_id"], "stream-a")
+            self.assertEqual(stream_a["result"]["stream_id"], "stream-a")
+            stream_event = json.loads((await ws_a.receive(timeout=2)).data)
+            self.assertEqual(stream_event["stream_id"], "stream-a")
             self.assertEqual(service_a.active_streams, 1)
             self.assertEqual(service_b.active_streams, 0)
 
@@ -650,7 +728,7 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         finally:
             await client.close()
 
-        self.assertEqual(denied.status, 400)
+        self.assertEqual(denied.status, 401)
         self.assertFalse(denied_payload["ok"])
         self.assertEqual(allowed.status, 200)
         self.assertTrue(allowed_payload["ok"])

@@ -8,8 +8,10 @@ mapping through :class:`GensokyoAI.runtime.service.RuntimeService`.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any
+import inspect
+import types
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from msgspec import Struct
 
@@ -50,9 +52,45 @@ class RpcMethodSpec(Struct, frozen=True):
         return self.legacy or self.replacement is not None
 
 
-RUNTIME_PROTOCOL_VERSION = "1.1.0"
-RUNTIME_PROTOCOL_MAJOR_VERSION = 1
-RUNTIME_BREAKING_CHANGES: tuple[dict[str, str], ...] = ()
+RUNTIME_PROTOCOL_VERSION = "2.0.0"
+RUNTIME_PROTOCOL_MAJOR_VERSION = 2
+RUNTIME_BREAKING_CHANGES: tuple[dict[str, str], ...] = (
+    {
+        "scope": "runtime.rpc.error_envelope",
+        "change": "RPC method failures now use the transport-level ok=false envelope instead of a nested result.ok=false payload.",
+        "migration": "Check the top-level ok field and read the top-level error object.",
+    },
+    {
+        "scope": "runtime.websocket.stream_start",
+        "change": "WebSocket streaming requests now receive a start acknowledgement before stream events.",
+        "migration": "Read result.stream_id and result.generation_id from the acknowledgement frame before consuming event frames.",
+    },
+    {
+        "scope": "runtime.info.protocol",
+        "change": "runtime.info.protocol now identifies the shared RPC protocol instead of naming one transport.",
+        "migration": "Discover concrete transports through runtime.info.transports.",
+    },
+    {
+        "scope": "runtime.reasoning_visibility",
+        "change": "Reasoning content is public by default in non-streaming and streaming agent responses.",
+        "migration": "Render reasoning_content separately from content and apply client-side visibility policy when needed.",
+    },
+    {
+        "scope": "runtime.multi_user_resources",
+        "change": "Network Agent and session operations require explicit agent_id and session_id resource ownership.",
+        "migration": "Initialize or list an Agent, then include its agent_id and the target session_id in every conversation-scoped request.",
+    },
+    {
+        "scope": "runtime.message_concurrency",
+        "change": "Network writes require expected_revision; message sends also require idempotency_key.",
+        "migration": "Read the latest session revision before writes and reuse one stable idempotency_key when retrying a send.",
+    },
+    {
+        "scope": "runtime.pagination",
+        "change": "session.list and session.messages return cursor-paginated result objects.",
+        "migration": "Read sessions/messages arrays and continue with next_cursor while has_more is true.",
+    },
+)
 
 
 RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
@@ -66,6 +104,8 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("character_package.import", "import_character_package"),
     RpcMethodSpec("character_package.export", "export_character_package"),
     RpcMethodSpec("agent.init", "init"),
+    RpcMethodSpec("agent.list", "list_agents"),
+    RpcMethodSpec("agent.delete", "delete_agent"),
     RpcMethodSpec("agent.send_message", "send_message"),
     RpcMethodSpec("agent.send_message_stream", "send_message_stream"),
     RpcMethodSpec("character.list", "list_characters"),
@@ -97,6 +137,8 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("memory.update", "memory_update"),
     RpcMethodSpec("memory.delete", "memory_delete"),
     RpcMethodSpec("memory.graph", "memory_graph"),
+    RpcMethodSpec("media.list", "media_list"),
+    RpcMethodSpec("media.delete", "media_delete"),
     RpcMethodSpec("scene.current", "scene_current"),
     RpcMethodSpec("scene.list", "scene_list"),
     RpcMethodSpec("scene.get", "scene_get"),
@@ -289,11 +331,12 @@ def legacy_rpc_methods() -> list[str]:
     return [spec.method for spec in RPC_METHOD_SPECS if spec.legacy]
 
 
-def rpc_method_specs() -> list[dict[str, Any]]:
+def rpc_method_specs(target: RuntimeRpcTarget | None = None) -> list[dict[str, Any]]:
     """Return machine-readable method metadata for documentation clients."""
 
-    return [
-        {
+    result = []
+    for spec in RPC_METHOD_SPECS:
+        payload: dict[str, Any] = {
             "method": spec.method,
             "handler": spec.handler_name,
             "legacy": spec.legacy,
@@ -302,8 +345,73 @@ def rpc_method_specs() -> list[dict[str, Any]]:
             "replacement": spec.replacement,
             "remove_after": spec.remove_after,
         }
-        for spec in RPC_METHOD_SPECS
-    ]
+        if target is not None:
+            handler = getattr(target, spec.handler_name, None)
+            if handler is not None:
+                params_schema, result_schema = _handler_schemas(handler)
+                payload["params_schema"] = params_schema
+                payload["result_schema"] = result_schema
+        result.append(payload)
+    return result
+
+
+def _handler_schemas(handler: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    signature = inspect.signature(handler)
+    try:
+        hints = get_type_hints(handler)
+    except (NameError, TypeError):
+        hints = {}
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for name, parameter in signature.parameters.items():
+        if name == "self" or parameter.kind in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
+            continue
+        schema = _annotation_schema(hints.get(name, parameter.annotation))
+        if parameter.default is inspect.Parameter.empty:
+            required.append(name)
+        else:
+            schema = {**schema, "default": parameter.default}
+        properties[name] = schema
+    params_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        params_schema["required"] = required
+    return params_schema, _annotation_schema(hints.get("return", signature.return_annotation))
+
+
+def _annotation_schema(annotation: Any) -> dict[str, Any]:
+    if annotation in {Any, inspect.Signature.empty, inspect.Parameter.empty}:
+        return {}
+    if annotation is None or annotation is type(None):
+        return {"type": "null"}
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin in {types.UnionType, Union}:
+        return {"anyOf": [_annotation_schema(argument) for argument in args]}
+    if origin is list:
+        return {"type": "array", "items": _annotation_schema(args[0] if args else Any)}
+    if origin is dict:
+        return {
+            "type": "object",
+            "additionalProperties": _annotation_schema(args[1] if len(args) > 1 else Any),
+        }
+    if origin is AsyncIterator:
+        return {"type": "object", "x-stream": True}
+    schema_type = {
+        str: "string",
+        int: "integer",
+        float: "number",
+        bool: "boolean",
+        dict: "object",
+        list: "array",
+    }.get(annotation)
+    return {"type": schema_type} if schema_type else {}
 
 
 def deprecated_rpc_methods() -> list[dict[str, Any]]:

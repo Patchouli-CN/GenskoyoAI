@@ -12,7 +12,7 @@
 
 - 对外版本和 changelog 使用 `vYYYY.M.D.N`；当前正式 release 为 `v2026.7.14.0`，此前唯一正式 release 是 `v2026.5.13.0`。
 - [`pyproject.toml`](../pyproject.toml) 中的 package version 不带 `v`，当前为 `2026.7.14.0`。
-- Runtime protocol version 使用独立语义版本且不带 `v`，当前为 `1.1.0`、major 为 `1`；客户端兼容性优先看 `protocol_major_version`。
+- Runtime protocol version 使用独立语义版本且不带 `v`，当前开发分支为 `2.0.0`、major 为 `2`；客户端兼容性优先看 `protocol_major_version`。
 - schema version 继续使用整数，例如 `1`、`2`、`3`。
 
 ## 使用方式
@@ -27,6 +27,15 @@
 - 是否影响旧配置、旧会话、旧记忆、角色文件或客户端集成。
 - 是否改变 Runtime methods、capabilities、返回字段、错误结构或 schema version。
 - 是否涉及 deprecated、removal_pending、removed 或 breaking changes；如果涉及，必须给出替代方案和迁移方式。
+
+---
+
+## 当前开发分支兼容性摘要
+
+- Runtime Protocol `2.0.0` 集中执行一次不兼容修正：网络资源改为 `user_id -> agent_id -> session_id`，会话写入要求 `expected_revision`，消息发送要求 `idempotency_key`。
+- 新增 JWT/RBAC、租户存储隔离、稳定 `message_id`、分页、事件持久化回放、媒体 multipart 上传和角色包远程上传信任门槛。
+- Session schema 从 `1` 升到 `2`；旧文件自动补 `revision`、`message_id` 和消息 revision，并保留未知扩展字段。
+- 默认文件后端定位为单节点远程多用户；多节点生产部署仍要求 PostgreSQL 和共享对象存储。
 
 ---
 
@@ -93,7 +102,7 @@
 ## Runtime / 客户端兼容性
 
 - Runtime 协议版本：YYYY.M.D.N
-- Runtime protocol major：1
+- Runtime protocol major：N
 - 支持的客户端：说明推荐客户端版本或最低兼容版本。
 - methods 变化：列出新增、废弃或移除的方法；没有则写“无”。
 - capabilities 变化：列出新增、废弃或移除的能力；没有则写“无”。
@@ -107,7 +116,7 @@
 | 类型 | 版本 | 说明 |
 | --- | --- | --- |
 | config schema | 1 | 配置文件格式版本 |
-| session schema | 1 | 会话文件格式版本 |
+| session schema | 2 | 会话文件格式版本；v2 含会话 revision 与消息身份 |
 | memory schema | 1 | 记忆存储格式版本 |
 | session export schema | 1 | 会话导出包格式版本 |
 | character package schema | 待定 | 角色包格式版本 |
