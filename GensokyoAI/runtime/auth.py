@@ -123,6 +123,8 @@ def required_role(method: str) -> str:
         return "admin"
     if method in {"dependency.status", "external_tool.status"}:
         return "read"
+    if method == "message.status":
+        return "read"
     if method.startswith(("dependency.", "character_package.", "external_tool.")):
         return "admin"
     if method == "media.delete":

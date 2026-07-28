@@ -6,9 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from GensokyoAI.core.config import SessionConfig
 from GensokyoAI.runtime.event_store import RuntimeEventStore
 from GensokyoAI.runtime.media_store import MediaStore
+from GensokyoAI.runtime.operation_store import RuntimeOperationStore
+from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService
 from GensokyoAI.session.manager import SessionManager
 
@@ -61,6 +65,256 @@ def test_runtime_info_exposes_generated_method_schemas() -> None:
     assert "message" in send["params_schema"]["required"]
     assert send["params_schema"]["properties"]["expected_revision"]["default"] is None
     assert "result_schema" in send
+
+
+def test_network_runtime_info_exposes_remote_resource_requirements() -> None:
+    async def run() -> None:
+        service = RuntimeService()
+        from GensokyoAI.runtime.auth import (
+            RuntimePrincipal,
+            reset_current_principal,
+            set_current_principal,
+        )
+
+        token = set_current_principal(
+            RuntimePrincipal(
+                user_id="alice",
+                roles=frozenset({"read", "chat"}),
+                auth_type="test",
+            )
+        )
+        try:
+            info = await service.info()
+        finally:
+            reset_current_principal(token)
+
+        send = next(item for item in info["method_specs"] if item["method"] == "agent.send_message")
+        status = next(item for item in info["method_specs"] if item["method"] == "message.status")
+        assert set(send["params_schema"]["required"]) >= {
+            "agent_id",
+            "session_id",
+            "expected_revision",
+            "idempotency_key",
+            "message",
+        }
+        assert send["contract_scope"] == "network"
+        assert send["result_schema_complete"] is True
+        assert set(status["params_schema"]["required"]) == {
+            "agent_id",
+            "session_id",
+            "idempotency_key",
+        }
+
+    asyncio.run(run())
+
+
+def test_operation_store_recovers_pending_request_without_reexecuting() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "operations.json"
+        store = RuntimeOperationStore(path)
+        fingerprint = store.request_fingerprint({"message": "hello"})
+        created = store.begin(
+            session_id="session-1",
+            idempotency_key="send-1",
+            request_fingerprint=fingerprint,
+            generation_id="generation-1",
+        )
+
+        recovered = RuntimeOperationStore(path).get("session-1", "send-1")
+
+        assert created["status"] == "pending"
+        assert recovered is not None
+        assert recovered["status"] == "failed"
+        assert recovered["error"]["code"] == "message.operation_outcome_unknown"
+        assert recovered["error"]["details"]["outcome_unknown"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{not-json",
+        "[]",
+        '{"version": 1, "records": []}',
+        '{"version": 1, "records": {"operation": "invalid"}}',
+    ],
+)
+def test_operation_store_fails_closed_when_ledger_is_corrupt(payload: str) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = Path(temp_dir) / "operations.json"
+        path.write_text(payload, encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="operation store is unreadable or corrupt"):
+            RuntimeOperationStore(path)
+
+
+def test_runtime_message_operation_is_persisted_and_replayed() -> None:
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage_root = root / "tenant"
+            manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
+            session = manager.create_session()
+            service = RuntimeService(
+                root,
+                tenant_key=("alice", "agent-1"),
+                storage_root=storage_root,
+            )
+
+            class FakeAgent:
+                session_manager = manager
+
+                @staticmethod
+                def resume_session(session_id: str) -> bool:
+                    return manager.set_current_session(session_id)
+
+                @staticmethod
+                async def send(message: str, system_contexts: list[str] | None = None):
+                    operation = cast(Any, service)._operation_store.get(
+                        session.session_id, "send-1"
+                    )
+                    assert operation["status"] == "pending"
+                    memory = manager.get_working_memory(session.session_id)
+                    memory.add_message("user", message)
+                    memory.add_message("assistant", "world", reasoning_content="reason")
+                    manager.save_working_memory(session.session_id)
+                    return SimpleNamespace(content="world", reasoning_content="reason")
+
+            cast(Any, service.state).agent = FakeAgent()
+            service.state.started = True
+
+            first = await service.send_message(
+                "hello",
+                session_id=session.session_id,
+                idempotency_key="send-1",
+                expected_revision=session.revision,
+            )
+            status = await service.message_status(session.session_id, "send-1")
+            replay = await service.send_message(
+                "hello",
+                session_id=session.session_id,
+                idempotency_key="send-1",
+                expected_revision=0,
+            )
+
+            assert first["generation_id"]
+            assert status["status"] == "succeeded"
+            assert status["result"]["content"] == "world"
+            assert replay["generation_id"] == first["generation_id"]
+            assert replay["idempotent_replay"] is True
+            with pytest.raises(RpcError) as conflict:
+                await service.send_message(
+                    "different",
+                    session_id=session.session_id,
+                    idempotency_key="send-1",
+                    expected_revision=session.revision,
+                )
+            assert getattr(conflict.value, "code", None) == "message.idempotency_conflict"
+
+    asyncio.run(run())
+
+
+def test_runtime_message_operation_records_provider_failure() -> None:
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage_root = root / "tenant"
+            manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
+            session = manager.create_session()
+            service = RuntimeService(
+                root,
+                tenant_key=("alice", "agent-1"),
+                storage_root=storage_root,
+            )
+
+            class FailingAgent:
+                session_manager = manager
+
+                @staticmethod
+                def resume_session(session_id: str) -> bool:
+                    return manager.set_current_session(session_id)
+
+                @staticmethod
+                async def send(message: str, system_contexts: list[str] | None = None):
+                    operation = cast(Any, service)._operation_store.get(
+                        session.session_id, "send-fail"
+                    )
+                    assert operation["status"] == "pending"
+                    raise ValueError("provider failed")
+
+            cast(Any, service.state).agent = FailingAgent()
+            service.state.started = True
+
+            with pytest.raises(ValueError, match="provider failed"):
+                await service.send_message(
+                    "hello",
+                    session_id=session.session_id,
+                    idempotency_key="send-fail",
+                    expected_revision=session.revision,
+                )
+            status = await service.message_status(session.session_id, "send-fail")
+
+            assert status["status"] == "failed"
+            assert status["error"]["technical_message"] == "provider failed"
+
+    asyncio.run(run())
+
+
+def test_runtime_stream_cancellation_records_terminal_operation() -> None:
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage_root = root / "tenant"
+            manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
+            session = manager.create_session()
+            service = RuntimeService(
+                root,
+                tenant_key=("alice", "agent-1"),
+                storage_root=storage_root,
+            )
+            stream_waiting = asyncio.Event()
+
+            class StreamingAgent:
+                session_manager = manager
+
+                @staticmethod
+                def resume_session(session_id: str) -> bool:
+                    return manager.set_current_session(session_id)
+
+                @staticmethod
+                def send_stream(message: str, system_contexts: list[str] | None = None):
+                    async def chunks():
+                        yield SimpleNamespace(type="text", content="partial")
+                        stream_waiting.set()
+                        await asyncio.Event().wait()
+
+                    return chunks()
+
+            cast(Any, service.state).agent = StreamingAgent()
+            service.state.started = True
+            events: list[dict[str, Any]] = []
+
+            async def consume() -> None:
+                async for event in service.iter_message_stream(
+                    "hello",
+                    session_id=session.session_id,
+                    idempotency_key="send-cancel",
+                    expected_revision=session.revision,
+                    generation_id="generation-cancel",
+                ):
+                    events.append(event)
+
+            task = asyncio.create_task(consume())
+            await asyncio.wait_for(stream_waiting.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            status = await service.message_status(session.session_id, "send-cancel")
+
+            assert events[-1]["type"] == "cancelled"
+            assert status["status"] == "cancelled"
+            assert status["error"]["code"] == "message.operation_cancelled"
+
+    asyncio.run(run())
 
 
 def test_idempotent_retry_precedes_stale_revision_check() -> None:

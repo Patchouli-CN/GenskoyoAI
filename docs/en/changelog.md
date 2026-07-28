@@ -34,6 +34,8 @@ Each change entry should ideally include:
 
 - Runtime Protocol `2.0.0` performs one concentrated incompatible revision: network resources use `user_id -> agent_id -> session_id`, writes require `expected_revision`, and sends require `idempotency_key`.
 - Adds JWT/RBAC, tenant storage isolation, stable `message_id`, pagination, persistent event replay, multipart media upload, and a fail-closed remote character-package trust gate.
+- Message idempotency now uses a durable operation ledger written before Provider execution, with `message.status` for disconnect recovery. Generation token streams explicitly do not resume across connections; clients recover from operation state and authoritative session reads.
+- Adds readiness, graceful drain, and a remote administration surface disabled by default on HTTP/WS. Network `method_specs` now expose actual resource requirements and result-schema completeness.
 - Session schema moves from `1` to `2`; legacy files gain revision/message identity while unknown extension fields are preserved.
 - The file backend targets single-node remote multi-user service. Multi-node production still requires PostgreSQL and shared object storage.
 

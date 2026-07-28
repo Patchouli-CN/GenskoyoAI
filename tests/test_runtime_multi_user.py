@@ -13,7 +13,9 @@ from GensokyoAI.runtime.service import RuntimeService
 
 async def _as_user(service: RuntimeService, user_id: str, method: str, params: dict | None = None):
     token = set_current_principal(
-        RuntimePrincipal(user_id=user_id, roles=frozenset({"read", "chat", "admin"}), auth_type="test")
+        RuntimePrincipal(
+            user_id=user_id, roles=frozenset({"read", "chat", "admin"}), auth_type="test"
+        )
     )
     try:
         return await service.handle(method, params)
@@ -32,9 +34,9 @@ def test_tenant_agent_catalog_and_lookup_are_user_scoped() -> None:
             )
             service._tenant_services[("alice", "agent-1")] = child
 
-            assert [item["agent_id"] for item in await _as_user(service, "alice", "agent.list")] == [
-                "agent-1"
-            ]
+            assert [
+                item["agent_id"] for item in await _as_user(service, "alice", "agent.list")
+            ] == ["agent-1"]
             assert await _as_user(service, "bob", "agent.list") == []
             with pytest.raises(RpcError) as error:
                 await _as_user(service, "bob", "session.list", {"agent_id": "agent-1"})
@@ -71,5 +73,34 @@ def test_network_conversation_writes_require_explicit_concurrency_fields() -> No
                     {"agent_id": "agent-1", "session_id": "s1", "message": "hello"},
                 )
             assert missing_revision.value.code == "session.expected_revision_required"
+
+    asyncio.run(run())
+
+
+def test_runtime_drain_rejects_new_work_and_waits_for_active_operation() -> None:
+    async def run() -> None:
+        service = RuntimeService()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def active_operation() -> None:
+            async with service._network_operation_scope("agent.send_message"):
+                started.set()
+                await release.wait()
+
+        task = asyncio.create_task(active_operation())
+        await started.wait()
+        service.begin_drain()
+        readiness = await service.readiness()
+        with pytest.raises(RpcError) as draining:
+            async with service._network_operation_scope("session.list"):
+                pass
+        release.set()
+        assert await service.wait_for_drain(timeout=1)
+        await task
+
+        assert readiness["ready"] is False
+        assert readiness["active_operations"] == 1
+        assert draining.value.code == "runtime.draining"
 
     asyncio.run(run())

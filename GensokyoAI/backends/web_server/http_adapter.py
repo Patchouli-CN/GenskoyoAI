@@ -13,8 +13,9 @@ import json
 import math
 import os
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -29,7 +30,11 @@ from GensokyoAI.runtime.auth import (
     decode_hs256_jwt,
     set_current_principal,
 )
-from GensokyoAI.runtime.rpc import RpcError, runtime_error_to_dict
+from GensokyoAI.runtime.rpc import (
+    RpcError,
+    remote_admin_rpc_methods,
+    runtime_error_to_dict,
+)
 from GensokyoAI.runtime.service import RuntimeService
 from GensokyoAI.utils.helpers import utc_now
 
@@ -48,6 +53,7 @@ MIN_AUTH_TOKEN_LENGTH = 16
 AUTH_RATE_LIMIT_MAX_FAILURES = 10
 AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
 AUTH_RATE_LIMIT_MAX_PEERS = 10_000
+DEFAULT_DRAIN_TIMEOUT_SECONDS = 30.0
 
 
 class RuntimeHttpSecurityConfig(Struct, frozen=True):
@@ -59,6 +65,8 @@ class RuntimeHttpSecurityConfig(Struct, frozen=True):
     allow_all_origins: bool = False
     max_request_body_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE
     max_media_size: int = DEFAULT_MAX_MEDIA_SIZE
+    allow_remote_admin: bool = False
+    drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS
 
     @property
     def auth_enabled(self) -> bool:
@@ -124,6 +132,22 @@ def parse_rpc_payload(payload: Any) -> tuple[Any, str, dict[str, Any]]:
     return request_id, method, params
 
 
+def _require_remote_admin_enabled(
+    method: str,
+    security: RuntimeHttpSecurityConfig,
+) -> None:
+    if security.allow_remote_admin or method not in remote_admin_rpc_methods():
+        return
+    raise RpcError(
+        f"Remote Runtime administration is disabled for method '{method}'",
+        code="authorization.remote_admin_disabled",
+        user_message="当前网络入口未启用远程管理操作。",
+        recoverable=False,
+        action_hint="请在受信任部署中显式启用远程管理，或改用本机管理入口。",
+        details={"method": method},
+    )
+
+
 def _normalize_token(value: str | None) -> str | None:
     """把空字符串规范化为 None，避免空 token 被误认为启用认证。"""
 
@@ -131,6 +155,13 @@ def _normalize_token(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped if stripped else None
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_origin(value: str) -> tuple[str, str, int] | None:
@@ -197,6 +228,8 @@ def create_app(
     require_auth: bool = False,
     max_request_body_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE,
     max_media_size: int = DEFAULT_MAX_MEDIA_SIZE,
+    allow_remote_admin: bool | None = None,
+    drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
 ) -> web.Application:
     token = _normalize_token(auth_token or os.environ.get("GENSOKYOAI_RUNTIME_TOKEN"))
     jwt_secret = _normalize_token(jwt_secret or os.environ.get("GENSOKYOAI_RUNTIME_JWT_SECRET"))
@@ -204,6 +237,8 @@ def create_app(
     jwt_audience = _normalize_token(
         jwt_audience or os.environ.get("GENSOKYOAI_RUNTIME_JWT_AUDIENCE")
     )
+    if allow_remote_admin is None:
+        allow_remote_admin = _env_flag("GENSOKYOAI_RUNTIME_ALLOW_REMOTE_ADMIN")
     if require_auth and token is None and jwt_secret is None:
         raise RuntimeError(
             "Runtime authentication is required for non-loopback binding; "
@@ -235,9 +270,12 @@ def create_app(
         allow_all_origins=allow_all_origins,
         max_request_body_size=max_request_body_size,
         max_media_size=max_media_size,
+        allow_remote_admin=allow_remote_admin,
+        drain_timeout_seconds=max(0.0, float(drain_timeout_seconds)),
     )
     app[RUNTIME_AUTH_RATE_LIMIT_APP_KEY] = {}
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/ready", handle_ready)
     app.router.add_get("/info", handle_info)
     app.router.add_post("/rpc", handle_rpc)
     app.router.add_get("/ws", handle_ws)
@@ -246,12 +284,22 @@ def create_app(
     app.router.add_get("/media/{agent_id}/{media_id}", handle_media_download)
     app.router.add_post("/character-packages", handle_character_package_upload)
     app.router.add_options("/{path:.*}", handle_options)
+    app.on_shutdown.append(drain_runtime_service)
     app.on_cleanup.append(cleanup_runtime_service)
     return app
 
 
 async def cleanup_runtime_service(app: web.Application) -> None:
     await app[RUNTIME_SERVICE_APP_KEY].shutdown()
+
+
+async def drain_runtime_service(app: web.Application) -> None:
+    security = app[RUNTIME_SECURITY_APP_KEY]
+    wait_for_drain = getattr(app[RUNTIME_SERVICE_APP_KEY], "wait_for_drain", None)
+    if callable(wait_for_drain):
+        await cast(Callable[[float], Awaitable[bool]], wait_for_drain)(
+            security.drain_timeout_seconds
+        )
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -261,12 +309,18 @@ async def handle_health(request: web.Request) -> web.Response:
     return json_response(result)
 
 
-async def handle_info(request: web.Request) -> web.Response:
+async def handle_ready(request: web.Request) -> web.Response:
     principal = _validate_runtime_request(request)
-    authorize_rpc("runtime.info", principal)
-    result = await request.app[RUNTIME_SERVICE_APP_KEY].info()
-    security = request.app[RUNTIME_SECURITY_APP_KEY]
-    result = {
+    authorize_rpc("runtime.ready", principal)
+    result = await request.app[RUNTIME_SERVICE_APP_KEY].readiness()
+    return json_response(result, status=200 if result.get("ready") else 503)
+
+
+def _attach_active_transport(
+    result: dict[str, Any],
+    security: RuntimeHttpSecurityConfig,
+) -> dict[str, Any]:
+    return {
         **result,
         "active_transport": {
             "name": "http-websocket",
@@ -280,6 +334,10 @@ async def handle_info(request: web.Request) -> web.Response:
             "cors": "allow-all" if security.allow_all_origins else "allowlist",
             "max_request_body_size": security.max_request_body_size,
             "max_media_size": security.max_media_size,
+            "remote_admin_enabled": security.allow_remote_admin,
+            "disabled_methods": (
+                [] if security.allow_remote_admin else sorted(remote_admin_rpc_methods())
+            ),
             "max_websocket_message_size": DEFAULT_WS_MAX_MSG_SIZE,
             "websocket_heartbeat_seconds": {
                 "default": DEFAULT_WS_HEARTBEAT_INTERVAL,
@@ -288,6 +346,14 @@ async def handle_info(request: web.Request) -> web.Response:
             },
         },
     }
+
+
+async def handle_info(request: web.Request) -> web.Response:
+    principal = _validate_runtime_request(request)
+    authorize_rpc("runtime.info", principal)
+    result = await request.app[RUNTIME_SERVICE_APP_KEY].info()
+    security = request.app[RUNTIME_SECURITY_APP_KEY]
+    result = _attach_active_transport(result, security)
     return json_response(result)
 
 
@@ -304,7 +370,10 @@ async def handle_rpc(request: web.Request) -> web.Response:
         payload = await request.json()
         request_id, method, params = parse_rpc_payload(payload)
         authorize_rpc(method, _validate_runtime_request(request))
+        _require_remote_admin_enabled(method, security)
         result = await request.app[RUNTIME_SERVICE_APP_KEY].handle(method, params)
+        if method == "runtime.info" and isinstance(result, dict):
+            result = _attach_active_transport(result, security)
         return json_response(rpc_success(request_id, result))
     except web.HTTPException as error:
         return json_response(rpc_error(request_id, error), status=error.status)
@@ -362,11 +431,7 @@ async def handle_media_upload(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(reason="Runtime media upload requires agent_id")
     reader = await request.multipart()
     part = await reader.next()
-    if (
-        not isinstance(part, BodyPartReader)
-        or part.name != "file"
-        or not part.filename
-    ):
+    if not isinstance(part, BodyPartReader) or part.name != "file" or not part.filename:
         raise web.HTTPBadRequest(reason="Runtime media upload requires multipart field 'file'")
     max_size = request.app[RUNTIME_SECURITY_APP_KEY].max_media_size
     data = bytearray()
@@ -407,16 +472,12 @@ async def handle_media_download(request: web.Request) -> web.Response:
 async def handle_character_package_upload(request: web.Request) -> web.Response:
     principal = _validate_runtime_request(request)
     authorize_rpc("character_package.import", principal)
+    if not request.app[RUNTIME_SECURITY_APP_KEY].allow_remote_admin:
+        raise web.HTTPForbidden(reason="Runtime remote administration is disabled")
     reader = await request.multipart()
     part = await reader.next()
-    if (
-        not isinstance(part, BodyPartReader)
-        or part.name != "file"
-        or not part.filename
-    ):
-        raise web.HTTPBadRequest(
-            reason="Character package upload requires multipart field 'file'"
-        )
+    if not isinstance(part, BodyPartReader) or part.name != "file" or not part.filename:
+        raise web.HTTPBadRequest(reason="Character package upload requires multipart field 'file'")
     max_size = request.app[RUNTIME_SECURITY_APP_KEY].max_media_size
     data = bytearray()
     while chunk := await part.read_chunk():
@@ -459,6 +520,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         send_lock,
                         subscription_tasks,
                         stream_tasks,
+                        request.app[RUNTIME_SECURITY_APP_KEY],
                     )
                 )
                 request_tasks.add(task)
@@ -482,12 +544,15 @@ async def _handle_ws_text(
     send_lock: asyncio.Lock,
     subscription_tasks: dict[str, asyncio.Task[None]] | None = None,
     stream_tasks: dict[str, asyncio.Task[None]] | None = None,
+    security: RuntimeHttpSecurityConfig | None = None,
 ) -> None:
     request_id: Any = None
     try:
         payload = json.loads(data)
         request_id, method, params = parse_rpc_payload(payload)
         authorize_rpc(method, _current_request_principal())
+        if security is not None:
+            _require_remote_admin_enabled(method, security)
         if method == "agent.send_message_stream":
             await _start_streaming_rpc_task(
                 ws, service, request_id, params, send_lock, stream_tasks
@@ -513,6 +578,8 @@ async def _handle_ws_text(
             return
 
         result = await service.handle(method, params)
+        if method == "runtime.info" and isinstance(result, dict) and security is not None:
+            result = _attach_active_transport(result, security)
         await _send_ws_json(ws, send_lock, rpc_success(request_id, result))
     except Exception as error:
         await _send_ws_json(ws, send_lock, rpc_error(request_id, error))

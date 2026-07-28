@@ -507,6 +507,8 @@ GENSOKYOAI_RUNTIME_JWT_AUDIENCE=gensokyo-runtime \
 python -m GensokyoAI.backends.web_server --host 0.0.0.0 --port 8765 --allowed-origin https://app.example
 ```
 
+网络入口默认关闭 `runtime.shutdown`、`dependency.install` 和角色包导入/导出等远程管理方法。仅在隔离的管理网络中设置 `GENSOKYOAI_RUNTIME_ALLOW_REMOTE_ADMIN=true` 或传入 `--allow-remote-admin` 后开放。
+
 兼容旧命令：
 
 ```bash
@@ -516,14 +518,15 @@ python runtime_http.py --host 127.0.0.1 --port 8765
 可用端点：
 
 - `GET /health`：返回 Runtime 健康状态。
+- `GET /ready`：返回是否接受新请求；优雅停机 drain 期间返回 `503`。
 - `GET /info`：返回 Runtime 方法列表和能力信息。
 - `POST /rpc`：接收 `{"id": 1, "method": "runtime.health", "params": {}}` 形式的 JSON RPC 请求；`agent.send_message_stream` 在 HTTP RPC 中会聚合为一次响应，响应内包含 `events` 列表。
 - `WebSocket /ws`：接收同样的 JSON RPC 请求；普通方法返回单帧响应，`agent.send_message_stream` 会通过 `RuntimeService.iter_message_stream()` 边生成边产出事件帧，最后发送 `done: true` 的结果帧。
 - `GET /events`：Runtime 事件订阅 SSE 端点，可按事件类型或类别过滤。
 - `POST /media?agent_id=...` / `GET /media/{agent_id}/{media_id}`：租户媒体上传与读取。
-- `POST /character-packages`：管理员角色包上传、校验和显式信任导入。
+- `POST /character-packages`：管理员角色包上传、校验和显式信任导入；需要显式启用远程管理。
 
-说明：JSON Lines RPC 与 HTTP `POST /rpc` 仍是一请求一响应；WebSocket `/ws` 会逐帧转发 Runtime 流式事件，适合需要实时 token / 工具调用 / finish 事件的客户端。RuntimeService 当前已经提供 async iterator 形式的 `iter_message_stream()`；`send_message_stream()` 保留聚合事件列表的响应形态，便于兼容现有 JSON Lines 与 HTTP 调用方。
+说明：JSON Lines RPC 与 HTTP `POST /rpc` 仍是一请求一响应；WebSocket `/ws` 会逐帧转发 Runtime 流式事件，适合需要实时 token / 工具调用 / finish 事件的客户端。生成 token 流不能跨连接续传；断线后应使用原 `idempotency_key` 调用 `message.status`，再通过 `session.messages` 读取权威状态。RuntimeService 当前已经提供 async iterator 形式的 `iter_message_stream()`；`send_message_stream()` 保留聚合事件列表的响应形态，便于兼容现有 JSON Lines 与 HTTP 调用方。
 
 ## API 调用层能力
 

@@ -43,6 +43,7 @@ from GensokyoAI.runtime.auth import authorize_rpc, current_principal
 from GensokyoAI.runtime.dependencies import InstallScope, dependency_status, install_dependencies
 from GensokyoAI.runtime.event_store import RuntimeEventStore
 from GensokyoAI.runtime.media_store import MediaStore
+from GensokyoAI.runtime.operation_store import RuntimeOperationStore
 from GensokyoAI.runtime.resource_control import (
     ResourceGate,
     ResourceLimitError,
@@ -51,6 +52,8 @@ from GensokyoAI.runtime.resource_control import (
     resource_scope,
 )
 from GensokyoAI.runtime.rpc import (
+    NETWORK_REVISION_METHODS,
+    NETWORK_SESSION_METHODS,
     RpcError,
     dispatch_rpc,
     legacy_rpc_methods,
@@ -140,6 +143,11 @@ class RuntimeService:
             RuntimeEventStore(storage_root / "events.jsonl") if storage_root is not None else None
         )
         self._media_store = MediaStore(storage_root / "media") if storage_root is not None else None
+        self._operation_store = (
+            RuntimeOperationStore(storage_root / "operations.json")
+            if storage_root is not None
+            else None
+        )
         self._event_store_subscription_ids: list[str] = []
         self._recorded_event_payloads: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = asyncio.Lock()
@@ -150,6 +158,10 @@ class RuntimeService:
         self._character_validator = CharacterValidator()
         self._character_package_service = CharacterPackageService()
         self._resource_gates = self._build_resource_gates()
+        self._draining = False
+        self._active_network_operations = 0
+        self._drained_event = asyncio.Event()
+        self._drained_event.set()
         if self._tenant_key is None:
             self._load_tenant_catalog()
 
@@ -162,13 +174,14 @@ class RuntimeService:
     ) -> Any:
         principal = current_principal()
         if self._uses_network_tenancy(principal.network):
-            authorize_rpc(method, principal)
-            return await self._handle_tenant_rpc(method, dict(params or {}))
+            async with self._network_operation_scope(method):
+                authorize_rpc(method, principal)
+                return await self._handle_tenant_rpc(method, dict(params or {}))
         return await dispatch_rpc(self, method, params, structured_errors=structured_errors)
 
     async def _handle_tenant_rpc(self, method: str, params: dict[str, Any]) -> Any:
         principal = current_principal()
-        if method in {"runtime.info", "runtime.health"}:
+        if method in {"runtime.info", "runtime.health", "runtime.ready"}:
             return await dispatch_rpc(self, method, params)
         if method in {"runtime.shutdown", "shutdown"}:
             return await self.shutdown()
@@ -202,7 +215,12 @@ class RuntimeService:
                     recoverable=True,
                     action_hint="请从 session.messages 响应读取 revision 后重试。",
                 )
-        if method in {"agent.send_message", "agent.send_message_stream", "send_message", "send_message_stream"}:
+        if method in {
+            "agent.send_message",
+            "agent.send_message_stream",
+            "send_message",
+            "send_message_stream",
+        }:
             idempotency_key = params.get("idempotency_key")
             if not isinstance(idempotency_key, str) or not idempotency_key.strip():
                 raise RpcError(
@@ -211,6 +229,9 @@ class RuntimeService:
                     user_message="网络发送必须携带幂等键。",
                     recoverable=True,
                 )
+        if method == "message.status":
+            result = await service.handle(method, params)
+            return self._attach_resource_ids(result, principal.user_id, agent_id)
         async with service._tenant_operation_lock:
             if isinstance(session_id, str) and method.startswith(
                 ("memory.", "scene.", "initiative_timer.")
@@ -331,7 +352,7 @@ class RuntimeService:
                 agent_id = manifest["agent_id"]
                 if not isinstance(user_id, str) or not isinstance(agent_id, str):
                     continue
-            except (OSError, KeyError, json.JSONDecodeError):
+            except OSError, KeyError, json.JSONDecodeError:
                 continue
             key = (user_id, agent_id)
             self._tenant_services[key] = RuntimeService(
@@ -389,6 +410,7 @@ class RuntimeService:
                 "initiative_timer.",
                 "model.",
                 "media.",
+                "message.",
             )
         ) or method in {
             "send_message",
@@ -405,42 +427,13 @@ class RuntimeService:
 
     @staticmethod
     def _requires_explicit_session(method: str) -> bool:
-        return method.startswith(("memory.", "scene.", "initiative_timer.")) or method in {
-            "agent.send_message",
-            "agent.send_message_stream",
-            "send_message",
-            "send_message_stream",
-            "session.current",
-            "session.delete",
-            "session.export",
-            "session.rename",
-            "session.messages",
-            "session.replace_messages",
-            "session.regenerate_from",
-            "session.rollback",
-            "current_session",
-            "delete_session",
-            "export_session",
-            "rename_session",
-            "rollback_session",
-        }
+        return method.startswith(("memory.", "scene.", "initiative_timer.")) or method in (
+            NETWORK_SESSION_METHODS
+        )
 
     @staticmethod
     def _requires_expected_revision(method: str) -> bool:
-        return method in {
-            "agent.send_message",
-            "agent.send_message_stream",
-            "send_message",
-            "send_message_stream",
-            "session.delete",
-            "session.rename",
-            "session.replace_messages",
-            "session.regenerate_from",
-            "session.rollback",
-            "delete_session",
-            "rename_session",
-            "rollback_session",
-        }
+        return method in NETWORK_REVISION_METHODS
 
     @staticmethod
     def _attach_resource_ids(result: Any, user_id: str, agent_id: str) -> Any:
@@ -453,6 +446,50 @@ class RuntimeService:
         if not agent.resume_session(session_id):
             raise ValueError(f"Session does not exist: {session_id}")
 
+    @asynccontextmanager
+    async def _network_operation_scope(self, method: str) -> AsyncIterator[None]:
+        allowed_while_draining = {
+            "runtime.health",
+            "runtime.info",
+            "runtime.ready",
+            "runtime.shutdown",
+            "message.status",
+        }
+        if self._draining and method not in allowed_while_draining:
+            raise RpcError(
+                "Runtime is draining and is not accepting new operations",
+                code="runtime.draining",
+                user_message="Runtime 正在停止服务，暂不接受新的操作。",
+                recoverable=True,
+                action_hint="请稍后连接新的 Runtime 实例，或等待服务恢复就绪。",
+                details={"active_operations": self._active_network_operations},
+            )
+        self._active_network_operations += 1
+        self._drained_event.clear()
+        try:
+            yield
+        finally:
+            self._active_network_operations = max(0, self._active_network_operations - 1)
+            if self._active_network_operations == 0:
+                self._drained_event.set()
+
+    def begin_drain(self) -> None:
+        """Reject new remote work while allowing active operations to settle."""
+
+        self._draining = True
+
+    async def wait_for_drain(self, timeout: float = 30.0) -> bool:
+        """Wait for active remote operations to finish within ``timeout`` seconds."""
+
+        self.begin_drain()
+        if self._active_network_operations == 0:
+            return True
+        try:
+            await asyncio.wait_for(self._drained_event.wait(), timeout=max(0.0, timeout))
+        except TimeoutError:
+            return False
+        return True
+
     async def health(self) -> dict[str, Any]:
         """Return a lightweight runtime health payload."""
 
@@ -460,9 +497,22 @@ class RuntimeService:
             "ok": True,
             "root_dir": str(self.state.root_dir),
             "initialized": self.state.agent is not None or bool(self._tenant_services),
-            "started": self.state.started or any(
-                service.state.started for service in self._tenant_services.values()
-            ),
+            "started": self.state.started
+            or any(service.state.started for service in self._tenant_services.values()),
+            "active_tenant_agents": len(self._tenant_services),
+            "draining": self._draining,
+            "active_operations": self._active_network_operations,
+        }
+
+    async def readiness(self) -> dict[str, Any]:
+        """Return whether this process can accept new remote operations."""
+
+        ready = not self._draining
+        return {
+            "ok": ready,
+            "ready": ready,
+            "draining": self._draining,
+            "active_operations": self._active_network_operations,
             "active_tenant_agents": len(self._tenant_services),
         }
 
@@ -490,12 +540,15 @@ class RuntimeService:
                 "memory.graph",
                 "media.upload",
                 "media.image_input",
+                "message.operation_status",
                 "model.discovery",
                 "config.validation",
                 "migration.diagnostics",
                 "resource_control.runtime_gates",
                 "runtime.events",
                 "runtime.health",
+                "runtime.readiness",
+                "runtime.graceful_drain",
                 "runtime.transport_discovery",
                 "runtime.multi_user",
                 "runtime.rbac",
@@ -505,7 +558,7 @@ class RuntimeService:
             ],
             "methods": rpc_methods(),
             "legacy_methods": legacy_rpc_methods(),
-            "method_specs": rpc_method_specs(self),
+            "method_specs": rpc_method_specs(self, network=current_principal().network),
             "transports": [
                 {"name": "json-lines", "streaming": "aggregate"},
                 {"name": "http", "streaming": "aggregate"},
@@ -517,7 +570,8 @@ class RuntimeService:
                 "reasoning_default": "public",
                 "start_acknowledgement": True,
                 "correlation_fields": ["stream_id", "generation_id"],
-                "replay_supported": True,
+                "generation_resume_supported": False,
+                "recovery": "message.status then session.messages",
             },
             "event_replay": {
                 "scope": "user_id/agent_id",
@@ -1310,7 +1364,13 @@ class RuntimeService:
                 session = agent.session_manager.get_current_session()
                 if session is None:
                     raise ValueError("No active session to send a message")
-                replay = self._idempotent_response(agent, session.session_id, idempotency_key)
+                fingerprint = self._message_request_fingerprint(message, system_contexts)
+                replay = self._idempotent_response(
+                    agent,
+                    session.session_id,
+                    idempotency_key,
+                    request_fingerprint=fingerprint,
+                )
                 if replay is not None:
                     return replay
                 self._assert_session_revision(
@@ -1318,28 +1378,51 @@ class RuntimeService:
                     session.session_id,
                     expected_revision,
                 )
-                resolved_message = self._resolve_message_input(message)
-                response = (
-                    await agent.send_multimodal(resolved_message, system_contexts)
-                    if isinstance(resolved_message, list)
-                    else await agent.send(resolved_message, system_contexts)
-                )
-                content = response.content if response else ""
-                message_payload = self._finalize_message_operation(
-                    agent,
-                    session.session_id,
+                operation_session_id = session.session_id
+                generation_id = str(uuid4())
+                self._begin_message_operation(
+                    operation_session_id,
                     idempotency_key,
+                    request_fingerprint=fingerprint,
+                    generation_id=generation_id,
                 )
-                session = agent.session_manager.get_current_session()
-                return {
-                    "role": "assistant",
-                    "content": content,
-                    "reasoning_content": getattr(response, "reasoning_content", None),
-                    "message_id": message_payload.get("message_id"),
-                    "idempotent_replay": False,
-                    "session": self._session_payload(session) if session else None,
-                    "initiative_timer": self._agent_initiative_timer_payload(agent),
-                }
+                try:
+                    resolved_message = self._resolve_message_input(message)
+                    response = (
+                        await agent.send_multimodal(resolved_message, system_contexts)
+                        if isinstance(resolved_message, list)
+                        else await agent.send(resolved_message, system_contexts)
+                    )
+                    content = response.content if response else ""
+                    message_payload = self._finalize_message_operation(
+                        agent,
+                        operation_session_id,
+                        idempotency_key,
+                        generation_id=generation_id,
+                    )
+                    session = agent.session_manager.get_current_session()
+                    result = {
+                        "role": "assistant",
+                        "content": content,
+                        "reasoning_content": getattr(response, "reasoning_content", None),
+                        "message_id": message_payload.get("message_id"),
+                        "generation_id": generation_id,
+                        "idempotent_replay": False,
+                        "session": self._session_payload(session) if session else None,
+                        "initiative_timer": self._agent_initiative_timer_payload(agent),
+                    }
+                    self._succeed_message_operation(
+                        operation_session_id,
+                        idempotency_key,
+                        result,
+                    )
+                    return result
+                except asyncio.CancelledError:
+                    self._cancel_message_operation(operation_session_id, idempotency_key)
+                    raise
+                except Exception as error:
+                    self._fail_message_operation(operation_session_id, idempotency_key, error)
+                    raise
 
     async def iter_message_stream(
         self,
@@ -1365,7 +1448,10 @@ class RuntimeService:
             if not isinstance(idempotency_key, str) or not idempotency_key.strip():
                 raise ValueError("Runtime idempotency_key is required")
             service = self._require_tenant_service(principal.user_id, agent_id)
-            async with service._tenant_operation_lock:
+            async with (
+                self._network_operation_scope("agent.send_message_stream"),
+                service._tenant_operation_lock,
+            ):
                 async for event in service.iter_message_stream(
                     message,
                     system_contexts,
@@ -1394,7 +1480,13 @@ class RuntimeService:
             session = agent.session_manager.get_current_session()
             if session is None:
                 raise ValueError("No active session to send a message")
-            replay = self._idempotent_response(agent, session.session_id, idempotency_key)
+            fingerprint = self._message_request_fingerprint(message, system_contexts)
+            replay = self._idempotent_response(
+                agent,
+                session.session_id,
+                idempotency_key,
+                request_fingerprint=fingerprint,
+            )
             if replay is not None:
                 yield {
                     "type": "finish",
@@ -1402,7 +1494,7 @@ class RuntimeService:
                     "content": replay.get("content", ""),
                     "reasoning_content": replay.get("reasoning_content"),
                     "message_id": replay.get("message_id"),
-                    "generation_id": generation_id or str(uuid4()),
+                    "generation_id": replay.get("generation_id") or generation_id or str(uuid4()),
                     "idempotent_replay": True,
                     "session": replay.get("session"),
                 }
@@ -1412,11 +1504,19 @@ class RuntimeService:
                 session.session_id,
                 expected_revision,
             )
+            resolved_generation_id = generation_id or str(uuid4())
+            self._begin_message_operation(
+                session.session_id,
+                idempotency_key,
+                request_fingerprint=fingerprint,
+                generation_id=resolved_generation_id,
+            )
             async for event in self._iter_message_stream_locked(
                 message,
                 system_contexts,
-                generation_id=generation_id or str(uuid4()),
+                generation_id=resolved_generation_id,
                 idempotency_key=idempotency_key,
+                session_id=session.session_id,
             ):
                 yield event
 
@@ -1427,6 +1527,7 @@ class RuntimeService:
         *,
         generation_id: str,
         idempotency_key: str | None = None,
+        session_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
         agent = await self._ensure_started()
         full_content = ""
@@ -1450,6 +1551,7 @@ class RuntimeService:
                 yield event
                 index += 1
         except asyncio.CancelledError:
+            self._cancel_message_operation(session_id, idempotency_key)
             yield {
                 "type": "cancelled",
                 "index": index,
@@ -1459,6 +1561,7 @@ class RuntimeService:
             }
             raise
         except Exception as error:
+            self._fail_message_operation(session_id, idempotency_key, error)
             yield {
                 "type": "error",
                 "index": index,
@@ -1476,9 +1579,8 @@ class RuntimeService:
             idempotency_key,
             generation_id=generation_id,
         )
-        yield {
-            "type": "finish",
-            "index": index,
+        result = {
+            "role": "assistant",
             "content": full_content,
             "reasoning_content": full_reasoning or None,
             "generation_id": generation_id,
@@ -1486,6 +1588,12 @@ class RuntimeService:
             "idempotent_replay": False,
             "session": self._session_payload(session) if session else None,
             "initiative_timer": self._agent_initiative_timer_payload(agent),
+        }
+        self._succeed_message_operation(session_id, idempotency_key, result)
+        yield {
+            "type": "finish",
+            "index": index,
+            **{key: value for key, value in result.items() if key != "role"},
         }
 
     async def send_message_stream(
@@ -1916,6 +2024,8 @@ class RuntimeService:
         return {"subscription_id": subscription_id, "closed": True, "removed": removed}
 
     async def shutdown(self) -> dict[str, Any]:
+        if self._tenant_key is None:
+            self.begin_drain()
         if self._tenant_key is None and self._tenant_services:
             services = list(self._tenant_services.values())
             self._tenant_services.clear()
@@ -2426,12 +2536,31 @@ class RuntimeService:
         agent: Agent,
         session_id: str,
         idempotency_key: str | None,
+        *,
+        request_fingerprint: str | None = None,
     ) -> dict[str, Any] | None:
         if idempotency_key is None:
             return None
         key = idempotency_key.strip()
         if not key or len(key) > 128:
             raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        if self._operation_store is not None:
+            operation = self._operation_store.get(session_id, key)
+            if operation is not None:
+                stored_fingerprint = operation.get("request_fingerprint")
+                if request_fingerprint and stored_fingerprint != request_fingerprint:
+                    raise RpcError(
+                        "Idempotency key was already used for a different request",
+                        code="message.idempotency_conflict",
+                        user_message="同一幂等键不能用于不同的消息请求。",
+                        recoverable=False,
+                        action_hint="请为新的消息请求生成新的 idempotency_key。",
+                        details={
+                            "operation_id": operation.get("operation_id"),
+                            "session_id": session_id,
+                        },
+                    )
+                return self._operation_replay(operation)
         messages = agent.session_manager.persistence.load_messages(session_id)
         for index, message in enumerate(messages):
             if message.get("role") != "user" or message.get("idempotency_key") != key:
@@ -2464,6 +2593,161 @@ class RuntimeService:
                 "initiative_timer": self._agent_initiative_timer_payload(agent),
             }
         return None
+
+    async def message_status(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Return the durable state of one remote message operation."""
+
+        if self._operation_store is None:
+            raise RpcError(
+                "Persistent message operation storage is unavailable",
+                code="message.operation_store_unavailable",
+                user_message="当前 Runtime 入口不提供持久化消息状态查询。",
+                recoverable=False,
+            )
+        key = self._normalize_idempotency_key(idempotency_key)
+        operation = self._operation_store.get(session_id, key)
+        if operation is None:
+            raise RpcError(
+                "Message operation does not exist",
+                code="message.operation_not_found",
+                user_message="指定的消息操作不存在。",
+                recoverable=True,
+                action_hint="请确认 session_id 和 idempotency_key 属于同一次发送。",
+                details={"session_id": session_id},
+            )
+        return self._public_operation(operation)
+
+    @staticmethod
+    def _message_request_fingerprint(
+        message: str | list[dict[str, Any]],
+        system_contexts: list[str] | None,
+    ) -> str:
+        return RuntimeOperationStore.request_fingerprint(
+            {"message": message, "system_contexts": system_contexts or []}
+        )
+
+    def _begin_message_operation(
+        self,
+        session_id: str,
+        idempotency_key: str | None,
+        *,
+        request_fingerprint: str,
+        generation_id: str,
+    ) -> None:
+        if self._operation_store is None or idempotency_key is None:
+            return
+        key = self._normalize_idempotency_key(idempotency_key)
+        operation = self._operation_store.begin(
+            session_id=session_id,
+            idempotency_key=key,
+            request_fingerprint=request_fingerprint,
+            generation_id=generation_id,
+        )
+        if operation.get("status") != "pending":
+            self._operation_replay(operation)
+
+    def _succeed_message_operation(
+        self,
+        session_id: str,
+        idempotency_key: str | None,
+        result: dict[str, Any],
+    ) -> None:
+        if self._operation_store is None or idempotency_key is None or not session_id:
+            return
+        self._operation_store.succeed(
+            session_id,
+            self._normalize_idempotency_key(idempotency_key),
+            result,
+        )
+
+    def _fail_message_operation(
+        self,
+        session_id: str,
+        idempotency_key: str | None,
+        error: Exception,
+    ) -> None:
+        if self._operation_store is None or idempotency_key is None:
+            return
+        self._operation_store.fail(
+            session_id,
+            self._normalize_idempotency_key(idempotency_key),
+            runtime_error_to_dict(error),
+        )
+
+    def _cancel_message_operation(
+        self,
+        session_id: str,
+        idempotency_key: str | None,
+    ) -> None:
+        if self._operation_store is None or idempotency_key is None:
+            return
+        self._operation_store.cancel(
+            session_id,
+            self._normalize_idempotency_key(idempotency_key),
+            {
+                "code": "message.operation_cancelled",
+                "error_code": "message.operation_cancelled",
+                "message": "消息生成已取消。",
+                "technical_message": "Message generation was cancelled",
+                "user_message": "消息生成已取消。",
+                "recoverable": True,
+                "action_hint": "请读取会话确认当前状态；如需重新生成，请使用新的 idempotency_key。",
+                "details": {},
+            },
+        )
+
+    @staticmethod
+    def _operation_replay(operation: dict[str, Any]) -> dict[str, Any] | None:
+        status = operation.get("status")
+        if status == "succeeded" and isinstance(operation.get("result"), dict):
+            return {**operation["result"], "idempotent_replay": True}
+        if status == "pending":
+            raise RpcError(
+                "Idempotent message operation is still in progress",
+                code="message.idempotency_in_progress",
+                user_message="同一发送请求仍在处理中。",
+                recoverable=True,
+                action_hint="请稍后调用 message.status 查询，不要更换 idempotency_key。",
+                details={
+                    "operation_id": operation.get("operation_id"),
+                    "generation_id": operation.get("generation_id"),
+                },
+            )
+        stored_error = operation.get("error")
+        error: dict[str, Any] = stored_error if isinstance(stored_error, dict) else {}
+        stored_details = error.get("details")
+        error_details: dict[str, Any] = stored_details if isinstance(stored_details, dict) else {}
+        raise RpcError(
+            str(
+                error.get("technical_message")
+                or "Message operation already reached a terminal failure"
+            ),
+            code=str(error.get("code") or "message.operation_failed"),
+            user_message=str(error.get("user_message") or "消息操作已经失败或取消。"),
+            recoverable=bool(error.get("recoverable", True)),
+            action_hint=error.get("action_hint"),
+            details={
+                **error_details,
+                "operation_id": operation.get("operation_id"),
+                "operation_status": status,
+                "generation_id": operation.get("generation_id"),
+            },
+        )
+
+    @staticmethod
+    def _public_operation(operation: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in operation.items() if key != "request_fingerprint"}
+
+    @staticmethod
+    def _normalize_idempotency_key(idempotency_key: str) -> str:
+        key = idempotency_key.strip()
+        if not key or len(key) > 128:
+            raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        return key
 
     def _resolve_message_input(
         self,
@@ -2503,7 +2787,11 @@ class RuntimeService:
                     {
                         "type": "media",
                         "media_id": part["media_id"],
-                        **({"detail": part["image"]["detail"]} if isinstance(part.get("image"), dict) and part["image"].get("detail") else {}),
+                        **(
+                            {"detail": part["image"]["detail"]}
+                            if isinstance(part.get("image"), dict) and part["image"].get("detail")
+                            else {}
+                        ),
                     }
                 )
             else:
@@ -2551,11 +2839,7 @@ class RuntimeService:
         manager.replace_messages(session_id, messages)
         persisted = manager.persistence.load_messages(session_id)
         return next(
-            (
-                message
-                for message in reversed(persisted)
-                if message.get("role") == "assistant"
-            ),
+            (message for message in reversed(persisted) if message.get("role") == "assistant"),
             {},
         )
 

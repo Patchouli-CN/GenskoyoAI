@@ -34,6 +34,8 @@
 
 - Runtime Protocol `2.0.0` 集中执行一次不兼容修正：网络资源改为 `user_id -> agent_id -> session_id`，会话写入要求 `expected_revision`，消息发送要求 `idempotency_key`。
 - 新增 JWT/RBAC、租户存储隔离、稳定 `message_id`、分页、事件持久化回放、媒体 multipart 上传和角色包远程上传信任门槛。
+- 消息幂等升级为 Provider 调用前持久化的操作账本，新增 `message.status` 断线状态查询；生成 token 流明确不支持跨连接续传，客户端通过操作状态和权威会话恢复。
+- 新增 readiness、优雅 drain 和默认关闭的 HTTP/WS 远程管理面；网络 `method_specs` 会声明真实资源必填字段及结果 schema 完整度。
 - Session schema 从 `1` 升到 `2`；旧文件自动补 `revision`、`message_id` 和消息 revision，并保留未知扩展字段。
 - 默认文件后端定位为单节点远程多用户；多节点生产部署仍要求 PostgreSQL 和共享对象存储。
 

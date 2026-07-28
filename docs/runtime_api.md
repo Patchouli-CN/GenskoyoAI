@@ -19,6 +19,7 @@ HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id
 - 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
 - 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。
 - `agent.send_message` 和 `agent.send_message_stream` 还必须传 1-128 字符的 `idempotency_key`；网络重试必须复用同一键。
+- Runtime 会在调用 Provider 前将消息操作写入 `operations.json`。客户端可用 `message.status` 按 `agent_id`、`session_id` 和 `idempotency_key` 查询 `pending`、`succeeded`、`failed` 或 `cancelled` 状态。
 - JSON Lines bridge 是本机受信任入口，继续保留单用户和隐式当前会话兼容行为。
 
 远程认证推荐由 TLS 反向代理/OIDC 网关签发短期 HS256 JWT，并配置：
@@ -30,6 +31,8 @@ GENSOKYOAI_RUNTIME_JWT_AUDIENCE=<可选，严格匹配 aud>
 ```
 
 JWT 必须包含 `sub`、`exp`，可包含 `roles`。支持 `read`、`chat`、`admin`；`admin` 包含其他权限。旧 `GENSOKYOAI_RUNTIME_TOKEN` 仍可用，但只代表一个共享的 `runtime-admin` 管理身份，不提供多用户区分。
+
+HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_package.import` / `export` 等远程管理方法。仅在受信任管理网络中设置 `GENSOKYOAI_RUNTIME_ALLOW_REMOTE_ADMIN=true` 或使用 `--allow-remote-admin` 后才会开放；`GET /info` 的 `active_transport.disabled_methods` 是当前传输的权威声明。
 
 默认文件后端将数据写入 `runtime_data/users/<user-hash>/agents/<agent-hash>/`，可用于单节点远程多用户服务。`BlobStore` 已定义对象存储替换边界；多节点部署仍需将会话/Agent catalog 迁移到 PostgreSQL，并将 blob 后端切换为共享对象存储。当前文件后端不能宣称支持多节点一致性。
 
@@ -44,8 +47,8 @@ JWT 必须包含 `sub`、`exp`，可包含 `roles`。支持 `read`、`chat`、`a
   "protocol": "gensokyo-runtime-rpc",
   "protocol_version": "2.0.0",
   "protocol_major_version": 2,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -99,7 +102,8 @@ JWT 必须包含 `sub`、`exp`，可包含 `roles`。支持 `read`、`chat`、`a
     "reasoning_default": "public",
     "start_acknowledgement": true,
     "correlation_fields": ["stream_id", "generation_id"],
-    "replay_supported": true
+    "generation_resume_supported": false,
+    "recovery": "message.status then session.messages"
   },
   "deprecated_fields": [],
   "compatibility_notes": [
@@ -127,15 +131,16 @@ JWT 必须包含 `sub`、`exp`，可包含 `roles`。支持 `read`、`chat`、`a
 }
 ```
 
-`method_specs[].params_schema` 与 `result_schema` 从实际 Runtime handler 签名生成，使用 JSON Schema 基础类型描述参数、必填项、默认值和返回类型；客户端生成器不应再根据自然语言文档猜测参数。
+`method_specs[].params_schema` 会按调用上下文生成。HTTP/WS 返回的 `contract_scope: "network"` schema 已包含网络资源层额外要求的 `agent_id`、`session_id`、`expected_revision` 和 `idempotency_key`。`result_schema_complete` 只有在返回结构已显式建模时才为 `true`；为 `false` 时客户端不能把宽泛的 `dict` schema 当成完整字段契约。
 
 非 legacy 方法清单按当前命名空间分组如下：
 
-- `runtime.info`、`runtime.health`、`runtime.shutdown`
+- `runtime.info`、`runtime.health`、`runtime.ready`、`runtime.shutdown`
 - `config.validate`
 - `character.validate`、`character.list`
 - `character_package.validate`、`character_package.preview`、`character_package.import`、`character_package.export`
 - `agent.init`、`agent.list`、`agent.delete`、`agent.send_message`、`agent.send_message_stream`
+- `message.status`
 - `model.list`、`model.info`
 - `session.create`、`session.list`、`session.current`、`session.resume`、`session.delete`、`session.export`、`session.rename`、`session.messages`、`session.replace_messages`、`session.regenerate_from`、`session.rollback`
 - `dependency.status`、`dependency.install`
@@ -364,6 +369,26 @@ HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Run
 - HTTP `/rpc` 请求如果被客户端取消，底层请求协程会随连接取消而收敛；涉及 Runtime resource gate 的方法仍应依赖服务端 `finally` 路径释放资源。
 - 多个 Runtime HTTP app / service 实例之间的 stream task、事件订阅、事件队列、shutdown 生命周期和资源状态相互隔离。
 
+生成 token 流本身不能跨 WebSocket 连接续传；可回放的是 `/events` / `runtime.subscribe` 的 Runtime 事件日志。连接断开后，客户端应使用原 `idempotency_key` 调用：
+
+```json
+{
+  "method": "message.status",
+  "params": {
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "idempotency_key": "send-018f..."
+  }
+}
+```
+
+- `pending`：服务仍在处理，不要换 key 重发。
+- `succeeded`：读取 `result`，并用 `session.messages` 刷新权威会话。
+- `failed` / `cancelled`：读取结构化 `error`。重启遗留的未确认请求会收敛为 `message.operation_outcome_unknown`；先读取会话，确认没有结果后再使用新 key。
+- 同一个 key 携带不同消息会返回 `message.idempotency_conflict`，不会执行 Provider。
+
+`GET /health` 只表示进程存活；`GET /ready` 和 `runtime.ready` 表示是否接受新请求。服务进入 drain 后 readiness 返回 HTTP `503`，已有操作可在配置的超时内收敛，新操作返回 `runtime.draining`。
+
 ## 主动定时器 API
 
 主动定时器让 AI 在每次回答完成后决定是否积存一条稍后主动发言意图摘要，并设置触发时间。若用户在触发前发送新消息，或前端取消定时器，Runtime 会直接丢弃旧积存摘要；到点时不再二次判断是否要说话，而是基于仍有效的 `pending_summary`、当前上下文和说话前内部思考重新生成真正发给用户的主动消息。
@@ -555,7 +580,7 @@ Provider 字段矩阵会区分两类兼容性诊断：
 
 当前上传可保存常见图片、音频、PDF 和文本；公开模型输入已完成图片映射，其他 MIME 会明确拒绝，不会把服务器本地路径暴露给客户端。`media.list` / `media.delete` 同样受用户和 Agent 归属控制。文件后端实现 `BlobStore`，生产部署可替换为对象存储。
 
-远程角色包使用管理员端点 `POST /character-packages`。上传包先执行 zip 路径、大小、manifest、YAML、checksum 等校验。现有 manifest 签名只有格式校验，不会伪装成密码学验签，因此默认返回 `character_package.untrusted`；管理员审阅来源后必须显式传 `allow_untrusted=true` 才能导入。
+远程角色包使用管理员端点 `POST /character-packages`，且网络入口必须显式启用远程管理。上传包先执行 zip 路径、大小、manifest、YAML、checksum 等校验。现有 manifest 签名只有格式校验，不会伪装成密码学验签，因此默认返回 `character_package.untrusted`；管理员审阅来源后必须显式传 `allow_untrusted=true` 才能导入。
 
 ## 角色包 API
 
@@ -790,3 +815,7 @@ SSE `/events` 会推送 Runtime 事件。事件字段会经过敏感信息清洗
 - `deprecated`
 - `replacement`
 - `remove_after`
+- `remote_admin`
+- `contract_scope`
+- `params_schema` / `result_schema`
+- `result_schema_complete`

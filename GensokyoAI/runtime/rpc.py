@@ -38,6 +38,7 @@ class RpcMethodSpec(Struct, frozen=True):
     legacy: bool = False
     replacement: str | None = None
     remove_after: str | None = None
+    remote_admin: bool = False
 
     @property
     def namespace(self) -> str:
@@ -96,18 +97,20 @@ RUNTIME_BREAKING_CHANGES: tuple[dict[str, str], ...] = (
 RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("runtime.info", "info"),
     RpcMethodSpec("runtime.health", "health"),
-    RpcMethodSpec("runtime.shutdown", "shutdown"),
+    RpcMethodSpec("runtime.ready", "readiness"),
+    RpcMethodSpec("runtime.shutdown", "shutdown", remote_admin=True),
     RpcMethodSpec("config.validate", "validate_config"),
     RpcMethodSpec("character.validate", "validate_character"),
     RpcMethodSpec("character_package.validate", "validate_character_package"),
     RpcMethodSpec("character_package.preview", "preview_character_package"),
-    RpcMethodSpec("character_package.import", "import_character_package"),
-    RpcMethodSpec("character_package.export", "export_character_package"),
+    RpcMethodSpec("character_package.import", "import_character_package", remote_admin=True),
+    RpcMethodSpec("character_package.export", "export_character_package", remote_admin=True),
     RpcMethodSpec("agent.init", "init"),
     RpcMethodSpec("agent.list", "list_agents"),
     RpcMethodSpec("agent.delete", "delete_agent"),
     RpcMethodSpec("agent.send_message", "send_message"),
     RpcMethodSpec("agent.send_message_stream", "send_message_stream"),
+    RpcMethodSpec("message.status", "message_status"),
     RpcMethodSpec("character.list", "list_characters"),
     RpcMethodSpec("model.list", "list_models"),
     RpcMethodSpec("model.info", "model_info"),
@@ -123,7 +126,7 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("session.regenerate_from", "session_regenerate_from"),
     RpcMethodSpec("session.rollback", "rollback_session"),
     RpcMethodSpec("dependency.status", "dependency_status"),
-    RpcMethodSpec("dependency.install", "install_dependencies"),
+    RpcMethodSpec("dependency.install", "install_dependencies", remote_admin=True),
     RpcMethodSpec("external_tool.status", "external_tool_status"),
     RpcMethodSpec("initiative_timer.current", "initiative_timer_current"),
     RpcMethodSpec("initiative_timer.update", "initiative_timer_update"),
@@ -228,6 +231,7 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
         legacy=True,
         replacement="runtime.shutdown",
         remove_after="2.0.0",
+        remote_admin=True,
     ),
     RpcMethodSpec(
         "dependency_status",
@@ -242,6 +246,7 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
         legacy=True,
         replacement="dependency.install",
         remove_after="2.0.0",
+        remote_admin=True,
     ),
     RpcMethodSpec(
         "external_tool_status",
@@ -251,6 +256,137 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
         remove_after="2.0.0",
     ),
 )
+
+
+NETWORK_SESSION_METHODS = frozenset(
+    {
+        "agent.send_message",
+        "agent.send_message_stream",
+        "message.status",
+        "send_message",
+        "send_message_stream",
+        "session.current",
+        "session.delete",
+        "session.export",
+        "session.rename",
+        "session.messages",
+        "session.replace_messages",
+        "session.regenerate_from",
+        "session.rollback",
+        "current_session",
+        "delete_session",
+        "export_session",
+        "rename_session",
+        "rollback_session",
+    }
+)
+NETWORK_REVISION_METHODS = frozenset(
+    {
+        "agent.send_message",
+        "agent.send_message_stream",
+        "send_message",
+        "send_message_stream",
+        "session.delete",
+        "session.rename",
+        "session.replace_messages",
+        "session.regenerate_from",
+        "session.rollback",
+        "delete_session",
+        "rename_session",
+        "rollback_session",
+    }
+)
+NETWORK_IDEMPOTENCY_METHODS = frozenset(
+    {
+        "agent.send_message",
+        "agent.send_message_stream",
+        "message.status",
+        "send_message",
+        "send_message_stream",
+    }
+)
+
+_NETWORK_RESOURCE_PREFIXES = (
+    "agent.",
+    "session.",
+    "message.",
+    "memory.",
+    "scene.",
+    "initiative_timer.",
+    "model.",
+    "media.",
+)
+_NETWORK_RESOURCE_LEGACY_METHODS = frozenset(
+    {
+        "send_message",
+        "send_message_stream",
+        "create_session",
+        "list_sessions",
+        "current_session",
+        "resume_session",
+        "delete_session",
+        "export_session",
+        "rename_session",
+        "rollback_session",
+    }
+)
+_NETWORK_AGENT_ID_EXEMPT_METHODS = frozenset({"agent.init", "agent.list", "init"})
+
+_MESSAGE_RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "user_id": {"type": "string"},
+        "agent_id": {"type": "string"},
+        "role": {"const": "assistant"},
+        "content": {"type": "string"},
+        "reasoning_content": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "message_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "generation_id": {"type": "string"},
+        "idempotent_replay": {"type": "boolean"},
+        "session": {"type": "object"},
+    },
+    "required": [
+        "role",
+        "content",
+        "generation_id",
+        "idempotent_replay",
+        "session",
+    ],
+    "additionalProperties": True,
+}
+
+_PUBLIC_RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "agent.send_message": _MESSAGE_RESULT_SCHEMA,
+    "agent.send_message_stream": _MESSAGE_RESULT_SCHEMA,
+    "message.status": {
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "string"},
+            "agent_id": {"type": "string"},
+            "operation_id": {"type": "string"},
+            "session_id": {"type": "string"},
+            "idempotency_key": {"type": "string"},
+            "generation_id": {"type": "string"},
+            "status": {"enum": ["pending", "succeeded", "failed", "cancelled"]},
+            "created_at": {"type": "string"},
+            "updated_at": {"type": "string"},
+            "result": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+            "error": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        },
+        "required": [
+            "operation_id",
+            "session_id",
+            "idempotency_key",
+            "generation_id",
+            "status",
+            "created_at",
+            "updated_at",
+            "result",
+            "error",
+        ],
+        "additionalProperties": False,
+    },
+}
 
 
 class RpcError(Exception):
@@ -331,7 +467,11 @@ def legacy_rpc_methods() -> list[str]:
     return [spec.method for spec in RPC_METHOD_SPECS if spec.legacy]
 
 
-def rpc_method_specs(target: RuntimeRpcTarget | None = None) -> list[dict[str, Any]]:
+def rpc_method_specs(
+    target: RuntimeRpcTarget | None = None,
+    *,
+    network: bool = False,
+) -> list[dict[str, Any]]:
     """Return machine-readable method metadata for documentation clients."""
 
     result = []
@@ -344,22 +484,81 @@ def rpc_method_specs(target: RuntimeRpcTarget | None = None) -> list[dict[str, A
             "deprecated": spec.deprecated,
             "replacement": spec.replacement,
             "remove_after": spec.remove_after,
+            "remote_admin": spec.remote_admin,
         }
         if target is not None:
             handler = getattr(target, spec.handler_name, None)
             if handler is not None:
                 params_schema, result_schema = _handler_schemas(handler)
+                if network:
+                    params_schema = _network_params_schema(spec.method, params_schema)
                 payload["params_schema"] = params_schema
-                payload["result_schema"] = result_schema
+                explicit_result = _PUBLIC_RESULT_SCHEMAS.get(spec.method)
+                payload["result_schema"] = explicit_result or result_schema
+                payload["result_schema_complete"] = explicit_result is not None
+                payload["contract_scope"] = "network" if network else "local"
         result.append(payload)
     return result
+
+
+def remote_admin_rpc_methods() -> frozenset[str]:
+    """Return RPC methods disabled on remote transports unless explicitly enabled."""
+
+    return frozenset(spec.method for spec in RPC_METHOD_SPECS if spec.remote_admin)
+
+
+def network_rpc_requirements(method: str) -> frozenset[str]:
+    """Return parameters injected or required by the remote resource model."""
+
+    required: set[str] = set()
+    is_resource_method = method.startswith(_NETWORK_RESOURCE_PREFIXES) or method in (
+        _NETWORK_RESOURCE_LEGACY_METHODS
+    )
+    if is_resource_method and method not in _NETWORK_AGENT_ID_EXEMPT_METHODS:
+        required.add("agent_id")
+    if method in NETWORK_SESSION_METHODS or method.startswith(
+        ("memory.", "scene.", "initiative_timer.")
+    ):
+        required.add("session_id")
+    if method in NETWORK_REVISION_METHODS:
+        required.add("expected_revision")
+    if method in NETWORK_IDEMPOTENCY_METHODS:
+        required.add("idempotency_key")
+    return frozenset(required)
+
+
+def _network_params_schema(method: str, schema: dict[str, Any]) -> dict[str, Any]:
+    network_schema = {
+        **schema,
+        "properties": dict(schema.get("properties", {})),
+        "required": list(schema.get("required", [])),
+    }
+    properties = network_schema["properties"]
+    requirements = network_rpc_requirements(method)
+    if method in {"agent.init", "init"}:
+        properties["agent_id"] = {"type": "string", "minLength": 1, "maxLength": 128}
+    for name in requirements:
+        if name == "agent_id":
+            properties[name] = {"type": "string", "minLength": 1, "maxLength": 128}
+        elif name == "session_id":
+            properties[name] = {"type": "string", "minLength": 1}
+        elif name == "expected_revision":
+            properties[name] = {"type": "integer", "minimum": 0}
+        elif name == "idempotency_key":
+            properties[name] = {"type": "string", "minLength": 1, "maxLength": 128}
+        if name not in network_schema["required"]:
+            network_schema["required"].append(name)
+    network_schema["required"].sort()
+    if not network_schema["required"]:
+        network_schema.pop("required", None)
+    return network_schema
 
 
 def _handler_schemas(handler: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     signature = inspect.signature(handler)
     try:
         hints = get_type_hints(handler)
-    except (NameError, TypeError):
+    except NameError, TypeError:
         hints = {}
     properties: dict[str, Any] = {}
     required: list[str] = []

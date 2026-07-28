@@ -19,9 +19,12 @@ HTTP, WebSocket, and SSE use `user_id -> agent_id -> session_id -> message_id`. 
 - Network Agent/session RPCs require `agent_id`. Conversation-context operations also require `session_id` and never rely on a process-global current session.
 - Session writes require the last observed `expected_revision`. Conflicts return `session.revision_conflict`.
 - Message sends also require a 1-128 character `idempotency_key`; retries must reuse it.
+- Before calling a Provider, the Runtime persists a message operation in `operations.json`. Clients can query `pending`, `succeeded`, `failed`, or `cancelled` through `message.status` with `agent_id`, `session_id`, and `idempotency_key`.
 - The trusted local JSON Lines bridge retains single-user implicit-current-session compatibility.
 
 For remote authentication, use a TLS reverse proxy/OIDC gateway to issue short-lived HS256 JWTs. Configure `GENSOKYOAI_RUNTIME_JWT_SECRET` (at least 32 characters), plus optional strict `GENSOKYOAI_RUNTIME_JWT_ISSUER` and `GENSOKYOAI_RUNTIME_JWT_AUDIENCE`. JWTs require `sub` and `exp`, and may carry `read`, `chat`, or `admin` roles. The legacy shared `GENSOKYOAI_RUNTIME_TOKEN` maps to one `runtime-admin` identity and does not provide multi-user identity.
+
+HTTP/WS disables remote administration methods such as `runtime.shutdown`, `dependency.install`, and `character_package.import` / `export` by default. Enable them only on a trusted management network with `GENSOKYOAI_RUNTIME_ALLOW_REMOTE_ADMIN=true` or `--allow-remote-admin`. `GET /info` exposes the effective list through `active_transport.disabled_methods`.
 
 The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/` and supports a single-node remote multi-user deployment. `BlobStore` is the object-storage replacement boundary. Multi-node deployments still need PostgreSQL for session/Agent metadata and shared object storage for blobs; the file backend does not claim multi-node consistency.
 
@@ -36,8 +39,8 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
   "protocol": "gensokyo-runtime-rpc",
   "protocol_version": "2.0.0",
   "protocol_major_version": 2,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -91,7 +94,8 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
     "reasoning_default": "public",
     "start_acknowledgement": true,
     "correlation_fields": ["stream_id", "generation_id"],
-    "replay_supported": true
+    "generation_resume_supported": false,
+    "recovery": "message.status then session.messages"
   },
   "deprecated_fields": [],
   "compatibility_notes": [
@@ -119,15 +123,16 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
 }
 ```
 
-`method_specs[].params_schema` and `result_schema` are generated from actual Runtime handler signatures and expose JSON Schema base types, required fields, defaults, and result types. Client generators should not infer parameters from prose.
+`method_specs[].params_schema` is generated for the active call context. HTTP/WS returns `contract_scope: "network"` and includes the additional required `agent_id`, `session_id`, `expected_revision`, and `idempotency_key` fields imposed by remote resource routing. `result_schema_complete` is `true` only for explicitly modeled response shapes; clients must not treat a broad dictionary schema as a complete contract when it is `false`.
 
 Non-legacy methods grouped by current namespace:
 
-- `runtime.info`, `runtime.health`, `runtime.shutdown`
+- `runtime.info`, `runtime.health`, `runtime.ready`, `runtime.shutdown`
 - `config.validate`
 - `character.validate`, `character.list`
 - `character_package.validate`, `character_package.preview`, `character_package.import`, `character_package.export`
 - `agent.init`, `agent.list`, `agent.delete`, `agent.send_message`, `agent.send_message_stream`
+- `message.status`
 - `model.list`, `model.info`
 - `session.create`, `session.list`, `session.current`, `session.resume`, `session.delete`, `session.export`, `session.rename`, `session.messages`, `session.replace_messages`, `session.regenerate_from`, `session.rollback`
 - `dependency.status`, `dependency.install`
@@ -356,6 +361,26 @@ Cancellation semantics:
 - If an HTTP `/rpc` request is cancelled by the client, the underlying request coroutine will converge as the connection is cancelled; methods involving Runtime resource gates should still rely on server-side `finally` paths to release resources.
 - Stream tasks, event subscriptions, event queues, shutdown lifecycle, and resource states are isolated between multiple Runtime HTTP app / service instances.
 
+The generation token stream itself cannot resume across WebSocket connections. Replay applies to the Runtime event log consumed through `/events` or `runtime.subscribe`. After a disconnect, query the original operation:
+
+```json
+{
+  "method": "message.status",
+  "params": {
+    "agent_id": "agent-1",
+    "session_id": "session-1",
+    "idempotency_key": "send-018f..."
+  }
+}
+```
+
+- `pending`: processing is still active; do not resend with another key.
+- `succeeded`: consume `result`, then refresh authoritative state through `session.messages`.
+- `failed` / `cancelled`: inspect the structured `error`. An unconfirmed request left by a restart converges to `message.operation_outcome_unknown`; reread the session before sending again with a new key.
+- Reusing a key for a different message returns `message.idempotency_conflict` without calling the Provider.
+
+`GET /health` only reports process liveness. `GET /ready` and `runtime.ready` report whether new work is accepted. During drain, readiness returns HTTP `503`, existing operations are allowed to settle up to the configured timeout, and new work fails with `runtime.draining`.
+
 ## Initiative Timer API
 
 The initiative timer allows the AI to decide after each reply whether to store a brief summary of something it wants to say later and set a trigger time. If the user sends a new message before the trigger, or the frontend cancels the timer, the Runtime directly discards the old stored summary; when the time is reached, it does not re-judge whether to speak, but regenerates the actual proactive message to the user based on the still-valid `pending_summary`, current context, and pre-speech internal thinking.
@@ -532,7 +557,7 @@ Return fields:
 
 Remote media uses `POST /media?agent_id=...` with a `multipart/form-data` file field named `file`. The response contains a stable `media_id`, MIME type, size, SHA-256, and ownership. Reference it from a message content-parts array with `{"type":"media","media_id":"..."}`. Images are mapped to provider-neutral multimodal input; other stored MIME types are currently rejected as model input. `media.list` and `media.delete` enforce the same user/Agent ownership. The file backend implements the replaceable `BlobStore` boundary.
 
-Remote character packages use the admin-only `POST /character-packages` endpoint. The upload is checked for zip path safety, size, manifest, YAML, and checksums before import. Current manifest signatures are format-checked rather than cryptographically verified, so remote import fails closed with `character_package.untrusted` unless an administrator explicitly supplies `allow_untrusted=true` after reviewing provenance.
+Remote character packages use the admin-only `POST /character-packages` endpoint and require remote administration to be explicitly enabled on the network transport. The upload is checked for zip path safety, size, manifest, YAML, and checksums before import. Current manifest signatures are format-checked rather than cryptographically verified, so remote import fails closed with `character_package.untrusted` unless an administrator explicitly supplies `allow_untrusted=true` after reviewing provenance.
 
 ## Character Package API
 
@@ -767,3 +792,7 @@ Machine-readable method metadata is generated from the RPC registry in code and 
 - `deprecated`
 - `replacement`
 - `remove_after`
+- `remote_admin`
+- `contract_scope`
+- `params_schema` / `result_schema`
+- `result_schema_complete`

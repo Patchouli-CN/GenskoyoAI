@@ -32,6 +32,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow every browser Origin. Use only behind a trusted gateway.",
     )
+    parser.add_argument(
+        "--allow-remote-admin",
+        action="store_true",
+        default=None,
+        help="Enable privileged administration methods on HTTP and WebSocket transports.",
+    )
     return parser.parse_args()
 
 
@@ -52,6 +58,7 @@ def main() -> None:
             root_dir=args.root.resolve(),
             allowed_origins=args.allowed_origin,
             allow_all_origins=args.allow_all_origins,
+            allow_remote_admin=args.allow_remote_admin,
             require_auth=not _is_loopback_host(args.host),
         ),
         host=args.host,

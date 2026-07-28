@@ -35,6 +35,7 @@ class FakeHttpRuntimeService:
         self.active_streams = 0
         self.closed_subscription_ids: list[str] = []
         self.last_subscription_id: str | None = None
+        self.draining = False
 
         async def shutdown(_self):
             return None
@@ -43,6 +44,13 @@ class FakeHttpRuntimeService:
 
     async def health(self):
         return {"ok": True, "started": False}
+
+    async def readiness(self):
+        return {"ok": not self.draining, "ready": not self.draining, "draining": self.draining}
+
+    async def wait_for_drain(self, timeout=30.0):
+        self.draining = True
+        return True
 
     async def info(self):
         return {"name": "Fake Runtime", "methods": ["runtime.health"]}
@@ -53,6 +61,8 @@ class FakeHttpRuntimeService:
             return await self.health()
         if method == "runtime.info":
             return await self.info()
+        if method == "runtime.shutdown":
+            return await self.shutdown()
         if method == "echo":
             return {"method": method, "params": params}
         if method == "slow_rpc":
@@ -198,12 +208,60 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
 
     async def test_get_health_and_info(self):
         health_response = await self.client.get("/health")
+        ready_response = await self.client.get("/ready")
         info_response = await self.client.get("/info")
+        rpc_info_response = await self.client.post(
+            "/rpc",
+            json={"id": "info-1", "method": "runtime.info", "params": {}},
+        )
 
         self.assertEqual(health_response.status, 200)
         self.assertEqual((await health_response.json())["ok"], True)
+        self.assertEqual(ready_response.status, 200)
+        self.assertTrue((await ready_response.json())["ready"])
         self.assertEqual(info_response.status, 200)
-        self.assertEqual((await info_response.json())["name"], "Fake Runtime")
+        info = await info_response.json()
+        self.assertEqual(info["name"], "Fake Runtime")
+        self.assertFalse(info["active_transport"]["remote_admin_enabled"])
+        self.assertIn("runtime.shutdown", info["active_transport"]["disabled_methods"])
+        rpc_info = (await rpc_info_response.json())["result"]
+        self.assertEqual(rpc_info["active_transport"], info["active_transport"])
+
+    async def test_remote_admin_rpc_is_disabled_by_default(self):
+        response = await self.client.post(
+            "/rpc",
+            json={"id": "admin-1", "method": "runtime.shutdown", "params": {}},
+        )
+        payload = await response.json()
+
+        self.assertEqual(response.status, 200)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "authorization.remote_admin_disabled")
+
+    async def test_ready_returns_service_unavailable_while_draining(self):
+        self.fake_service.draining = True
+        response = await self.client.get("/ready")
+        payload = await response.json()
+
+        self.assertEqual(response.status, 503)
+        self.assertFalse(payload["ready"])
+
+    async def test_remote_admin_rpc_requires_explicit_enablement(self):
+        service = FakeHttpRuntimeService()
+        server = TestServer(create_app(service=cast(Any, service), allow_remote_admin=True))
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            response = await client.post(
+                "/rpc",
+                json={"id": "admin-2", "method": "runtime.shutdown", "params": {}},
+            )
+            payload = await response.json()
+        finally:
+            await client.close()
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(service.shutdown_called)
 
     async def test_media_upload_and_download_use_stable_resource_route(self):
         form = FormData()
