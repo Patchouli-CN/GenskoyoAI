@@ -339,6 +339,17 @@ class DialogueLoop(Protocol):
 - `GensokyoAI/core/agent/_impl.py`：实现单角色 DialogueLoop 适配器；增加 `manage_initiative_timer: bool=True`，World Actor 设为 false。
 - 新增 `GensokyoAI/world/initiative.py`：实现 World DialogueLoop 的计划与触发逻辑。
 
+### 7.3 对话欲累积替代强制调度（用户 2026-07-28 决策，随阶段 7 一并实施）
+
+把「每轮结束问一次模型要不要安排」改为「驱动力累积到阈值才主动」，`drive` 累积器作为 `plan_callback` 实现，一次重构完成：
+
+- **废除强制**：`InitiativeTimerConfig.fallback_on_no_schedule` 的语义（模型不想说也强行安排 300s 后发言）与本模型冲突，上线后应默认关闭/移除——违背角色意愿是当前设计的核心问题。
+- **复用已有动机量化**：`motivation_evaluator.py` 的 `MotivationProfile` 四维（表达欲 / 情感驱动力 / 关系需求 / 情景相关性 → `total_drive`）即对话欲；现仅接在 ActionPlanner ← ThinkEngine 随机游走路径，需接入定时器路径，并删除定时器自有的那次 LLM `_decide` 往返。
+- **省 token**：累积为纯算术，仅在跨阈值时调用一次 LLM 生成意图摘要；多轮不想说话即零成本。
+- **增量以事件为主**：话题未聊完/被打断、情感强度尖峰、场景与挂心话题匹配为主要来源；沉默时长权重压低，否则退化为「伪装的固定间隔定时器」。说完话后表达欲部分泄压。
+- **心情非对称衰减**：正面情绪半衰期短、负面情绪半衰期长但仍衰减（享乐适应），按 valence 分别配置。
+- **必守**：`drive` / mood 需随会话持久化，否则重启即人格重置；保留「存意图摘要、不存话术」——阈值只决定「此刻有话想说」，说什么仍到点再生成。
+
 ### 7.2 World 主循环主动计划
 
 每次一个完整 World 自动表演段落结束并进入 `wait_user` 后，World 统一做一次 initiative planning：
@@ -457,6 +468,18 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 - 执行项目标准 `./normalize_code.cmd`（ruff format、ruff check、pyright、pytest）。
 - 实际用两个角色卡 + 测试 Provider 驱动一段红魔馆对话，观察流式 actor 事件、Director decision、场景切换、持久化文件。
 - 如用户配置了真实模型，再运行一次可选真实 E2E；真实 API 失败不影响离线自动测试结论。
+
+---
+
+## 10.5 记忆层简化（用户 2026-07-28 决策，World 落地后实施）
+
+用户调研：主流用法为「开会话 → 扮演 → 删掉重开」的快节奏短会话。据此对外简化为**两层记忆**：
+
+- **保留**：工作记忆（短期）+ 话题记忆（长期，AI 总结话题 + 情感标注）。
+- **降级/砍除**：episodic 压缩层（短会话下压缩阈值几乎触发不到，属空转抽象）；embedding 向量检索明确为**可选增强、默认关闭**（`semantic.py` 本就是「话题感知 + 可选 embedding」，关闭即省 embedding API 成本）。
+- **话题图（topic store）不可砍**：它是 `ThinkEngine` 随机游走的图、`MotivationEvaluator` 的 `emotional_valence` 来源、§7.3 心情衰减的作用对象，也是 §2.3 world 记忆隔离与 §6 `WorldMemoryProjector` 的写入目标。砍掉则对话欲模型失去输入信号，退化为纯时间驱动。
+- **排期**：World 落地（至少完成阶段 6）后再动，避免与阶段 4/6 撞车；届时对多角色实际需要的长期记忆量也更有把握。
+- 备注：短会话用法可能部分源于 Alpha 阶段长会话体验未打磨，非必然的内在偏好；保留话题结构可避免日后回补。
 
 ---
 
