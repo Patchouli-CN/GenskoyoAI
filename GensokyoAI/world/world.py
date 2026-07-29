@@ -34,6 +34,7 @@ from ..utils.path_security import sanitize_path_id
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .memory_paths import build_world_memory_root
+from .memory_projector import WorldMemoryProjector
 from .persistence import WorldPersistence
 from .stage import WorldStage
 from .transcript import SharedTranscript
@@ -115,6 +116,17 @@ class GensokyoWorld:
         self._current_actor_id: str | None = None
         self._started = False
         self._shutdown = False
+
+        # 记忆投影：段落结束（wait_user）后把公开表演投影为各在场角色
+        # 的私有视角记忆（config.project_perspective_memories 关闭时停用）。
+        # 游标记录每个场景已投影到第几条，后台任务不阻塞用户回复。
+        self._projector = (
+            WorldMemoryProjector(model_client)
+            if self._world_config.project_perspective_memories
+            else None
+        )
+        self._projection_cursors: dict[str, int] = {}
+        self._projection_tasks: set[asyncio.Task] = set()
 
     # ==================== 装配 ====================
 
@@ -383,6 +395,8 @@ class GensokyoWorld:
             return
         self._shutdown = True
         self._publish(SystemEvent.WORLD_SHUTDOWN, {"world_id": self._world_config.id})
+        # 先等未完成的记忆投影落笔，再保存存档、关停 Actor
+        await self.flush_projections()
         await self._save_record()
         for actor_id, agent in self._actors.items():
             try:
@@ -466,6 +480,8 @@ class GensokyoWorld:
             )
         self._current_actor_id = current
         self._waiting_for_user = True
+        # 一段自动表演结束：后台投影各在场角色的私有视角记忆，不阻塞用户
+        self._schedule_projection()
         await self._publish_waiting_user()
         yield {"type": STREAM_WAITING_USER}
 
@@ -761,3 +777,71 @@ class GensokyoWorld:
             await self._persistence.save_async(record)
         except Exception as error:
             logger.warning(f"[World] 存档保存失败（不阻塞对话）: {error}")
+
+    # ==================== 记忆投影 ====================
+
+    def _schedule_projection(self) -> None:
+        """段落结束后后台启动一次记忆投影（不阻塞用户回复）。"""
+        if self._projector is None or self._shutdown:
+            return
+        task = asyncio.create_task(self._project_segment())
+        self._projection_tasks.add(task)
+        task.add_done_callback(self._projection_tasks.discard)
+
+    async def flush_projections(self) -> None:
+        """等待所有未完成的记忆投影（关机与测试用）。"""
+        if self._projection_tasks:
+            await asyncio.gather(*self._projection_tasks, return_exceptions=True)
+
+    async def _project_segment(self) -> None:
+        """把本段新增公开剧本投影为各在场角色的私有视角记忆。"""
+        if self._projector is None:
+            return
+        try:
+            scene_id = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
+            entries = self._transcript.history(scene_id)
+            cursor = self._projection_cursors.get(scene_id, 0)
+            new_entries = entries[cursor:]
+            self._projection_cursors[scene_id] = len(entries)
+            if not new_entries:
+                return
+
+            # 只给亲历/在场角色写入：本段发言者 ∪ 当前在场角色
+            participant_ids = {
+                entry.speaker_id
+                for entry in new_entries
+                if entry.speaker_kind is SpeakerKind.CHARACTER
+            } | set(self._stage.characters_in(scene_id))
+            participants = [
+                self._briefs[aid] for aid in sorted(participant_ids) if aid in self._actors
+            ]
+            if not participants:
+                return
+
+            lines = []
+            for entry in new_entries:
+                if entry.speaker_kind is SpeakerKind.SYSTEM:
+                    lines.append(f"（{entry.content}）")
+                else:
+                    lines.append(f"{entry.speaker_name}：{entry.content}")
+            memories = await self._projector.project(
+                scene_id=scene_id,
+                scene_name=await self._scene_name(scene_id),
+                transcript_text="\n".join(lines),
+                participants=participants,
+            )
+            for memory in memories:
+                agent = self._actors.get(memory.actor_id)
+                if agent is None:
+                    continue
+                try:
+                    await agent.semantic_memory.add_async(
+                        content=memory.summary,
+                        importance=memory.importance,
+                        emotional_valence=memory.emotional_valence,
+                        topic_name=memory.topic_name or None,
+                    )
+                except Exception as error:
+                    logger.warning(f"[World] 记忆投影写入失败 {memory.actor_id}: {error}")
+        except Exception as error:
+            logger.warning(f"[World] 记忆投影失败（不阻塞对话）: {error}")

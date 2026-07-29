@@ -4,14 +4,16 @@
 WorldStage 管理角色在场位置，SharedTranscript 承载全场景可见的共享剧本，
 GensokyoWorld 作为对话主循环驱动整台戏。
 
-当前已落地数据层/持久化（阶段 2）、Director 选角（阶段 4）与
-GensokyoWorld 主类/状态机（阶段 5）；记忆投影（阶段 6）、DialogueLoop 抽象（阶段 7）、
-持久化恢复（阶段 8）与 Runtime/Console 接入（阶段 9）在后续阶段接入。
+当前已落地数据层/持久化（阶段 2）、Director 选角（阶段 4）、
+GensokyoWorld 主类/状态机（阶段 5）与私有记忆投影（阶段 6）；
+DialogueLoop 抽象（阶段 7）、持久化恢复（阶段 8）与 Runtime/Console 接入（阶段 9）
+在后续阶段接入。
 """
 
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .memory_paths import build_world_memory_root
+from .memory_projector import PerspectiveMemory, WorldMemoryProjector
 from .persistence import WorldPersistence, WorldPersistenceError
 from .stage import WorldStage
 from .transcript import SharedTranscript
@@ -42,11 +44,13 @@ __all__ = [
     "DirectorDecision",
     "DirectorPhase",
     "GensokyoWorld",
+    "PerspectiveMemory",
     "SpeakerKind",
     "TranscriptEntry",
     "WorldActorTurnPayload",
     "WorldAssemblyError",
     "WorldLoadResult",
+    "WorldMemoryProjector",
     "WorldPersistence",
     "WorldPersistenceDiagnostic",
     "WorldPersistenceError",

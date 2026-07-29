@@ -168,6 +168,8 @@ def _make_config(
             ],
             director=WorldDirectorConfig(max_auto_turns=4, max_same_actor_turns=2),
             persistence=WorldPersistenceConfig(save_path=Path(tmp) / "worlds"),
+            # 投影在 test_world_projector.py 专门覆盖；这里停用避免抢占导演脚本
+            project_perspective_memories=False,
         ),
     )
 

@@ -326,6 +326,13 @@ Director 复用共享 `ModelClient.chat()` 和现有 ThinkEngine 的 JSON schema
 
 ## 6. 共享剧本与私有记忆数据流
 
+> ✅ **状态：私有记忆投影已实现（阶段 6）**。定向 6 例（`tests/test_world_projector.py`）+ 全量 `558 passed, 3 subtests passed`，ruff / format / pyright 全绿。
+>
+> 落地要点：
+> - `GensokyoAI/world/memory_projector.py`：`WorldMemoryProjector.project()` 一次批量结构化模型调用（复用 ThinkEngine 的 JSON schema/降级模式，单次调用不重试），为在场角色各生成 `PerspectiveMemory`（summary/importance/emotional_valence/topic_name）；只保留在场角色有效条目（模型幻觉出的不在场者会被校验丢弃）；失败回退**确定性公开事实摘要**（importance 0.3），绝不阻塞用户回复。
+> - World 集成：段落结束（wait_user）即后台 `create_task` 投影；按场景游标只投影新增剧本；参与者 = 本段发言者 ∪ 当前在场角色；逐 Actor 调 `semantic_memory.add_async()`（`topic_name` 走「AI 指定话题」路径，避免话题打分的额外 LLM 调用；单 Actor 失败仅记日志）；`project_perspective_memories=False` 时完全停用；`flush_projections()` 供关机/测试等待落笔，shutdown 先 flush 再保存。
+> - 投影只在用户当前场景进行；场景切换产生的公开过渡事件随下一段一并投影。
+
 ### SharedTranscript
 - 只记录舞台上可被看到/听到的用户与角色正文、公开动作、公开场景事件。
 - 不记录 Director reason、模型 reasoning、ThinkEngine 内心思考、私有记忆工具结果。
@@ -448,7 +455,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 3. **Actor bridge**：world-turn 调用、trigger 不入私有 memory、tool continuation 保留 world contexts。
 4. **Director 与主状态机**：✅ Director（阶段 4）+ ✅ 主状态机/开场/用户回合（阶段 5，见 §5 状态标注）。
 5. **场景联动**：✅ 已完成（阶段 5）：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤 + 公开过渡事件。
-6. **私有记忆投影**：各视角摘要批量生成与后台写入。
+6. **私有记忆投影**：✅ 已完成（阶段 6）：各视角摘要批量生成与后台写入，见 §6 状态标注。
 7. **主循环主动定时器**：提取 DialogueLoop 抽象；单角色由 Agent 持有 timer，World 模式关闭 Actor timer 并由 World 唯一持有，复用 World turn loop。
 8. **持久化恢复**：world bundle + actor session 关联 + export/delete/security。
 9. **Runtime / WebSocket / Console**：world.* RPC、流式 actor 事件、前端命令。

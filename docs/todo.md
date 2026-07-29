@@ -5,12 +5,12 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 已完成、已提交（最新 `a5740e5` 深度审查修复批）；阶段 5（GensokyoWorld 主类与状态机）已完成、已验证全绿、尚未提交**。下一步从 **阶段 6** 继续。
+多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 已完成、已提交（最新 `2bd254d`）；阶段 6（私有记忆投影）已完成、已验证全绿、尚未提交**。下一步从 **阶段 7** 继续。
 
 - 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`552 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
+- 当前测试：`558 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
 - 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
-- **阶段 6 开工前必读 §5.6**：全项目深度审查的已修清单与各阶段遗留任务都在那里（阶段 5 的 3 条装配期任务已全部落地）。
+- **阶段 7 开工前必读 §5.6**：定时器的两条审查发现（持锁跨生成、已触发不可打断）归这一阶段处理；§7.3 对话欲累积与该阶段一并实施（见计划 §7.3 与 §5.5 动机权重笔记）。
 
 ---
 
@@ -82,8 +82,8 @@
 - **✅ 3 — Actor 的 world-turn 桥接**：`Agent.send_world_turn(_stream)`；trigger 文本默认不入私有 working memory（`record_in_working_memory=False`）；事件链全程透传 `system_contexts`/`world_turn`（修复旧的静默丢弃）；`MessageBuilder.build_continuation()` 保留本轮 world/system contexts；顺带修复流式尾部 chunk 丢失。定向 5 例 + 全量 463 passed 全绿，未提交。
 - **✅ 4 — Director**：`world/director.py`，复用共享 `ModelClient.chat()` + ThinkEngine 的 JSON schema/降级模式。`DirectorContext` 快照输入；硬熔断（空候选/`max_auto_turns`）不调模型；`switch` 目标严格校验在场/非当前/非用户、`continue` 校验在场与 `max_same_actor_turns`，非法按 `fallback_action` 降级；解析失败重试一次后 → wait_user；prompt 显式告知被禁动作；每次决策发布 `WORLD_DIRECTOR_DECISION` 事件。定向 25 例 + 全量 518 passed 全绿，未提交。
 - **✅ 5 — GensokyoWorld 主类与状态机**：`world/world.py`（create 装配：共享 ModelClient 绑 World bus、Actor 独立 Agent + 世界记忆根、净化名碰撞硬报错；初始舞台优先级链 + 合成场景兜底）、`world/events.py`（载荷类型，事件名对齐 §8.1）。开场（protagonist 角色主动开场 / `__user__` 等用户）、用户回合导演调度循环（turn lock + 熔断）、场景切换联动 WorldStage + 用户原子跟随 + 公开过渡事件。Actor 侧新增 `setup_signal_handlers=False` / `manage_initiative_timer=False`。**连带修复**：world-turn 触发文本以临时 user 消息注入生成与 continuation（此前根本不到达模型）。定向 10+1 例 + 全量 552 passed 全绿，未提交。
-- **⏳ 6 — 私有记忆投影**（下一步）：`WorldMemoryProjector`，段落结束批量为在场角色各写各视角，失败降级不阻塞（§5.6 已注明：`add_async` 调用方须自捕获异常；topics.json 已原子写）。
-- **⏳ 7 — DialogueLoop 抽象**（去重关键）：`core/dialogue_loop.py` Protocol；`initiative_timer.py` 提取纯调度器依赖回调；`_impl.py` 单角色适配器 + `manage_initiative_timer: bool=True`（World Actor 设 false）；`world/initiative.py` World 主循环计划/触发。
+- **✅ 6 — 私有记忆投影**：`world/memory_projector.py`（`WorldMemoryProjector` 一次批量结构化调用生成各在场角色 `PerspectiveMemory`，校验丢弃不在场者，失败回退确定性公开摘要）；World 段落结束后台投影（按场景游标只投新增、参与者=发言者∪在场、逐 Actor `add_async` 自捕获、config 可停用、shutdown 先 flush）。定向 6 例 + 全量 558 passed 全绿，未提交。
+- **⏳ 7 — DialogueLoop 抽象**（下一步，去重关键）：`core/dialogue_loop.py` Protocol；`initiative_timer.py` 提取纯调度器依赖回调；`_impl.py` 单角色适配器 + `manage_initiative_timer: bool=True`（World Actor 设 false，阶段 5 已先行落地）；`world/initiative.py` World 主循环计划/触发。**§7.3 对话欲累积随本阶段一并实施**；§5.6 定时器两条审查发现（持锁跨生成、已触发不可打断）一并修。
 - **⏳ 8 — 持久化恢复**：world bundle + actor session 关联 + export/delete/security。
 - **⏳ 9 — Runtime / WebSocket / Console**：`world.*` RPC（init/start/send_message[_stream]/state/roster/transcript/move/session.*/shutdown）、流式 actor 事件、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`。`RuntimeState` 加 `world: GensokyoWorld | None`。
 - **⏳ 10 — 文档与完整验收**：README 中英、QUICKSTART、runtime_api、changelog/version、草案状态。
@@ -186,11 +186,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 5 完成）
+## 8. 未提交改动清单（截至阶段 6 完成）
 
-阶段 5 已改（M）：`GensokyoAI/core/agent/{_impl,message_builder,response_handler}.py`（manage_initiative_timer 开关 + world-turn 临时触发注入）、`GensokyoAI/core/events.py`（+7 个 world.* 事件）、`GensokyoAI/world/{types,__init__}.py`、`tests/test_world_turn_bridge.py`（+临时触发回归 1 例）、`docs/{todo,gsk-ai-multi-character}.md`
-阶段 5 新增（??）：`GensokyoAI/world/{world,events}.py`、`tests/test_world_main.py`
+阶段 6 已改（M）：`GensokyoAI/world/{world,__init__}.py`（投影集成 + 导出）、`tests/test_world_main.py`（停用投影避免抢占导演脚本）、`docs/{todo,gsk-ai-multi-character}.md`
+阶段 6 新增（??）：`GensokyoAI/world/memory_projector.py`、`tests/test_world_projector.py`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(world): GensokyoWorld 主类与对话主循环状态机（阶段 5）`
+`feat(world): 私有记忆投影 WorldMemoryProjector（阶段 6）`
 
