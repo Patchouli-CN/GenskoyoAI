@@ -348,6 +348,17 @@ Director 复用共享 `ModelClient.chat()` 和现有 ThinkEngine 的 JSON schema
 
 ## 7. 主动定时器属于“对话主循环”
 
+> ✅ **状态：已实现（阶段 7）**。定向 22 例（`tests/test_world_initiative.py` 10 + `tests/test_drive_accumulator.py` 12）+ 全量 `579 passed, 3 subtests passed`，ruff / format / pyright 全绿。
+>
+> 落地要点：
+> - `core/dialogue_loop.py`：`DialogueLoop` Protocol + `InitiativePlan`（只存意图摘要，不存话术）。
+> - `core/initiative_scheduler.py`：纯调度器（替换式计划、代际守卫、fire 时效校验、事件发布），编排层共享抽象，不含任何 LLM/角色逻辑。
+> - `world/initiative.py`：World 主循环——段落结束统一做一次世界级规划（一次 LLM），全世界只有一个定时器；到点持回合锁后由 Director phase=initiative 基于**触发当下**的场景与在场角色选角，无人适合则放弃；用户发言取消旧计划并在该轮结束后重规划。
+> - **§7.3 对话欲（按用户 2026-07-29 决策实现）**：短期思考接入四维动机评估——`ThinkEngine.decide_drive_initiative()` 一次 LLM 同时输出四维动机画像与调度决策（注入当前对话欲/心情状态，动机四维回灌累积器）；`core/agent/drive_accumulator.py` 纯算术累积（每轮基础增量 + 动机增益 + 情感尖峰 + 场景匹配，沉默低权重），心情非对称半衰期衰减（正快负慢），发言后泄压，`session.metadata["initiative_drive"]` 持久化。`initiative_timer.drive_enabled` 开启，默认关。
+> - **强制 fallback 链已删除**（用户 2026-07-29 决策）：`fallback_on_no_schedule` 等 4 个配置键从 schema 移除；旧配置键由 loader 静默丢弃 + validator `DEPRECATED_FIELDS` 迁移警告（不报错）；AI 决定不发言即不发言。事件 payload 移除 `fallback_on_no_schedule`/`is_fallback`，`source` 新增 `"drive"`。
+> - **审查修复**（§5.6 定时器两条）：`trigger()` 不再持锁跨整个 LLM 生成；触发与回合生成经 `_request_semaphore` 互斥 + fire 时效校验，中途到点不再并发生成写乱私历。
+> - World 对话欲化（世界级 plan 换 drive）留作后续评估项；当前 World 规划已是每段一次而非每轮一次，成本可接受。
+
 ### 7.1 抽象边界
 
 新增对话主循环协议（建议 `GensokyoAI/core/dialogue_loop.py`）：
@@ -456,7 +467,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 4. **Director 与主状态机**：✅ Director（阶段 4）+ ✅ 主状态机/开场/用户回合（阶段 5，见 §5 状态标注）。
 5. **场景联动**：✅ 已完成（阶段 5）：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤 + 公开过渡事件。
 6. **私有记忆投影**：✅ 已完成（阶段 6）：各视角摘要批量生成与后台写入，见 §6 状态标注。
-7. **主循环主动定时器**：提取 DialogueLoop 抽象；单角色由 Agent 持有 timer，World 模式关闭 Actor timer 并由 World 唯一持有，复用 World turn loop。
+7. **主循环主动定时器**：✅ 已完成（阶段 7）：DialogueLoop 协议、纯调度器、World 主循环计划/触发、§7.3 对话欲（四维动机接入短期思考）、强制 fallback 链删除，见 §7 状态标注。
 8. **持久化恢复**：world bundle + actor session 关联 + export/delete/security。
 9. **Runtime / WebSocket / Console**：world.* RPC、流式 actor 事件、前端命令。
 10. **文档与完整验收**：更新草案状态、README 中英、QUICKSTART、runtime_api、default/world example、changelog/version。

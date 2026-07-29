@@ -213,7 +213,16 @@ class ConfigLoader(ConfigMerger):
             self._provided_fields[id(config.think_engine)] = set(think_engine_data.keys())
 
         if "initiative_timer" in data:
-            initiative_timer_data = data["initiative_timer"] or {}
+            initiative_timer_data = dict(data["initiative_timer"] or {})
+            # 已删除的强制 fallback 链配置键：读取时丢弃（校验层另有迁移警告），
+            # 避免旧配置在 Struct 构造时报未知参数
+            for removed_key in (
+                "fallback_on_no_schedule",
+                "fallback_delay_seconds",
+                "fallback_summary",
+                "fallback_reason",
+            ):
+                initiative_timer_data.pop(removed_key, None)
             config.initiative_timer = InitiativeTimerConfig(**initiative_timer_data)
             self._provided_fields[id(config.initiative_timer)] = set(initiative_timer_data.keys())
 

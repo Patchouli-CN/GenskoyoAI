@@ -62,6 +62,15 @@ class SemanticMemoryManager:
 
         return None
 
+    def recent_average_valence(self, limit: int = 3) -> float:
+        """最近更新话题的平均情感效价（对话欲信号，§7.3）；无话题或禁用返回 0。"""
+        if not self._enabled:
+            return 0.0
+        topics = self._store.recent_topics(limit)
+        if not topics:
+            return 0.0
+        return sum(topic.emotional_valence for topic in topics) / len(topics)
+
     def get_relevant_context(self, query: str, top_k: int = 3) -> list[str]:
         """获取相关上下文（同步，兼容旧接口）"""
         if not self._enabled:

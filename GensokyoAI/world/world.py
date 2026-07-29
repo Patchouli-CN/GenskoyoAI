@@ -33,6 +33,7 @@ from ..utils.logger import logger
 from ..utils.path_security import sanitize_path_id
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
+from .initiative import WorldInitiativeLoop
 from .memory_paths import build_world_memory_root
 from .memory_projector import WorldMemoryProjector
 from .persistence import WorldPersistence
@@ -127,6 +128,11 @@ class GensokyoWorld:
         )
         self._projection_cursors: dict[str, int] = {}
         self._projection_tasks: set[asyncio.Task] = set()
+
+        # World 对话主循环的主动循环：整个世界只有一个主动定时器，
+        # 段落结束统一规划，到点由 Director initiative 选角（阶段 7）。
+        # 由 create() 在 initiative_timer.enabled 时安装。
+        self._initiative_loop: WorldInitiativeLoop | None = None
 
     # ==================== 装配 ====================
 
@@ -242,6 +248,9 @@ class GensokyoWorld:
             agent.event_bus.subscribe(
                 SystemEvent.SCENE_SWITCHED, world._make_scene_bridge(actor_id)
             )
+        # World 对话主循环的主动定时器（Actor 不各自持有定时器）
+        if config.initiative_timer.enabled:
+            world._initiative_loop = WorldInitiativeLoop(world)
         logger.info(
             f"🌸 [World] 装配完成: world={world_config.id}, "
             f"actors={list(actors)}, protagonist={protagonist}"
@@ -395,7 +404,9 @@ class GensokyoWorld:
             return
         self._shutdown = True
         self._publish(SystemEvent.WORLD_SHUTDOWN, {"world_id": self._world_config.id})
-        # 先等未完成的记忆投影落笔，再保存存档、关停 Actor
+        # 先停掉世界主动循环，再等未完成的记忆投影落笔，最后保存存档、关停 Actor
+        if self._initiative_loop is not None:
+            await self._initiative_loop.shutdown()
         await self.flush_projections()
         await self._save_record()
         for actor_id, agent in self._actors.items():
@@ -425,6 +436,8 @@ class GensokyoWorld:
     async def send_message_stream(self, user_input: str) -> AsyncIterator[dict[str, Any]]:
         """用户发言（流式）：产出 world.actor.* / world.waiting_user 事件。"""
         async with self._turn_lock:
+            # 用户消息优先于世界主动：取消/作废尚未触发的世界主动意图
+            await self._cancel_initiative("user_message")
             self._waiting_for_user = False
             user_scene = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
             self._transcript.add(
@@ -454,9 +467,12 @@ class GensokyoWorld:
         current: str | None,
         auto_count: int,
         same_count: int,
+        initiative_summary: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """自动表演段：导演决策 → 演员回合 → 再决策，直到 wait_user/熔断。"""
-        decision = await self._decide(phase, current, auto_count, same_count)
+        decision = await self._decide(
+            phase, current, auto_count, same_count, initiative_summary=initiative_summary
+        )
         turn_index = auto_count
         while decision.action is not DirectorAction.WAIT_USER:
             speaker = (
@@ -476,12 +492,18 @@ class GensokyoWorld:
             turn_index = auto_count
             trigger_text = _NEXT_TURN_CUE
             decision = await self._decide(
-                DirectorPhase.AFTER_ACTOR, current, auto_count, same_count
+                DirectorPhase.AFTER_ACTOR,
+                current,
+                auto_count,
+                same_count,
+                initiative_summary=initiative_summary,
             )
         self._current_actor_id = current
         self._waiting_for_user = True
         # 一段自动表演结束：后台投影各在场角色的私有视角记忆，不阻塞用户
         self._schedule_projection()
+        # World 主循环统一规划下一次世界主动（Actor 不各自持有定时器）
+        await self._plan_initiative_after_segment()
         await self._publish_waiting_user()
         yield {"type": STREAM_WAITING_USER}
 
@@ -553,7 +575,13 @@ class GensokyoWorld:
         }
 
     async def _decide(
-        self, phase: DirectorPhase, current: str | None, auto_count: int, same_count: int
+        self,
+        phase: DirectorPhase,
+        current: str | None,
+        auto_count: int,
+        same_count: int,
+        *,
+        initiative_summary: str = "",
     ):
         """现算同场候选并调用导演（每次决策前重算，绝不选中已离场角色）。"""
         user_scene = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
@@ -571,6 +599,7 @@ class GensokyoWorld:
             scene_description=await self._render_scene(user_scene),
             auto_turn_count=auto_count,
             same_actor_turn_count=same_count,
+            initiative_summary=initiative_summary,
         )
         return await self._director.decide(context)
 
@@ -727,6 +756,30 @@ class GensokyoWorld:
         )
 
     # ==================== 内部工具 ====================
+
+    async def _run_initiative_turn(self, plan, *, cue: str) -> None:
+        """世界主动触发：由 Director initiative 从当下在场角色中选角开口。"""
+        self._waiting_for_user = False
+        async for _event in self._dialogue_events(
+            phase=DirectorPhase.INITIATIVE,
+            trigger_text=cue,
+            current=self._current_actor_id,
+            auto_count=0,
+            same_count=0,
+            initiative_summary=plan.summary,
+        ):
+            pass  # 主动表演不挂流式输出；world.* 事件已广播到 World 总线
+
+    async def _plan_initiative_after_segment(self) -> None:
+        """段落结束后让 World 主循环统一规划下一次世界主动。"""
+        if self._initiative_loop is None or self._shutdown:
+            return
+        await self._initiative_loop.plan_after_segment()
+
+    async def _cancel_initiative(self, reason: str) -> None:
+        """取消当前世界主动计划（用户发言/关机等）。"""
+        if self._initiative_loop is not None:
+            await self._initiative_loop.cancel(reason)
 
     async def _render_scene(self, scene_id: str) -> str:
         """渲染场景描述（场景库关闭或合成场景时为空）。"""

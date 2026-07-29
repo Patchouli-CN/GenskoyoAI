@@ -387,7 +387,7 @@ The initiative timer allows the AI to decide after each reply whether to store a
 
 The hesitation mechanism is a delayed re-judgment chain used after the AI decides not to speak: when enabled, if the AI first judges that it does not need to proactively speak, it waits for a while and re-judges, up to `initiative_timer.hesitation_max_rounds` rounds. This mechanism is disabled by default to avoid unexpected silent retries; frontend and CLI can manually turn it on/off, and by default write it back to the config file.
 
-`initiative_timer.fallback_on_no_schedule` is enabled by default to correct the problem of the model being overly inclined to "not set a timer," causing the character to no longer proactively speak for a long time. When the model returns no schedule, the summary is empty, or the decision JSON parsing fails, and no hesitation re-judgment is entered or hesitation rounds are exhausted, the Runtime creates a natural reconsideration timer with `source: "fallback"`. The fallback timer still only saves `pending_summary`; when the time is reached, it regenerates a proactive message rather than directly sending a fixed template.
+When the AI decides not to speak, the system respects that decision—the old `initiative_timer.fallback_on_no_schedule` forced fallback chain has been removed (legacy config keys only produce a migration warning and no longer take effect). More lifelike proactivity is provided by the drive model: with `initiative_timer.drive_enabled` enabled, the character's drive and mood accumulate with conversation and silence, and short-term thinking makes one intelligent scheduling decision within the context of its "internal state + four-dimension motivation evaluation"; if the AI decides not to speak, it stays silent—no forcing.
 
 Both `agent.send_message` return results and `agent.send_message_stream` `finish` events include an `initiative_timer` field; when there is no current timer, they return an object containing hesitation status, e.g. `{ "timer": null, "hesitation": { "enabled": false } }`.
 
@@ -448,7 +448,7 @@ Return fields include:
 - `delay_seconds`: hesitation re-judgment delay, either integer seconds or `auto`.
 - `config_path`: path of the configuration file written back; returned only when the setting interface is persisted.
 
-Subscribable events include: `initiative_timer.created`, `initiative_timer.updated`, `initiative_timer.cancelled`, `initiative_timer.triggered`, `initiative_timer.discarded`. Event payloads contain `timer_id`, `generation`, `status`, `source`, `due_at`, `delay_seconds`, `reason`, `hesitation_enabled`, `hesitation_round`, `hesitation_max`, `fallback_on_no_schedule`, `is_fallback`, and optional `pending_summary`. `source: "ai"` means the model actively set it, `source: "reconsider"` means a hesitation reconsideration timer, and `source: "fallback"` means a system fallback natural reconsideration timer. `initiative_timer.triggered` only means the timer was effectively triggered; the actual proactive message sent is still exposed through `message.sent` / proactive message events with `content`.
+Subscribable events include: `initiative_timer.created`, `initiative_timer.updated`, `initiative_timer.cancelled`, `initiative_timer.triggered`, `initiative_timer.discarded`. Event payloads contain `timer_id`, `generation`, `status`, `source`, `due_at`, `delay_seconds`, `reason`, `hesitation_enabled`, `hesitation_round`, `hesitation_max`, and optional `pending_summary`. `source: "ai"` means the model actively set it, `source: "reconsider"` means a hesitation reconsideration timer, and `source: "drive"` means scheduled via the drive model. `initiative_timer.triggered` only means the timer was effectively triggered; the actual proactive message sent is still exposed through `message.sent` / proactive message events with `content`.
 
 Related configuration section:
 
@@ -466,13 +466,10 @@ initiative_timer:
   hesitation_enabled: false
   hesitation_max_rounds: 2
   hesitation_delay_seconds: auto
-  fallback_on_no_schedule: true
-  fallback_delay_seconds: 300
-  fallback_summary: "Naturally reconsider the previous conversation later, and proactively add a sentence if there is still lingering feeling or a new thought."
-  fallback_reason: "AI did not actively set a timer; the system schedules a natural reconsideration to maintain character proactivity"
+  drive_enabled: false  # drive model (§7.3); see default.yaml for drive_* and mood_half_life_* parameters
 ```
 
-`allow_frontend_edit_summary` is the currently recommended field name; the old config `allow_frontend_edit_message` is still read as a compatibility alias, but clients and config files are recommended to gradually migrate to the new field name. If you need to restore the old behavior where "no timer from model means no subsequent proactive timer," explicitly set `fallback_on_no_schedule: false`.
+`allow_frontend_edit_summary` is the currently recommended field name; the old config `allow_frontend_edit_message` is still read as a compatibility alias, but clients and config files are recommended to gradually migrate to the new field name. The old `fallback_*` forced fallback config keys have been removed; legacy keys in existing configs only receive a migration warning and no longer take effect.
 
 The built-in console CLI also provides corresponding interactive entry points:
 

@@ -29,6 +29,15 @@ from .schema_versions import CONFIG_SCHEMA_VERSION
 
 DiagnosticSeverity = Literal["error", "warning"]
 
+# 已删除的 initiative_timer 强制 fallback 链配置键：
+# 旧配置仍被接受（不报未知字段错误），由 DEPRECATED_FIELDS 给出迁移警告。
+_REMOVED_INITIATIVE_FALLBACK_KEYS = {
+    "fallback_on_no_schedule",
+    "fallback_delay_seconds",
+    "fallback_summary",
+    "fallback_reason",
+}
+
 
 class ConfigDiagnostic(Struct, frozen=True):
     """单条配置诊断。"""
@@ -123,7 +132,24 @@ class ConfigValidator:
         "gemini",
     }
     KNOWN_PROVIDERS = {*PROVIDERS_REQUIRING_API_KEY, "ollama"}
-    DEPRECATED_FIELDS: dict[str, tuple[str, str]] = {}
+    DEPRECATED_FIELDS: dict[str, tuple[str, str]] = {
+        "initiative_timer.fallback_on_no_schedule": (
+            "initiative_timer.drive_enabled",
+            "强制兜底链已删除：AI 决定不发言时不再强行安排。",
+        ),
+        "initiative_timer.fallback_delay_seconds": (
+            "initiative_timer.drive_enabled",
+            "强制兜底链已删除：AI 决定不发言时不再强行安排。",
+        ),
+        "initiative_timer.fallback_summary": (
+            "initiative_timer.drive_enabled",
+            "强制兜底链已删除：AI 决定不发言时不再强行安排。",
+        ),
+        "initiative_timer.fallback_reason": (
+            "initiative_timer.drive_enabled",
+            "强制兜底链已删除：AI 决定不发言时不再强行安排。",
+        ),
+    }
     PROVIDER_FIELD_MATRIX: dict[str, dict[str, set[str]]] = {
         "ollama": {
             "unsupported": {
@@ -1154,7 +1180,10 @@ class ConfigValidator:
         self._validate_unknown_fields(
             "initiative_timer",
             data,
-            self._struct_field_names(InitiativeTimerConfig),
+            self._struct_field_names(InitiativeTimerConfig)
+            # 已删除的强制 fallback 链配置键：不作为未知字段报错，
+            # 由 DEPRECATED_FIELDS 给出迁移警告（见类常量）
+            | _REMOVED_INITIATIVE_FALLBACK_KEYS,
             diagnostics,
         )
         self._validate_numeric_range(
@@ -1197,29 +1226,12 @@ class ConfigValidator:
         )
         self._validate_hesitation_delay_seconds(data.get("hesitation_delay_seconds"), diagnostics)
         self._validate_numeric_range(
-            "initiative_timer.fallback_delay_seconds",
-            data.get("fallback_delay_seconds"),
-            diagnostics,
-            minimum=1,
-        )
-        self._validate_numeric_range(
             "initiative_timer.max_initiative_times",
             data.get("max_initiative_times"),
             diagnostics,
             minimum=1,
             maximum=100,
         )
-        for field_name in ("fallback_summary", "fallback_reason"):
-            value = data.get(field_name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                diagnostics.append(
-                    self._error(
-                        f"initiative_timer.{field_name}",
-                        f"{field_name} must be a non-empty string",
-                        "主动定时器兜底摘要与理由必须是非空字符串。",
-                        code="config.initiative_timer.fallback_text_invalid",
-                    )
-                )
         min_delay = data.get("min_delay_seconds")
         max_delay = data.get("max_delay_seconds")
         if (

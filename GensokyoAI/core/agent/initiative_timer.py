@@ -66,6 +66,9 @@ class InitiativeTimerManager:
         self._generation = 0
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        # 已触发但未完成的回调 id：用于回合互斥后的时效校验——等待期间用户
+        # 发言/新计划会让本次触发失效，回调凭此放弃而不是补一条过期主动消息。
+        self._active_trigger_id: str | None = None
         self._last_assistant_response: str | None = None  # 犹豫重试时复用
         self._pace_stamps: list[datetime] = []  # 最近几次回复完成时间，用于 auto 延迟
         self._consecutive_initiative_count = 0  # 用户未回复期间已连续主动发言次数
@@ -150,18 +153,61 @@ class InitiativeTimerManager:
             return self._payload(state)
 
     # ------------------------------------------------------------------
+    # 对话欲直接调度（§7.3：跳过 LLM 决策/犹豫/兜底）
+    # ------------------------------------------------------------------
+
+    async def schedule_intent(
+        self,
+        *,
+        summary: str,
+        delay_seconds: int,
+        reason: str = "",
+        source: str = "drive",
+    ) -> dict[str, Any] | None:
+        """直接按给定摘要与延迟调度主动定时器。
+
+        供对话欲路径使用：意图与时机已由累积器决定，不再调用 ThinkEngine
+        决策、不进入犹豫链与兜底定时器（不违背角色意愿强行安排）。
+        """
+        if not self.config.enabled or not summary.strip():
+            return None
+        if self._has_reached_initiative_limit():
+            logger.debug("[InitiativeTimer] 已达连续主动上限，对话欲调度跳过")
+            return None
+
+        summary = self._trim_summary(summary)
+        async with self._lock:
+            await self._discard_locked(reason="replaced_by_drive_plan", source=source)
+            state = self._create_state(
+                delay_seconds=self._clamp_delay(delay_seconds),
+                pending_summary=summary,
+                reason=reason,
+                source=source,
+                user_modified=False,
+                hesitation_round=0,
+            )
+            self._state = state
+            self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
+            self._publish(SystemEvent.INITIATIVE_TIMER_CREATED, state)
+            logger.info(
+                f"[InitiativeTimer] 已创建对话欲定时器 {state.timer_id}, "
+                f"延迟: {state.delay_seconds}s, 摘要: {summary[:40]}..."
+            )
+            return self._payload(state)
+
+    # ------------------------------------------------------------------
     # 犹豫重试
     # ------------------------------------------------------------------
 
     async def _handle_no_schedule(
         self, *, reason: str, round_num: int = 1
     ) -> dict[str, Any] | None:
-        """AI 未设置定时器时，先尝试犹豫链，失败后进入兜底定时器。"""
+        """AI 未设置定时器：尊重决定，仅在开启犹豫时进入犹豫重试链。
+
+        没有兜底强制安排——AI 决定不发言就是不发言（强制 fallback 链已删除）。
+        """
         logger.debug(f"[InitiativeTimer] 处理不发言情况，原因: {reason}, 犹豫轮次: {round_num}")
-        payload = await self._try_hesitate(round_num)
-        if payload is not None:
-            return payload
-        return await self._try_schedule_fallback(reason=reason)
+        return await self._try_hesitate(round_num)
 
     async def _try_hesitate(self, round_num: int) -> dict[str, Any] | None:
         """AI 决定不发言时，按开关决定是否进入犹豫重试链。"""
@@ -181,35 +227,6 @@ class InitiativeTimerManager:
                 f"{self.config.hesitation_delay_seconds} 秒后重新决策"
             )
             return payload
-
-    async def _try_schedule_fallback(self, *, reason: str) -> dict[str, Any] | None:
-        """创建默认兜底自然再考虑定时器，避免不设定定时器导致长期沉默。"""
-        if not self.config.fallback_on_no_schedule:
-            logger.debug("[InitiativeTimer] 未开启兜底定时器，直接放弃")
-            return None
-        summary = self._trim_summary(str(self.config.fallback_summary or "").strip())
-        if not summary:
-            logger.debug("[InitiativeTimer] 兜底摘要为空，不创建兜底定时器")
-            return None
-        fallback_reason = str(self.config.fallback_reason or "").strip() or reason
-        async with self._lock:
-            await self._discard_locked(reason="replaced_by_fallback", source="fallback")
-            state = self._create_state(
-                delay_seconds=self._clamp_delay(self.config.fallback_delay_seconds),
-                pending_summary=summary,
-                reason=fallback_reason,
-                source="fallback",
-                user_modified=False,
-                hesitation_round=0,
-            )
-            self._state = state
-            self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
-            self._publish(SystemEvent.INITIATIVE_TIMER_CREATED, state)
-            logger.info(
-                f"[InitiativeTimer] 已创建兜底定时器 {state.timer_id}, "
-                f"原因: {fallback_reason}, 延迟: {state.delay_seconds}s"
-            )
-            return self._payload(state)
 
     def _resolve_hesitation_delay(self) -> int:
         """解析犹豫延迟：若为 'auto' 则根据对话节奏动态计算，否则用配置值。"""
@@ -371,6 +388,7 @@ class InitiativeTimerManager:
             payload = self._payload(state)
             self._state = None
             self._cancel_task()
+            self._active_trigger_id = None
             self._publish(
                 SystemEvent.INITIATIVE_TIMER_CANCELLED,
                 state,
@@ -436,11 +454,16 @@ class InitiativeTimerManager:
             return self._payload(state)
 
     async def trigger(self, *, timer_id: str | None = None, source: str = "user") -> dict[str, Any]:
-        """立即触发当前积存主动摘要。"""
+        """立即触发当前积存主动摘要。
+
+        状态变更在锁内、回调在锁外——trigger_handler 可能是一次完整 LLM
+        生成，持锁执行会阻塞所有 discard/update/cancel（用户输入卡一整轮）。
+        """
         logger.debug(f"[InitiativeTimer] 外部请求立即触发定时器，来源: {source}")
         async with self._lock:
             state = self._require_current(timer_id)
-            return await self._trigger_locked(state, source=source)
+            trigger_args = self._prepare_trigger_locked(state, source=source)
+        return await self._execute_trigger_handler(trigger_args)
 
     async def shutdown(self) -> None:
         """关闭并取消后台定时任务。"""
@@ -543,6 +566,10 @@ class InitiativeTimerManager:
         except Exception as error:
             logger.error(f"主动定时器任务异常: {error}")
 
+    def is_active_trigger(self, timer_id: str) -> bool:
+        """判断指定触发是否仍未被取代（供回调在回合互斥后做时效校验）。"""
+        return self._active_trigger_id is not None and self._active_trigger_id == timer_id
+
     def _prepare_trigger_locked(
         self, state: InitiativeTimerState, *, source: str
     ) -> dict[str, Any]:
@@ -554,6 +581,7 @@ class InitiativeTimerManager:
         payload = self._payload(state)
         self._state = None
         self._cancel_task()
+        self._active_trigger_id = state.timer_id
         self._publish(
             SystemEvent.INITIATIVE_TIMER_TRIGGERED,
             state,
@@ -576,9 +604,14 @@ class InitiativeTimerManager:
             f"[InitiativeTimer] 执行 trigger_handler, timer_id={trigger_args.get('timer_id')}"
         )
         result: dict[str, Any] | None = None
-        if self.trigger_handler is not None:
-            result = await self.trigger_handler(trigger_args)
-        logger.debug(f"[InitiativeTimer] trigger_handler 返回: {result}")
+        try:
+            if self.trigger_handler is not None:
+                result = await self.trigger_handler(trigger_args)
+            logger.debug(f"[InitiativeTimer] trigger_handler 返回: {result}")
+        finally:
+            # 回调完成即结束本次触发的有效期；若期间已被取代则不覆盖新状态
+            if self._active_trigger_id == trigger_args.get("timer_id"):
+                self._active_trigger_id = None
         return {
             "triggered": True,
             "timer_id": trigger_args.get("timer_id", ""),
@@ -586,11 +619,6 @@ class InitiativeTimerManager:
             "timer": trigger_args.get("timer", {}),
             "result": result,
         }
-
-    async def _trigger_locked(self, state: InitiativeTimerState, *, source: str) -> dict[str, Any]:
-        """立即触发（由 trigger() 调用，已在锁内）。状态变更在锁内，回调在锁外。"""
-        trigger_args = self._prepare_trigger_locked(state, source=source)
-        return await self._execute_trigger_handler(trigger_args)
 
     async def _discard_locked(self, *, reason: str, source: str) -> dict[str, Any] | None:
         state = self._state
@@ -602,6 +630,8 @@ class InitiativeTimerManager:
         payload = self._payload(state)
         self._state = None
         self._cancel_task()
+        # 任何进行中的触发一并失效（用户发言/新计划取代了它）
+        self._active_trigger_id = None
         self._publish(
             SystemEvent.INITIATIVE_TIMER_DISCARDED,
             state,
@@ -645,8 +675,6 @@ class InitiativeTimerManager:
             "hesitation_enabled": self.config.hesitation_enabled,
             "hesitation_round": state.hesitation_round,
             "hesitation_max": self.config.hesitation_max_rounds,
-            "fallback_on_no_schedule": self.config.fallback_on_no_schedule,
-            "is_fallback": state.source == "fallback",
             "editable_fields": ["due_at", "delay_seconds", "pending_summary"]
             if self.config.allow_frontend_edit_summary
             else ["due_at", "delay_seconds"],

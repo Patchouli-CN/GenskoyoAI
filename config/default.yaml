@@ -200,10 +200,18 @@ initiative_timer:
   hesitation_enabled: false
   hesitation_max_rounds: 2
   hesitation_delay_seconds: auto
-  fallback_on_no_schedule: true
-  fallback_delay_seconds: 300
-  fallback_summary: "稍后自然地重新考虑刚才的对话，若仍有余韵或新想法就主动补充一句。"
-  fallback_reason: "AI 未主动设定定时器，系统安排一次自然再考虑以保持角色主动性"
+  # 对话欲累积（§7.3）：开启后短期思考在「对话欲/心情 + 四维动机」上下文中
+  # 做一次 LLM 智能调度；AI 决定不说就不说，没有强制兜底。
+  # 旧的 fallback_on_no_schedule 强制兜底链已删除（旧配置键仅警告迁移）。
+  drive_enabled: false
+  drive_turn_increment: 0.12        # 每轮对话的基础增量
+  drive_motivation_boost: 0.2       # 四维动机 total_drive 增益系数
+  drive_emotion_boost: 0.25         # 情感尖峰增益（×话题效价绝对值，≥0.5 才计）
+  drive_scene_boost: 0.1            # 挂心话题与当前场景匹配时的增益
+  drive_silence_rate_per_minute: 0.01  # 沉默时长累积速率（刻意压低）
+  drive_vent_factor: 0.4            # 主动发言后表达欲泄压保留比例
+  mood_half_life_positive_minutes: 30    # 正面心情半衰期（享乐适应，衰减快）
+  mood_half_life_negative_minutes: 120   # 负面心情半衰期（衰减慢但仍衰减）
 
 # 工具配置
 tool:

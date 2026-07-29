@@ -12,6 +12,7 @@ DialogueLoop 抽象（阶段 7）、持久化恢复（阶段 8）与 Runtime/Con
 
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
+from .initiative import WorldInitiativeLoop
 from .memory_paths import build_world_memory_root
 from .memory_projector import PerspectiveMemory, WorldMemoryProjector
 from .persistence import WorldPersistence, WorldPersistenceError
@@ -49,6 +50,7 @@ __all__ = [
     "TranscriptEntry",
     "WorldActorTurnPayload",
     "WorldAssemblyError",
+    "WorldInitiativeLoop",
     "WorldLoadResult",
     "WorldMemoryProjector",
     "WorldPersistence",

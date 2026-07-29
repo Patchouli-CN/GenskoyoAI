@@ -280,6 +280,15 @@ class TopicAwareStore:
             if 2 <= len(word) <= 20:
                 self._keyword_index[word].add(topic.id)
 
+    def recent_topics(self, limit: int = 3) -> list[Topic]:
+        """按最后更新时间返回最近的话题（新在前），供对话欲等外部信号读取。"""
+        ordered = sorted(
+            self._topics.values(),
+            key=lambda topic: topic.last_updated,
+            reverse=True,
+        )
+        return ordered[:limit]
+
     def _rebuild_indexes(self) -> None:
         self._topic_name_index.clear()
         self._keyword_index.clear()

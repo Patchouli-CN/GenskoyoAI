@@ -17,6 +17,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Any
 
+from msgspec import Struct, field
+
 from ...memory.semantic import SemanticMemoryManager
 from ...memory.types import Topic
 from ...utils.helpers import utc_now
@@ -24,6 +26,7 @@ from ...utils.logger import logger
 from ..config import InitiativeTimerConfig, ThinkEngineConfig
 from ..events import Event, EventBus, SystemEvent
 from .model_client import ModelClient
+from .motivation_evaluator import MotivationProfile
 from .types import ProviderCapability
 
 # 决策 JSON 解析相关（从原 InitiativeTimer 迁移）
@@ -53,6 +56,55 @@ _INITIATIVE_TIMER_RESPONSE_FORMAT: dict[str, Any] = {
         "schema": _INITIATIVE_TIMER_DECISION_SCHEMA,
     },
 }
+
+# 对话欲短期思考（§7.3）：四维动机 + 智能调度的结构化输出
+_DRIVE_INITIATIVE_DECISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "should_schedule": {"type": "boolean"},
+        "delay_seconds": {"type": "integer"},
+        "summary": {"type": "string"},
+        "reason": {"type": "string"},
+        "enthusiasm": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "motivation": {
+            "type": "object",
+            "properties": {
+                "expression_drive": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "emotional_charge": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "relational_need": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "situational_relevance": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+            "required": [
+                "expression_drive",
+                "emotional_charge",
+                "relational_need",
+                "situational_relevance",
+            ],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["should_schedule", "delay_seconds", "summary", "reason", "motivation"],
+    "additionalProperties": False,
+}
+_DRIVE_INITIATIVE_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "drive_initiative_decision",
+        "strict": True,
+        "schema": _DRIVE_INITIATIVE_DECISION_SCHEMA,
+    },
+}
+
+
+class DriveDecision(Struct):
+    """对话欲路径的短期调度决策：四维动机画像 + 主动发言安排。"""
+
+    should_schedule: bool
+    delay_seconds: int
+    summary: str
+    reason: str = ""
+    enthusiasm: float = 0.5
+    motivation: MotivationProfile = field(default_factory=MotivationProfile)
 
 
 class ThinkEngine:
@@ -434,6 +486,177 @@ class ThinkEngine:
         except Exception as error:
             logger.error(f"说话前思考失败: {error}")
             return ""
+
+    # ==================== 对话欲短期思考（§7.3：四维动机 + 智能调度）====================
+
+    async def decide_drive_initiative(
+        self,
+        assistant_response: str,
+        recent_messages: list[dict[str, Any]],
+        *,
+        drive: float,
+        mood: float,
+        min_delay_seconds: int,
+        max_delay_seconds: int,
+        decision_max_tokens: int,
+        decision_temperature: float,
+    ) -> DriveDecision | None:
+        """对话欲路径的短期思考：四维动机评估 + 智能调度，一次 LLM 完成。
+
+        与旧路径 `decide_initiative` 的区别：注入当前对话欲/心情状态，输出附带
+        四维动机画像（回灌累积器）；AI 决定不发言即不发言——没有兜底与强制。
+        """
+        context_text = self._format_context_for_decision(recent_messages, assistant_response)
+
+        system_prompt = f"""你是 {self.character_name}。
+
+现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内部主动发言决定。
+这个决定仍然必须由你以 {self.character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态。
+
+你当前的内在状态（由对话欲模型随时间持续累积）：
+- 对话欲强度：{drive:.2f}（0=完全不想说，越高越想主动开口）
+- 心情效价：{mood:+.2f}（正=愉悦，负=低落）
+
+请判断你是否想在稍后主动补充一句话。要求：
+- 这是内部决策提交，不是用户可见台词；不要把结果写成角色发言、对白、旁白或解释。
+- 没有强制安排：当前上下文确实没有自然、必要、符合角色的补充时，坦诚选择不设置定时器——系统尊重你的决定，不会替你强行安排。
+- 如果设置，只写"稍后主动发言意图的一句话摘要"，不要写完整可发送话术。
+- 摘要只描述到点后要围绕什么思考和表达，真正说出口的话会在触发时重新生成。
+- 延迟秒数必须在 {min_delay_seconds} 到 {max_delay_seconds} 之间。
+- 额外输出一个 0~1 的 enthusiasm（热情度）：越高表示你当前越想主动继续聊，系统会把等待时间按 `delay_seconds * (1 - enthusiasm)` 缩短；如果不确定可填 0.5。
+- 同时用四个维度量化你此刻的动机（各 0~1）：
+  expression_drive（表达欲：思考内容本身催生的表达冲动）、
+  emotional_charge（情感驱动力：情绪是否需要一个出口）、
+  relational_need（关系需求：是否想拉近/回应对方）、
+  situational_relevance（情景相关性：此刻开口是否合时宜）。
+- 只输出一个原始 JSON 对象；不要输出 Markdown 代码块、角色引号、解释文本或任何前后缀。
+"""
+
+        user_prompt = f"""你刚刚回复了用户：
+{assistant_response}
+
+近期对话上下文：
+{context_text}
+
+请根据以上上下文提交决定。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
+
+{{
+  "should_schedule": true/false,
+  "delay_seconds": 120,
+  "summary": "稍后主动发言意图的一句话摘要",
+  "reason": "简短理由",
+  "enthusiasm": 0.5,
+  "motivation": {{
+    "expression_drive": 0.0,
+    "emotional_charge": 0.0,
+    "relational_need": 0.0,
+    "situational_relevance": 0.0
+  }}
+}}
+"""
+
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        logger.trace(
+            f"[ThinkEngine] 对话欲短期思考请求 messages:\n"
+            f"{json.dumps(messages, ensure_ascii=False, indent=2, default=str)}"
+        )
+
+        max_retries = 1
+        for attempt in range(max_retries + 1):
+            try:
+                max_tok = max(decision_max_tokens, 200)
+                options: dict[str, Any] = {
+                    "temperature": decision_temperature,
+                    "num_predict": max_tok,
+                    "max_tokens": max_tok,
+                }
+                if self._supports_structured_output():
+                    options["response_format"] = _DRIVE_INITIATIVE_RESPONSE_FORMAT
+
+                response = await self.model_client.chat(
+                    messages=messages,
+                    options=options,
+                )
+                content = response.message.content
+                text = content.strip() if isinstance(content, str) else ""
+                logger.trace(f"[ThinkEngine] 对话欲短期思考原始响应: {text!r}")
+                decision = self._parse_drive_decision(text)
+                if decision is not None:
+                    logger.debug(
+                        f"[ThinkEngine] 对话欲决策: schedule={decision.should_schedule}, "
+                        f"motivation={decision.motivation.to_prompt_context()}"
+                    )
+                    return decision
+
+                if attempt < max_retries:
+                    logger.warning("对话欲短期思考未返回合法 JSON，准备重试一次")
+                    messages.append({"role": "assistant", "content": text[:1000]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "你上一条回复不是合法的 JSON。请严格按照要求只输出 JSON 对象，"
+                                "不要写成角色台词、对白或解释。请重试。"
+                            ),
+                        }
+                    )
+                    continue
+
+                return None
+            except Exception as error:
+                logger.error(f"对话欲短期思考失败: {error}")
+                return None
+
+        return None
+
+    @staticmethod
+    def _parse_drive_decision(text: str) -> DriveDecision | None:
+        """解析对话欲决策 JSON；motivation 缺失/畸形时按零动机处理。"""
+        match = _JSON_OBJECT_PATTERN.search(text)
+        raw = match.group(0) if match else text
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as error:
+            preview = raw.replace("\r", "\\r").replace("\n", "\\n")[:300]
+            logger.error(f"对话欲决策 JSON 解析失败: {error}; raw={preview!r}")
+            return None
+        if not isinstance(data, dict):
+            return None
+        if "should_schedule" not in data:
+            logger.error(f"对话欲决策缺少 should_schedule: {data!r}")
+            return None
+
+        def _clamp01(value: Any) -> float:
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                return 0.0
+            return max(0.0, min(1.0, float(value)))
+
+        raw_motivation = data.get("motivation")
+        motivation = MotivationProfile()
+        if isinstance(raw_motivation, dict):
+            motivation = MotivationProfile(
+                expression_drive=_clamp01(raw_motivation.get("expression_drive")),
+                emotional_charge=_clamp01(raw_motivation.get("emotional_charge")),
+                relational_need=_clamp01(raw_motivation.get("relational_need")),
+                situational_relevance=_clamp01(raw_motivation.get("situational_relevance")),
+            )
+
+        delay = data.get("delay_seconds")
+        enthusiasm = data.get("enthusiasm")
+        return DriveDecision(
+            should_schedule=bool(data.get("should_schedule")),
+            delay_seconds=delay if isinstance(delay, int) and delay > 0 else 300,
+            summary=str(data.get("summary") or "").strip(),
+            reason=str(data.get("reason") or "").strip(),
+            enthusiasm=max(0.0, min(1.0, float(enthusiasm)))
+            if isinstance(enthusiasm, int | float) and not isinstance(enthusiasm, bool)
+            else 0.5,
+            motivation=motivation,
+        )
 
     # ==================== 辅助方法 ====================
 

@@ -395,7 +395,7 @@ HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Run
 
 犹豫机制用于“AI 决定不发言”后的延迟复判链：开启后，AI 首次判断不需要主动说话时会等待一段时间再重新判断，最多重试 `initiative_timer.hesitation_max_rounds` 轮。该机制默认关闭，避免用户预期外的静默重试；前端和 CLI 可以手动开启/关闭，并默认写回配置文件。
 
-`initiative_timer.fallback_on_no_schedule` 默认开启，用于修正模型过度倾向“不设定定时器”导致角色长期不再主动开口的问题。当模型返回不设定、摘要为空或决策 JSON 解析失败，并且没有进入犹豫复判或犹豫轮次耗尽时，Runtime 会创建 `source: "fallback"` 的自然再考虑定时器。兜底定时器仍只保存 `pending_summary`，到点后会重新生成主动消息，不会直接发送固定模板。
+AI 决定不发言时系统尊重该决定——旧的 `initiative_timer.fallback_on_no_schedule` 强制兜底链已删除（旧配置键会被读取为迁移警告，不再生效）。更拟真的主动性由对话欲模型提供：开启 `initiative_timer.drive_enabled` 后，角色的对话欲与心情随对话和沉默持续累积，短期思考在「内在状态 + 四维动机评估」上下文中做一次智能调度；AI 决定不说就不说，没有强制安排。
 
 `agent.send_message` 的返回结果和 `agent.send_message_stream` 的 `finish` 事件都会新增 `initiative_timer` 字段；无当前定时器时会返回包含犹豫状态的对象，例如 `{ "timer": null, "hesitation": { "enabled": false } }`。
 
@@ -456,7 +456,7 @@ HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Run
 - `delay_seconds`：犹豫复判延迟，可能是整数秒或 `auto`。
 - `config_path`：写回配置文件路径；仅设置接口持久化时返回。
 
-可订阅的事件包括：`initiative_timer.created`、`initiative_timer.updated`、`initiative_timer.cancelled`、`initiative_timer.triggered`、`initiative_timer.discarded`。事件 payload 包含 `timer_id`、`generation`、`status`、`source`、`due_at`、`delay_seconds`、`reason`、`hesitation_enabled`、`hesitation_round`、`hesitation_max`、`fallback_on_no_schedule`、`is_fallback` 和可选 `pending_summary`。其中 `source: "ai"` 表示模型主动设置，`source: "reconsider"` 表示犹豫复判定时器，`source: "fallback"` 表示系统兜底自然再考虑定时器。`initiative_timer.triggered` 只表示定时器有效触发，真正发出的主动消息仍通过 `message.sent` / 主动消息事件暴露 `content`。
+可订阅的事件包括：`initiative_timer.created`、`initiative_timer.updated`、`initiative_timer.cancelled`、`initiative_timer.triggered`、`initiative_timer.discarded`。事件 payload 包含 `timer_id`、`generation`、`status`、`source`、`due_at`、`delay_seconds`、`reason`、`hesitation_enabled`、`hesitation_round`、`hesitation_max` 和可选 `pending_summary`。其中 `source: "ai"` 表示模型主动设置，`source: "reconsider"` 表示犹豫复判定时器，`source: "drive"` 表示对话欲路径调度。`initiative_timer.triggered` 只表示定时器有效触发，真正发出的主动消息仍通过 `message.sent` / 主动消息事件暴露 `content`。
 
 相关配置段：
 
@@ -474,13 +474,10 @@ initiative_timer:
   hesitation_enabled: false
   hesitation_max_rounds: 2
   hesitation_delay_seconds: auto
-  fallback_on_no_schedule: true
-  fallback_delay_seconds: 300
-  fallback_summary: "稍后自然地重新考虑刚才的对话，若仍有余韵或新想法就主动补充一句。"
-  fallback_reason: "AI 未主动设定定时器，系统安排一次自然再考虑以保持角色主动性"
+  drive_enabled: false  # 对话欲模型（§7.3）；drive_* 与 mood_half_life_* 参数见 default.yaml
 ```
 
-`allow_frontend_edit_summary` 是当前推荐字段名；旧配置中的 `allow_frontend_edit_message` 会作为兼容别名映射到它，建议客户端和配置文件逐步迁移到新字段名。若需要恢复旧的“模型不设定就没有后续主动定时器”行为，可显式设置 `fallback_on_no_schedule: false`。
+`allow_frontend_edit_summary` 是当前推荐字段名；旧配置中的 `allow_frontend_edit_message` 会作为兼容别名映射到它，建议客户端和配置文件逐步迁移到新字段名。旧的 `fallback_*` 强制兜底配置键已删除，旧配置中的这些键只会收到迁移警告，不再生效。
 
 自带控制台 CLI 也提供对应交互入口：
 

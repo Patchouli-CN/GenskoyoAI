@@ -154,15 +154,15 @@ class InitiativeTimerManagerTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_invalid_decision_json_schedules_fallback_by_default(self):
-        """默认开启兜底时，解析失败的 JSON 会创建兜底主动定时器。"""
+    def test_invalid_decision_json_gives_up_without_forcing(self):
+        """解析失败且未开启犹豫：尊重失败，不创建任何定时器（强制 fallback 已删除）。"""
 
         async def run():
             event_bus = EventBus(enable_trace=False)
             await event_bus.start()
             try:
                 manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(fallback_delay_seconds=90),
+                    config=InitiativeTimerConfig(),
                     think_engine=_make_think_engine(
                         _FakeModelClient(
                             '{"should_schedule": true, "delay_seconds": 60, "summary": "截断的摘要'
@@ -175,12 +175,8 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                 )
 
                 payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["source"], "fallback")
-                self.assertTrue(payload["is_fallback"])
-                self.assertEqual(payload["delay_seconds"], 90)
-                self.assertIsNotNone(manager.current_payload())
+                self.assertIsNone(payload)
+                self.assertIsNone(manager.current_payload())
             finally:
                 await event_bus.stop()
 
@@ -217,70 +213,15 @@ class InitiativeTimerManagerTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_no_schedule_decision_schedules_fallback_by_default(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(fallback_delay_seconds=120),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": false, "delay_seconds": 60, "summary": "", "reason": "暂时没话说"}'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
+    def test_no_schedule_decision_is_respected_without_forcing(self):
+        """AI 决定不发言：不创建任何定时器（不再违背意愿强行安排）。"""
 
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["source"], "fallback")
-                self.assertEqual(payload["reason"], manager.config.fallback_reason)
-                self.assertEqual(payload["pending_summary"], manager.config.fallback_summary)
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_empty_summary_decision_schedules_fallback_by_default(self):
         async def run():
             event_bus = EventBus(enable_trace=False)
             await event_bus.start()
             try:
                 manager = InitiativeTimerManager(
                     config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": true, "delay_seconds": 60, "summary": "", "reason": "漏写摘要"}'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["source"], "fallback")
-                self.assertTrue(payload["fallback_on_no_schedule"])
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_fallback_can_be_disabled_to_keep_old_no_timer_behavior(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(fallback_on_no_schedule=False),
                     think_engine=_make_think_engine(
                         _FakeModelClient(
                             '{"should_schedule": false, "delay_seconds": 60, "summary": "", "reason": "暂时没话说"}'
@@ -300,7 +241,37 @@ class InitiativeTimerManagerTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_hesitation_exhaustion_schedules_fallback(self):
+    def test_empty_summary_decision_gives_up_without_forcing(self):
+        """决定设置定时器但摘要为空：视为无有效意图，不创建定时器。"""
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                manager = InitiativeTimerManager(
+                    config=InitiativeTimerConfig(),
+                    think_engine=_make_think_engine(
+                        _FakeModelClient(
+                            '{"should_schedule": true, "delay_seconds": 60, "summary": "", "reason": "漏写摘要"}'
+                        ),
+                        event_bus,
+                    ),
+                    event_bus=event_bus,
+                    character_name="测试角色",
+                    working_memory=WorkingMemoryManager(max_turns=10),
+                )
+
+                payload = await manager.schedule_after_response("刚才的回复")
+                self.assertIsNone(payload)
+                self.assertIsNone(manager.current_payload())
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
+    def test_hesitation_exhaustion_gives_up_without_forcing(self):
+        """犹豫轮次耗尽后仍不发言：尊重决定，不创建任何定时器。"""
+
         async def run():
             event_bus = EventBus(enable_trace=False)
             await event_bus.start()
@@ -310,7 +281,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                         hesitation_enabled=True,
                         hesitation_max_rounds=1,
                         hesitation_delay_seconds=1,
-                        fallback_delay_seconds=120,
                     ),
                     think_engine=_make_think_engine(
                         _FakeModelClient(
@@ -329,11 +299,7 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                 self.assertEqual(payload["source"], "reconsider")
 
                 await asyncio.sleep(1.2)
-                current = manager.current_payload()
-                self.assertIsNotNone(current)
-                assert current is not None
-                self.assertEqual(current["source"], "fallback")
-                self.assertEqual(current["delay_seconds"], 120)
+                self.assertIsNone(manager.current_payload())
             finally:
                 await event_bus.stop()
 
