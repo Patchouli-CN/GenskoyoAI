@@ -124,6 +124,9 @@ class SystemEvent(Enum):
     SCENE_QUERY_CURRENT = "scene.query_current"  # 工具查询当前场景（内部 request/response）
     SCENE_SWITCHED = "scene.switched"  # 场景切换成功后广播，供前端提示当前场景
 
+    # World 编排事件
+    WORLD_DIRECTOR_DECISION = "world.director.decision"  # 导演完成一次选角决策
+
 
 class Event(Struct):
     """事件"""

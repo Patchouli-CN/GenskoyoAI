@@ -58,6 +58,43 @@ class DirectorDecision(Struct):
     fallback_applied: bool = False  # 是否因非法决策/解析失败触发了降级
 
 
+class DirectorPhase(StrEnum):
+    """导演决策的触发时机。"""
+
+    AFTER_USER = "after_user"  # 用户刚发言，选择首个回应者
+    AFTER_ACTOR = "after_actor"  # 某角色刚说完，决定继续/换人/交还用户
+    INITIATIVE = "initiative"  # 沉默后世界主动推动剧情（阶段 7 接入完整链路）
+
+
+class ActorBrief(Struct, frozen=True):
+    """Director 可见的候选角色公开摘要。
+
+    只承载 id、显示名与公开简介/metadata；绝不注入角色的完整私有 prompt 或记忆。
+    """
+
+    actor_id: str
+    display_name: str
+    summary: str = ""  # 公开层角色简介（一两句人设/metadata）
+
+
+class DirectorContext(Struct):
+    """一次导演决策的输入快照。
+
+    由 World 在每次决策前现算：候选角色必须是「用户当前场景内在场且 enabled」的
+    角色集合（ WorldStage 移动后重新计算），保证导演绝不选中已离场角色。
+    """
+
+    phase: DirectorPhase
+    scene_id: str  # 用户当前所在场景
+    candidates: list[ActorBrief]  # 同场候选角色（不含用户）
+    current_actor_id: str | None = None  # 当前发言角色（等待首个回应者时为 None）
+    transcript_text: str = ""  # 当前场景最近共享剧本（渲染后文本）
+    scene_description: str = ""  # 当前场景环境描述（可选）
+    auto_turn_count: int = 0  # 本段自动表演已连续进行的轮数
+    same_actor_turn_count: int = 0  # 当前角色已连续发言的轮数
+    initiative_summary: str = ""  # 待表达的世界意图摘要（phase=INITIATIVE 时使用）
+
+
 class WorldStateSnapshot(Struct):
     """World 当前状态的只读快照，供前端 / Runtime 查询。"""
 

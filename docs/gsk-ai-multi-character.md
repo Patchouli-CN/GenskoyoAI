@@ -225,6 +225,16 @@ Agent.send_world_turn_stream(...)
 
 ## 4. Director：智能选角，不是轮流
 
+> ✅ **状态：已实现（阶段 4）**。定向 25 例（`tests/test_world_director.py`）+ 全量 `518 passed, 3 subtests passed`，ruff / format / pyright 全绿；纯增量，单角色路径零变化。
+>
+> 落地要点：
+> - `GensokyoAI/world/director.py`：`Director.decide(DirectorContext)` 复用共享 `ModelClient.chat()` 与 ThinkEngine 的 JSON schema/解析降级模式（`response_format` 按 `STRUCTURED_OUTPUT` 能力注入、正则提取 + 自我修正重试一次）。
+> - `world/types.py` 新增 `DirectorPhase`（after_user/after_actor/initiative）、`ActorBrief`（仅公开摘要的候选角色）、`DirectorContext`（每次决策前由 World 现算的快照，含候选/当前角色/共享剧本/轮数计数/待表达意图）。
+> - 硬熔断不调模型（省 token）：空候选、`auto_turn_count >= max_auto_turns` 直接 `wait_user`。
+> - 校验降级：`switch` 目标必须在候选列表内、非当前角色、非用户；`continue` 要求当前角色在场且未达 `max_same_actor_turns`；非法决策按 `fallback_action` 降级（fallback=continue 也需自身合法，否则 wait_user）；JSON 失败/异常 → `wait_user`。绝不抛出、绝不死循环。
+> - prompt 中显式告知当前被禁止的动作（如连发达上限不允许 continue），减少非法输出与重试。
+> - 每次决策发布 `SystemEvent.WORLD_DIRECTOR_DECISION`（新增事件类型，data 含 phase/action/next/reason/fallback/计数），debug 可见 reason；事件发布失败不影响决策返回。
+
 新增：
 - `GensokyoAI/world/director.py`
 
@@ -425,7 +435,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
    - ✅ **1b（已完成）**：状态型工具 `parallel_safe` 元数据 + `execute_batch` 对同一 Actor 状态型工具串行、只读工具并发。
 2. **World 数据层**：配置、types、WorldStage、scene-partitioned SharedTranscript、WorldPersistence。
 3. **Actor bridge**：world-turn 调用、trigger 不入私有 memory、tool continuation 保留 world contexts。
-4. **Director 与主状态机**：用户/角色开场、after_user/after_actor 智能调度、边界与 fallback。
+4. **Director 与主状态机**：✅ Director（阶段 4 已完成，见 §4 状态标注）；⏳ 主状态机（用户/角色开场、调度循环）并入阶段 5 GensokyoWorld 主类实现。
 5. **场景联动**：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤。
 6. **私有记忆投影**：各视角摘要批量生成与后台写入。
 7. **主循环主动定时器**：提取 DialogueLoop 抽象；单角色由 Agent 持有 timer，World 模式关闭 Actor timer 并由 World 唯一持有，复用 World turn loop。

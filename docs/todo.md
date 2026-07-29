@@ -5,10 +5,10 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 已完成、已提交；阶段 3 已完成、已验证全绿、尚未提交**。下一步从 **阶段 4** 继续。
+多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 已完成、已提交；阶段 4 已完成、已验证全绿、尚未提交**。下一步从 **阶段 5** 继续。
 
-- 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit（代码 3 个 + 文档 1 个），用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`463 passed, 3 subtests passed`，ruff / ruff format / pyright 全过。
+- 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
+- 当前测试：`518 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个阶段 4 之外的历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），world 相关文件全部 format 干净。
 - 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
 
 ---
@@ -79,8 +79,8 @@
   - `AgentDependencies.semantic_memory_root` 注入链已实现；World 使用 `memory/world_<world_id>/<character_name>/`，单角色仍使用原有按 session 路径。
   - 定向 29 例及全量 `458 passed, 3 subtests passed`，ruff / format / pyright 全绿。
 - **✅ 3 — Actor 的 world-turn 桥接**：`Agent.send_world_turn(_stream)`；trigger 文本默认不入私有 working memory（`record_in_working_memory=False`）；事件链全程透传 `system_contexts`/`world_turn`（修复旧的静默丢弃）；`MessageBuilder.build_continuation()` 保留本轮 world/system contexts；顺带修复流式尾部 chunk 丢失。定向 5 例 + 全量 463 passed 全绿，未提交。
-- **⏳ 4 — Director**（下一步）：`world/director.py`，复用共享 `ModelClient.chat()` + ThinkEngine 的 JSON schema/降级模式。严格校验 switch 目标在场、熔断 `max_auto_turns` / `max_same_actor_turns`、解析失败 → wait_user。
-- **⏳ 5 — GensokyoWorld 主类与状态机**：`world/world.py` / `events.py` / `memory_projector.py` / `initiative.py`。开场（protagonist 是角色→主动开场；是 `__user__`→等用户）、用户回合、场景切换联动 WorldStage + 用户跟随。
+- **✅ 4 — Director**：`world/director.py`，复用共享 `ModelClient.chat()` + ThinkEngine 的 JSON schema/降级模式。`DirectorContext` 快照输入；硬熔断（空候选/`max_auto_turns`）不调模型；`switch` 目标严格校验在场/非当前/非用户、`continue` 校验在场与 `max_same_actor_turns`，非法按 `fallback_action` 降级；解析失败重试一次后 → wait_user；prompt 显式告知被禁动作；每次决策发布 `WORLD_DIRECTOR_DECISION` 事件。定向 25 例 + 全量 518 passed 全绿，未提交。
+- **⏳ 5 — GensokyoWorld 主类与状态机**（下一步）：`world/world.py` / `events.py` / `memory_projector.py` / `initiative.py`。开场（protagonist 是角色→主动开场；是 `__user__`→等用户）、用户回合、场景切换联动 WorldStage + 用户跟随。
 - **⏳ 6 — 私有记忆投影**：`WorldMemoryProjector`，段落结束批量为在场角色各写各视角，失败降级不阻塞。
 - **⏳ 7 — DialogueLoop 抽象**（去重关键）：`core/dialogue_loop.py` Protocol；`initiative_timer.py` 提取纯调度器依赖回调；`_impl.py` 单角色适配器 + `manage_initiative_timer: bool=True`（World Actor 设 false）；`world/initiative.py` World 主循环计划/触发。
 - **⏳ 8 — 持久化恢复**：world bundle + actor session 关联 + export/delete/security。
@@ -91,9 +91,34 @@
 
 - **多个 Agent 绝不能共享同一个 EventBus**：`ActionPlanner` / `CoreListeners` / `MetricsListeners` 都订阅 `MESSAGE_RECEIVED` 且无 actor 过滤，共享必串台。这是整个隔离架构的根基。共享的只有 ModelClient / resource_gates。
 - **共享 ModelClient 的事件归属**：`ModelClient` 构造时绑定一个 `event_bus`，其 `MODEL_CALL_TIMING` / `MODEL_AUTH` 等会全汇到该 bus。多角色装配时应把共享 ModelClient 显式绑 **World bus**，Actor 私有 bus 不承载模型层事件。
-- **工具事件总线按调用注入**：内置工具（memory/scene）经 `GensokyoAI/tools/tool_context.py` 的 `ContextVar` 读事件总线，`ToolExecutor.execute()` 里 `bind_tool_context(...)` 注入。若在 ToolExecutor 之外裸调用工具（如测试），必须 `with bind_event_bus(bus):` 或 `bind_tool_context(...)` 包裹，否则取不到总线。详见 `[[tool-event-bus-contextvar]]` 记忆与 `tools/tool_context.py` 顶部 docstring。
+- **工具事件总线按调用注入**：内置工具（memory/scene）经 `GensokyoAI/tools/tool_context.py` 的 `ContextVar` 读事件总线，`ToolExecutor.execute()` 里 `bind_tool_context(...)` 注入。若在 ToolExecutor 之外裸调用工具（如测试），必须 `with bind_event_bus(bus):` 或 `bind_tool_context(...)` 包裹，否则取不到总线。详见 `tools/tool_context.py` 顶部 docstring。
 - **配置校验阶段不读文件/场景库**：actor character_file、scene id 的存在性留到初始化阶段返回结构化 diagnostics，别在 `config_validator` 里读盘。
 - **msgspec Struct 字段顺序**：无默认值字段必须在有默认值字段之前。
+
+## 5.5 老手笔记（前任 AI 的经验，非计划内容但能少踩坑）
+
+**协作方式（用户明确要求）**
+- **不要用多个 subagent 并行改代码**：会互相抢任务、产生竞态。子代理只用于只读调研/审查；修改一律主会话单线程顺序做。
+- 用户在意 token 成本：一次做一个阶段，跑完验证再进下一个；探索优先直接读文件，别撒一堆代理。
+- 全中文交流与文档；commit **不加 Co-Authored-By**；提交前先报告改动，由用户决定何时提交。
+
+**已修过的隐蔽 bug（别改回去）**
+- `ActionExecutor.complete_response()` 曾顺手清空流式队列，导致流尾最后一个 chunk 必丢（真模型下被网络时序掩盖，假 Provider 下才现形）。现在它只解析 future，队列由下次 `prepare_response()` 整体替换；`_send_stream_impl` 退出前会排空 `get_chunk_task` 结果与队列残余。
+- 事件链 `MESSAGE_RECEIVED → ACTION_DECIDED → GENERATE_RESPONSE` 曾两跳都不转发 `system_contexts`，console 的 `<attention>` 注入与 RPC 的 `system_contexts` 参数从来没到过模型。阶段 3 已修，新增字段务必确认全链透传。
+
+**代码风格既成事实**
+- 已使用 Python 3.14 的 PEP 758 语法（无括号 `except A, B:`）。项目硬要求 3.14+，用旧版本跑会直接语法错误——不是代码写错了。
+- `_impl.py` 已做过一轮瘦身：定时器编排在 `initiative_coordinator.py`、角色扮演框架 prompt 在 `prompts.py`、send 四兄弟收敛为 `_send_impl` / `_send_stream_impl`。往 Agent 加东西前先看这几处有没有合适的落点。
+- `model_client.py`（约 1200 行）是已知待拆项，下一刀建议先抽遥测/事件发布块（约 180 行，低风险）。**embeddings 那段与 retry/telemetry 耦合较深，不要在 World 阶段中途动。**
+
+**动机权重 = 性格（用户 2026-07-28 提出，尚未实施，实施前先读这几条）**
+- 想法：`MotivationProfile.total_drive` 现在是硬编码加权（`expression_drive * 0.3` 那串字面量），改为从角色卡读 `motivation.base_weights`，让四维配比定义性格（例：妖梦性子直 → `expression_drive` 高、`situational_relevance` 低）。搭 §7.3 的累积模型后，权重决定驱动力涨多快，性格直接变成节奏。这部分成本低、可独立于 §7.3 先做。
+- **必须归一化**：权重和不为 1 会让 `total_drive` 量纲随角色漂移，阈值失去跨角色可比性。选定「归一化到和为 1 + 阈值全局共享」，`character_validator` 加 warning 提示已自动归一。
+- **情境修正器只接受结构化条件**，不要自然语言 `trigger`：字符串条件要么退化成脆弱的关键词匹配，要么每轮多一次 LLM 判定——后者正好抵掉对话欲累积省下的 token，自相矛盾；embedding 方案也与 §10.5「默认关」冲突。改用系统已算出的信号纯查表（`scene_id`、话题 `valence` 阈值、`WorldStage` 在场 actor 等），零 token。
+- `floor`（权重下限）的价值绑在修正器上——没有能压低权重的东西就无物可守，砍修正器时一起砍。
+- **永久权重漂移（角色弧光）暂缓**：写回角色卡等于程序偷改用户 YAML，不可做；存 session/world 状态则意味着同角色不同存档性格不同（这点反而与阶段 2.3 世界隔离自洽）。且漂移会破坏可复现性、长期容易把权重糊成均值。真要做需限定：仅明确剧情节点触发、幅度极小、有上限、当前值可在存档中查看。放到最后或作为 v2 实验特性。
+
+---
 
 ## 6. 验证命令（每阶段必跑，对齐 CI）
 
@@ -112,11 +137,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 3 完成）
+## 8. 未提交改动清单（截至阶段 4 完成）
 
-阶段 3 已改（M）：`GensokyoAI/core/agent/{_impl,action_executor,action_planner,message_builder,response_handler}.py`、`GensokyoAI/core/event_listeners.py`、`tests/test_deepseek_reasoning_flow.py`、`docs/{todo,gsk-ai-multi-character}.md`
-阶段 3 新增（??）：`tests/test_world_turn_bridge.py`
+阶段 4 已改（M）：`GensokyoAI/core/events.py`（+`WORLD_DIRECTOR_DECISION`）、`GensokyoAI/world/types.py`（+`DirectorPhase`/`ActorBrief`/`DirectorContext`）、`GensokyoAI/world/__init__.py`、`docs/{todo,gsk-ai-multi-character}.md`（todo.md 另含另一会话 AI 追加的 §5.5 老手笔记，与阶段 4 无关）
+阶段 4 新增（??）：`GensokyoAI/world/director.py`、`tests/test_world_director.py`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(agent): Actor world-turn 桥接与事件链透传修复（阶段 3）`
+`feat(world): Director 智能选角与决策降级（阶段 4）`
 
