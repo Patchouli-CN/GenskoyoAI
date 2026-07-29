@@ -9,6 +9,7 @@ from typing import Any
 from msgspec import Struct, field
 
 from ..utils.helpers import utc_now
+from ..utils.logger import logger
 from .schema_versions import (
     GENSOKYOAI_CREATED_BY,
     MEMORY_SCHEMA_VERSION,
@@ -151,6 +152,17 @@ def migrate_session_file_payload(data: dict[str, Any]) -> tuple[dict[str, Any], 
     if "session" not in migrated:
         return migrated, False
 
+    if isinstance(current_version, int) and current_version > SESSION_SCHEMA_VERSION:
+        # 更高版本文件（未来版本写入）：不静默降级重写版本号——旧二进制
+        # 不理解新格式，改写版本只会让新字段在下一次保存时无声丢失。
+        # 与 world/persistence 的硬拒绝不同：会话格式尽量向前兼容读取，
+        # 未知字段原样保留。
+        logger.warning(
+            f"会话文件 schema_version={current_version} 高于当前支持的 "
+            f"{SESSION_SCHEMA_VERSION}，按原样读取（不迁移、不改写版本）"
+        )
+        return migrated, False
+
     migrated.setdefault("format", SESSION_FILE_FORMAT)
     migrated["schema_version"] = SESSION_SCHEMA_VERSION
     migrated.setdefault("created_by", GENSOKYOAI_CREATED_BY)
@@ -206,6 +218,16 @@ def migrate_memory_store_payload(data: dict[str, Any]) -> tuple[dict[str, Any], 
             migrated["created_by"] = GENSOKYOAI_CREATED_BY
             changed = True
         return migrated, changed
+
+    if isinstance(current_version, int) and current_version > MEMORY_SCHEMA_VERSION:
+        # 更高版本文件（未来版本写入）：不静默降级重写版本号——旧二进制
+        # 不理解新格式，改写版本只会让新字段在下一次保存时无声丢失。
+        # 未知字段原样保留，尽量向前兼容读取。
+        logger.warning(
+            f"话题存储 schema_version={current_version} 高于当前支持的 "
+            f"{MEMORY_SCHEMA_VERSION}，按原样读取（不迁移、不改写版本）"
+        )
+        return migrated, False
 
     migrated.setdefault("format", MEMORY_STORE_FORMAT)
     migrated.setdefault("created_by", GENSOKYOAI_CREATED_BY)

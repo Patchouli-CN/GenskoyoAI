@@ -19,6 +19,7 @@ from ..utils.helpers import utc_now
 from ..utils.logger import logger
 from ..utils.path_security import sanitize_path_id
 from .types import (
+    USER_OCCUPANT_ID,
     WorldLoadResult,
     WorldPersistenceDiagnostic,
     WorldSessionRecord,
@@ -153,7 +154,11 @@ class WorldPersistence:
     ) -> list[WorldPersistenceDiagnostic]:
         if available_actor_ids is None:
             return []
-        persisted = set(record.roster) | set(record.actor_sessions)
+        # roster/actor_sessions 之外，stage 上的幽灵占位与 current_actor 同样
+        # 必须被诊断覆盖，否则恢复时会带上不可用 actor 而不自知
+        stage_actors = {occupant for occupant in record.stage if occupant != USER_OCCUPANT_ID}
+        current = {record.current_actor_id} if record.current_actor_id else set()
+        persisted = set(record.roster) | set(record.actor_sessions) | stage_actors | current
         diagnostics: list[WorldPersistenceDiagnostic] = []
         for actor_id in sorted(persisted - available_actor_ids):
             diagnostics.append(
@@ -190,10 +195,33 @@ class WorldPersistence:
             protagonist=protagonist,
             metadata=dict(metadata or {}),
         )
-        path = self.session_path(world_id, record.session_id, create_parent=True)
+        self._create_exclusive(record)
+        return record
+
+    def _create_exclusive(self, record: WorldSessionRecord) -> None:
+        """排他创建：已存在即报错（调用方持锁时才能消除 TOCTOU 竞态）。"""
+        path = self.session_path(record.world_id, record.session_id, create_parent=True)
         if path.exists():
             raise WorldPersistenceError(f"World session 已存在: {record.session_id}")
         self._atomic_write_json(path, self._payload(record), backup_existing=False)
+
+    async def create_async(
+        self,
+        world_id: str,
+        *,
+        session_id: str | None = None,
+        protagonist: str = "__user__",
+        metadata: dict[str, Any] | None = None,
+    ) -> WorldSessionRecord:
+        """在 per-key 锁内创建（exists 检查与写入原子化，消除并发 create 竞态）。"""
+        record = WorldSessionRecord(
+            world_id=world_id,
+            session_id=session_id or str(uuid4()),
+            protagonist=protagonist,
+            metadata=dict(metadata or {}),
+        )
+        async with self._lock_for(world_id, record.session_id):
+            await asyncio.to_thread(self._create_exclusive, record)
         return record
 
     def save(self, record: WorldSessionRecord) -> None:
@@ -242,7 +270,11 @@ class WorldPersistence:
             )
 
     def list(self, world_id: str) -> list[WorldSessionRecord]:
-        """列出指定 World 的有效会话；损坏或不兼容文件记日志后跳过。"""
+        """列出指定 World 的有效会话；损坏或不兼容文件记日志后跳过。
+
+        注意自愈副作用：本方法名义上只读，但读取过程中损坏的主文件会被
+        移入 quarantine、可读备份会被回写主文件（与 resume 共用 `_read_json`）。
+        """
         directory = self._world_dir(world_id)
         if not directory.exists():
             return []

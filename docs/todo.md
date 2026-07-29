@@ -5,12 +5,12 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 已完成、已提交（最新 `94c467d`，已 push）；阶段 7（DialogueLoop 抽象 + 对话欲 + fallback 链删除）已完成、已验证全绿、尚未提交**。下一步从 **阶段 8** 继续。
+多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 已完成、已提交（最新 `abef464`，已 push）；阶段 8（持久化恢复）已完成、已验证全绿、尚未提交**。下一步从 **阶段 9** 继续。
 
 - 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`579 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
-- 所有新代码都是**纯增量**：单角色模式行为零变化（`drive_enabled` 默认关、旧 LLM 决策路径原样保留），旧测试全绿。
-- **阶段 8 开工前必读 §5.6**：持久化恢复相关审查发现（create TOCTOU、list 自愈副作用、roster diagnostics 并入 stage 键、版本契约统一）归这一阶段。
+- 当前测试：`587 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
+- 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
+- **阶段 9 开工前必读 §5.6**：runtime 审查发现（WS 取消账本、清理链、启动隔离、依赖安装阻塞）与 **world.\* 接线清单**（auth.py 默认 admin、_is_tenant_method 前缀表等坑）都在那里。
 
 ---
 
@@ -84,8 +84,8 @@
 - **✅ 5 — GensokyoWorld 主类与状态机**：`world/world.py`（create 装配：共享 ModelClient 绑 World bus、Actor 独立 Agent + 世界记忆根、净化名碰撞硬报错；初始舞台优先级链 + 合成场景兜底）、`world/events.py`（载荷类型，事件名对齐 §8.1）。开场（protagonist 角色主动开场 / `__user__` 等用户）、用户回合导演调度循环（turn lock + 熔断）、场景切换联动 WorldStage + 用户原子跟随 + 公开过渡事件。Actor 侧新增 `setup_signal_handlers=False` / `manage_initiative_timer=False`。**连带修复**：world-turn 触发文本以临时 user 消息注入生成与 continuation（此前根本不到达模型）。定向 10+1 例 + 全量 552 passed 全绿，未提交。
 - **✅ 6 — 私有记忆投影**：`world/memory_projector.py`（`WorldMemoryProjector` 一次批量结构化调用生成各在场角色 `PerspectiveMemory`，校验丢弃不在场者，失败回退确定性公开摘要）；World 段落结束后台投影（按场景游标只投新增、参与者=发言者∪在场、逐 Actor `add_async` 自捕获、config 可停用、shutdown 先 flush）。定向 6 例 + 全量 558 passed 全绿，未提交。
 - **✅ 7 — DialogueLoop 抽象 + 对话欲 + fallback 链删除**：`core/dialogue_loop.py`（Protocol + `InitiativePlan`）、`core/initiative_scheduler.py`（纯调度器，替换式计划 + fire 时效校验）、`world/initiative.py`（World 段落结束一次世界规划，全世界一个定时器；到点 Director initiative 按当下在场选角；用户发言取消重规划）。**§7.3 按用户 07-29 决策实现**：`ThinkEngine.decide_drive_initiative()` 一次 LLM 出四维动机 + 调度决策（注入对话欲/心情状态，动机回灌累积器）；`core/agent/drive_accumulator.py` 纯算术累积 + 心情非对称半衰期 + 泄压 + session.metadata 持久化；`drive_enabled` 默认关。**强制 fallback 链整体删除**：4 个配置键移除，旧键 loader 丢弃 + validator 迁移警告（不报错），事件 payload 移除 fallback 字段，`source` 新增 `"drive"`。**审查修复**：trigger() 不再持锁跨 LLM 生成；触发与回合经信号量互斥 + 时效校验。定向 22 例 + 全量 579 passed 全绿，未提交。
-- **⏳ 8 — 持久化恢复**（下一步）：world bundle + actor session 关联 + export/delete/security。§5.6 归档的 4 条（create TOCTOU、list 自愈副作用文档、roster diagnostics 并入 stage 键与 current_actor、版本契约统一）一并处理。
-- **⏳ 9 — Runtime / WebSocket / Console**：`world.*` RPC（init/start/send_message[_stream]/state/roster/transcript/move/session.*/shutdown）、流式 actor 事件、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`。`RuntimeState` 加 `world: GensokyoWorld | None`。
+- **✅ 8 — 持久化恢复**：`GensokyoWorld.resume(config, session_id)` 恢复编排：存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过旧剧本。§5.6 归档 4 条一并落地：`create_async` per-key 锁消除 TOCTOU、`list()` docstring 补自愈副作用、roster diagnostics 并入 stage 键与 current_actor（幽灵占位不漏诊）、`core/migrations` 高版本文件不再静默降级（session/memory 两路）。定向 8 例 + 全量 587 passed 全绿，未提交。
+- **⏳ 9 — Runtime / WebSocket / Console**（下一步）：`world.*` RPC（init/start/send_message[_stream]/state/roster/transcript/move/session.*/shutdown）、流式 actor 事件、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`。`RuntimeState` 加 `world: GensokyoWorld | None`。**必读 §5.6 的 world.\* 接线清单**（auth.py required_role 默认 fallthrough admin、`_is_tenant_method` 前缀表漏加=跨用户共享 world 状态、WS 流式方法硬编码分流、root `state.agent` 不能碰）与 runtime 审查发现 4 条（WS 取消账本、清理链、启动隔离、依赖安装阻塞）。
 - **⏳ 10 — 文档与完整验收**：README 中英、QUICKSTART、runtime_api、changelog/version、草案状态。
 
 ## 5. 关键陷阱（血泪，别踩）
@@ -186,11 +186,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 7 完成）
+## 8. 未提交改动清单（截至阶段 8 完成）
 
-阶段 7 已改（M）：`GensokyoAI/core/agent/{initiative_timer,initiative_coordinator,think_engine,_impl}.py`、`GensokyoAI/core/{config_schema,config_merge,config_validator,config_loader}.py`、`GensokyoAI/world/{world,__init__}.py`、`GensokyoAI/memory/{topic_store,semantic}.py`、`config/default.yaml`、`tests/test_initiative_timer.py`、`docs/{user_guide,runtime_api}.md`、`docs/en/{user_guide,runtime_api}.md`、`docs/{todo,gsk-ai-multi-character}.md`
-阶段 7 新增（??）：`GensokyoAI/core/{dialogue_loop,initiative_scheduler}.py`、`GensokyoAI/core/agent/drive_accumulator.py`、`GensokyoAI/world/initiative.py`、`tests/{test_world_initiative,test_drive_accumulator}.py`
+阶段 8 已改（M）：`GensokyoAI/world/{persistence,world}.py`、`GensokyoAI/core/migrations.py`、`docs/{todo,gsk-ai-multi-character}.md`
+阶段 8 新增（??）：`tests/test_world_resume.py`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(core): DialogueLoop 抽象与对话欲模型，删除强制 fallback 链（阶段 7）`
+`feat(world): World 会话恢复编排与持久化契约加固（阶段 8）`
 

@@ -468,7 +468,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 5. **场景联动**：✅ 已完成（阶段 5）：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤 + 公开过渡事件。
 6. **私有记忆投影**：✅ 已完成（阶段 6）：各视角摘要批量生成与后台写入，见 §6 状态标注。
 7. **主循环主动定时器**：✅ 已完成（阶段 7）：DialogueLoop 协议、纯调度器、World 主循环计划/触发、§7.3 对话欲（四维动机接入短期思考）、强制 fallback 链删除，见 §7 状态标注。
-8. **持久化恢复**：world bundle + actor session 关联 + export/delete/security。
+8. **持久化恢复**：✅ 已完成（阶段 8）：`GensokyoWorld.resume(config, session_id)` 恢复编排——存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过上一次已投影剧本。审查修复（§5.6 归档 4 条）一并落地：`create_async` per-key 锁消除 create TOCTOU；`list()` docstring 补自愈副作用；roster diagnostics 并入 stage 键（除 `__user__`）与 `current_actor_id`（幽灵占位不再漏诊）；`core/migrations` 对更高未知 schema_version 不再静默降级改写版本（session/memory 两路），与 world/persistence 硬拒绝契约对齐为「不静默降级」。export/delete/list 仍由 `WorldPersistence` 提供（阶段 2.3 已测），阶段 9 接 RPC。
 9. **Runtime / WebSocket / Console**：world.* RPC、流式 actor 事件、前端命令。
 10. **文档与完整验收**：更新草案状态、README 中英、QUICKSTART、runtime_api、default/world example、changelog/version。
 

@@ -117,6 +117,8 @@ class GensokyoWorld:
         self._current_actor_id: str | None = None
         self._started = False
         self._shutdown = False
+        # resume() 恢复时的 roster/会话诊断（create 时为空）
+        self.resume_diagnostics: list[WorldPersistenceDiagnostic] = []
 
         # 记忆投影：段落结束（wait_user）后把公开表演投影为各在场角色
         # 的私有视角记忆（config.project_perspective_memories 关闭时停用）。
@@ -144,43 +146,9 @@ class GensokyoWorld:
         抛 :class:`WorldAssemblyError`；场景 id 未知等软问题降级并记日志。
         """
         world_config = config.world
-        if not world_config.enabled:
-            raise WorldAssemblyError(
-                [_diag("world.disabled", "world.enabled 为 false，无法装配 World")]
-            )
-        enabled_actors = [actor for actor in world_config.actors if actor.enabled]
-        if not enabled_actors:
-            raise WorldAssemblyError(
-                [_diag("world.no_actors", "world.enabled 为 true 时至少需要一个 enabled 的 actor")]
-            )
+        enabled_actors = cls._validate_world_config(world_config)
         protagonist = world_config.protagonist
-        if protagonist != USER_OCCUPANT_ID and protagonist not in {
-            actor.id for actor in enabled_actors
-        }:
-            raise WorldAssemblyError(
-                [
-                    _diag(
-                        "world.protagonist_unknown",
-                        f"protagonist '{protagonist}' 不在 enabled roster 内",
-                    )
-                ]
-            )
-
-        world_bus = EventBus(enable_trace=config.event_trace_enabled)
-        await world_bus.start()
-        resource_gates: dict[str, ResourceGate] = build_resource_gates(config.resource_control)
-        # 共享 ModelClient 显式绑 World 总线：MODEL_* 事件汇到 World，Actor 私有
-        # 总线不承载模型层事件
-        model_client = ModelClient(
-            config.model,
-            event_bus=world_bus,
-            embedding_config=config.embedding,
-            resource_gates=resource_gates,
-        )
-
-        # 场景库仅作共享场景定义/渲染服务；多角色位置真相源是 WorldStage
-        scene_library = SceneManager(config.scene)
-        await scene_library.load_library()
+        world_bus, resource_gates, model_client, scene_library = await cls._build_infra(config)
 
         actors: dict[str, Agent] = {}
         briefs: dict[str, ActorBrief] = {}
@@ -189,7 +157,7 @@ class GensokyoWorld:
         sanitized_names: dict[str, str] = {}  # 净化后角色名 -> actor_id（记忆根碰撞检查）
         try:
             for actor_cfg in enabled_actors:
-                agent, brief = await cls._assemble_actor(
+                agent, brief, _resumed = await cls._assemble_actor(
                     actor_cfg,
                     config,
                     world_config,
@@ -220,7 +188,7 @@ class GensokyoWorld:
         session_record: WorldSessionRecord | None = None
         if world_config.persistence.enabled:
             persistence = WorldPersistence(world_config.persistence.save_path)
-            session_record = persistence.create(
+            session_record = await persistence.create_async(
                 world_config.id,
                 protagonist=protagonist,
                 metadata={"source": "gensokyo_world"},
@@ -258,6 +226,179 @@ class GensokyoWorld:
         return world
 
     @classmethod
+    def _validate_world_config(cls, world_config: WorldConfig) -> list[WorldActorConfig]:
+        """world 配置硬校验（create/resume 共用），返回 enabled actor 列表。"""
+        if not world_config.enabled:
+            raise WorldAssemblyError(
+                [_diag("world.disabled", "world.enabled 为 false，无法装配 World")]
+            )
+        enabled_actors = [actor for actor in world_config.actors if actor.enabled]
+        if not enabled_actors:
+            raise WorldAssemblyError(
+                [_diag("world.no_actors", "world.enabled 为 true 时至少需要一个 enabled 的 actor")]
+            )
+        protagonist = world_config.protagonist
+        if protagonist != USER_OCCUPANT_ID and protagonist not in {
+            actor.id for actor in enabled_actors
+        }:
+            raise WorldAssemblyError(
+                [
+                    _diag(
+                        "world.protagonist_unknown",
+                        f"protagonist '{protagonist}' 不在 enabled roster 内",
+                    )
+                ]
+            )
+        return enabled_actors
+
+    @classmethod
+    async def _build_infra(
+        cls, config: AppConfig
+    ) -> tuple[EventBus, dict[str, ResourceGate], ModelClient, SceneManager]:
+        """装配 World 级基础设施：World 总线、共享 gates、共享 ModelClient（绑
+        World 总线）、共享场景库（create/resume 共用）。"""
+        world_bus = EventBus(enable_trace=config.event_trace_enabled)
+        await world_bus.start()
+        resource_gates: dict[str, ResourceGate] = build_resource_gates(config.resource_control)
+        # 共享 ModelClient 显式绑 World 总线：MODEL_* 事件汇到 World，Actor 私有
+        # 总线不承载模型层事件
+        model_client = ModelClient(
+            config.model,
+            event_bus=world_bus,
+            embedding_config=config.embedding,
+            resource_gates=resource_gates,
+        )
+        # 场景库仅作共享场景定义/渲染服务；多角色位置真相源是 WorldStage
+        scene_library = SceneManager(config.scene)
+        await scene_library.load_library()
+        return world_bus, resource_gates, model_client, scene_library
+
+    @classmethod
+    async def resume(cls, config: AppConfig, session_id: str) -> GensokyoWorld:
+        """从 World 存档恢复：还原舞台/共享剧本/各 Actor 私有会话。
+
+        roster 差异经诊断呈现（`world.resume_diagnostics`）：配置中缺失的
+        actor 不装配（绝不静默串角色）；缺失的 actor 私有会话降级为新建并
+        给 warning 诊断。恢复后原存档作为活动存档继续保存。
+        """
+        world_config = config.world
+        enabled_actors = cls._validate_world_config(world_config)
+        if not world_config.persistence.enabled:
+            raise WorldAssemblyError(
+                [_diag("world.persistence_disabled", "persistence 已禁用，无法恢复 World 存档")]
+            )
+        persistence = WorldPersistence(world_config.persistence.save_path)
+        result = await persistence.resume_async(
+            world_config.id,
+            session_id,
+            available_actor_ids={actor.id for actor in enabled_actors},
+        )
+        if result is None:
+            raise WorldAssemblyError(
+                [_diag("world.session_not_found", f"World session 不存在: {session_id}")]
+            )
+        record = result.record
+        diagnostics = list(result.diagnostics)
+
+        world_bus, resource_gates, model_client, scene_library = await cls._build_infra(config)
+        actors: dict[str, Agent] = {}
+        briefs: dict[str, ActorBrief] = {}
+        actor_sessions: dict[str, str] = {}
+        loader = ConfigLoader()
+        sanitized_names: dict[str, str] = {}
+        try:
+            for actor_cfg in enabled_actors:
+                stored_session_id = record.actor_sessions.get(actor_cfg.id)
+                agent, brief, resumed = await cls._assemble_actor(
+                    actor_cfg,
+                    config,
+                    world_config,
+                    model_client,
+                    resource_gates,
+                    loader,
+                    sanitized_names,
+                    resume_session_id=stored_session_id,
+                )
+                if stored_session_id and not resumed:
+                    diagnostics.append(
+                        WorldPersistenceDiagnostic(
+                            code="world.persistence.actor_session_missing",
+                            severity="warning",
+                            actor_id=actor_cfg.id,
+                            message=(
+                                f"actor '{actor_cfg.id}' 的存档私有会话 "
+                                f"{stored_session_id} 不存在，已新建会话"
+                            ),
+                        )
+                    )
+                actors[actor_cfg.id] = agent
+                briefs[actor_cfg.id] = brief
+                session = agent.session_manager.get_current_session()
+                if session is not None:
+                    actor_sessions[actor_cfg.id] = session.session_id
+        except Exception:
+            for agent in actors.values():
+                with contextlib.suppress(Exception):
+                    await agent.shutdown()
+            with contextlib.suppress(Exception):
+                await world_bus.stop()
+            raise
+
+        # 舞台：初始布置兜底，存档记录的位置覆盖（幽灵占位已被诊断过滤——
+        # 只还原当前 roster 内 actor 与用户的位置）
+        stage = cls._build_initial_stage(config, world_config, enabled_actors, actors)
+        for occupant, scene_id in record.stage.items():
+            if occupant == USER_OCCUPANT_ID or occupant in actors:
+                stage.set_location(occupant, scene_id)
+
+        # 共享剧本按场景分片还原
+        transcript = SharedTranscript(world_config.transcript.max_entries_per_scene)
+        for scene_entries in record.transcript.values():
+            for entry in scene_entries:
+                transcript.append(entry)
+
+        director = Director(model_client, world_config.director, event_bus=world_bus)
+        # 原存档作为活动存档继续保存；roster/actor_sessions 可能因增删 actor 变化
+        record.roster = {aid: brief.display_name for aid, brief in briefs.items()}
+        record.actor_sessions = actor_sessions
+        record.stage = stage.snapshot()
+
+        world = cls(
+            config=config,
+            world_bus=world_bus,
+            model_client=model_client,
+            scene_library=scene_library,
+            actors=actors,
+            briefs=briefs,
+            stage=stage,
+            transcript=transcript,
+            director=director,
+            persistence=persistence,
+            session_record=record,
+        )
+        world._current_actor_id = (
+            record.current_actor_id if record.current_actor_id in actors else None
+        )
+        world._waiting_for_user = record.waiting_for_user
+        # 已投影过的旧剧本不重复投影：游标直接放到各场景末尾
+        world._projection_cursors = {
+            scene_id: len(entries) for scene_id, entries in record.transcript.items()
+        }
+        world.resume_diagnostics = diagnostics
+        for actor_id, agent in actors.items():
+            agent.event_bus.subscribe(
+                SystemEvent.SCENE_SWITCHED, world._make_scene_bridge(actor_id)
+            )
+        if config.initiative_timer.enabled:
+            world._initiative_loop = WorldInitiativeLoop(world)
+        await persistence.save_async(record)
+        logger.info(
+            f"🌸 [World] 恢复完成: world={world_config.id}, session={session_id}, "
+            f"actors={list(actors)}, diagnostics={len(diagnostics)}"
+        )
+        return world
+
+    @classmethod
     async def _assemble_actor(
         cls,
         actor_cfg: WorldActorConfig,
@@ -267,8 +408,13 @@ class GensokyoWorld:
         resource_gates: dict[str, ResourceGate],
         loader: ConfigLoader,
         sanitized_names: dict[str, str],
-    ) -> tuple[Agent, ActorBrief]:
-        """装配单个 Actor：加载角色卡、注入 world 依赖、创建会话并启动。"""
+        resume_session_id: str | None = None,
+    ) -> tuple[Agent, ActorBrief, bool]:
+        """装配单个 Actor：加载角色卡、注入 world 依赖、创建/恢复会话并启动。
+
+        `resume_session_id` 提供时尝试恢复该私有会话，失败则新建；
+        返回的第三个元素标记是否成功恢复。
+        """
         if actor_cfg.character_file is None or not actor_cfg.character_file.exists():
             raise WorldAssemblyError(
                 [
@@ -311,14 +457,16 @@ class GensokyoWorld:
             setup_signal_handlers=False,
             manage_initiative_timer=False,
         )
-        agent.create_session()
+        resumed = bool(resume_session_id) and agent.resume_session(resume_session_id)
+        if not resumed:
+            agent.create_session()
         await agent.start()
         brief = ActorBrief(
             actor_id=actor_cfg.id,
             display_name=character.name,
             summary=str(character.metadata.get("description", "")),
         )
-        return agent, brief
+        return agent, brief, resumed
 
     @classmethod
     def _build_initial_stage(
