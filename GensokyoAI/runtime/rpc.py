@@ -53,7 +53,7 @@ class RpcMethodSpec(Struct, frozen=True):
         return self.legacy or self.replacement is not None
 
 
-RUNTIME_PROTOCOL_VERSION = "2.0.0"
+RUNTIME_PROTOCOL_VERSION = "2.1.0"
 RUNTIME_PROTOCOL_MAJOR_VERSION = 2
 RUNTIME_BREAKING_CHANGES: tuple[dict[str, str], ...] = (
     {

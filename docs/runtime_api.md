@@ -4,8 +4,8 @@
 
 ## 版本与兼容性
 
-- 当前 package 版本：`2026.7.14.0`
-- 当前协议版本：`2.0.0`
+- 当前 package 版本：`2026.7.30.0`
+- 当前协议版本：`2.1.0`
 - 当前协议主版本：`2`
 - 兼容性策略：同一主版本内可以新增字段和方法；删除字段、修改语义或改变错误结构需要进入 breaking changes。
 - 客户端应优先调用 `runtime.info`，再根据 `protocol_version`、`capabilities`、`methods`、`legacy_methods` 与 `method_specs` 决定可用功能。
@@ -17,6 +17,7 @@ HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id
 
 - `agent.init` 可传 `agent_id`；省略时由服务生成。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。
 - 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
+- `world.*` 多角色编排方法同样按 `user_id -> agent_id` 租户隔离；`world.send_message` / `world.send_message_stream` 必须传 `idempotency_key`（与 Agent 消息共用 `operations.json` 操作账本，账本槽位为 World 存档 id）。World 没有 session revision 概念，写操作不要求 `expected_revision`（World 回合锁已串行化）。
 - 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。
 - `agent.send_message` 和 `agent.send_message_stream` 还必须传 1-128 字符的 `idempotency_key`；网络重试必须复用同一键。
 - Runtime 会在调用 Provider 前将消息操作写入 `operations.json`。客户端可用 `message.status` 按 `agent_id`、`session_id` 和 `idempotency_key` 查询 `pending`、`succeeded`、`failed` 或 `cancelled` 状态。
@@ -45,10 +46,10 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
   "name": "GensokyoAI Runtime",
   "package_version": "2026.7.14.0",
   "protocol": "gensokyo-runtime-rpc",
-  "protocol_version": "2.0.0",
+  "protocol_version": "2.1.0",
   "protocol_major_version": 2,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -388,6 +389,35 @@ HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Run
 - 同一个 key 携带不同消息会返回 `message.idempotency_conflict`，不会执行 Provider。
 
 `GET /health` 只表示进程存活；`GET /ready` 和 `runtime.ready` 表示是否接受新请求。服务进入 drain 后 readiness 返回 HTTP `503`，已有操作可在配置的超时内收敛，新操作返回 `runtime.draining`。
+
+## World 多角色编排 API
+
+`world.*` 方法驱动 GensokyoWorld 多角色编排：单模型演一整台戏，由 Director 根据剧情与在场角色决定每轮谁发言、何时交还用户。单角色 Agent 与 World 在同一 RuntimeService 实例上互斥（`world.init` 与 `agent.init` 双向拒绝，错误码 `world.agent_mode_active` / `world.world_mode_active`）；网络多租户进程可同时按 `user_id -> agent_id` 托管 Agent 与 World。
+
+- `world.init`：装配（或恢复）World。参数 `config_path`（可选，网络侧仅 `admin`）、`session_id`（可选，提供时按存档恢复）、`start`（默认 `true`）。返回 `world.state` 同形快照，另附 `resume_diagnostics`（恢复时的 roster/会话差异诊断）。
+- `world.start`：开场（幂等）。
+- `world.send_message`：参数 `message`、`idempotency_key`；聚合返回 `{world_id, session_id, turns, waiting_for_user, generation_id, idempotent_replay}`，其中 `turns[]` 为 `{actor_id, actor_name, scene_id, content}`，即本段自动表演中各 Actor 的发言记录。
+- `world.send_message_stream`：聚合形态同 `world.send_message` 并附完整 `events`；WebSocket 使用增量帧（见下）。
+- `world.state`：World 状态快照（`world_id`、`session_id`、`protagonist`、`current_actor_id`、`waiting_for_user`、`stage`、`roster`、`transcript_counts`、`started`、`resume_diagnostics`）。
+- `world.roster`：在场角色名单及各自舞台位置（`actor_id`、`name`、`scene_id`、`is_current`）。
+- `world.transcript`：共享剧本（公开层，不含导演 reason 与角色私有内容）。参数 `scene_id`（可选，默认用户当前场景）、`limit`（1-500）。
+- `world.move`：参数 `scene_id`；把用户移动到指定场景并广播公开过渡事件。
+- `world.session.create` / `world.session.list` / `world.session.resume` / `world.session.delete` / `world.session.export`：World 存档管理；`world_id` 省略时使用当前 World。运行中的活动存档拒绝删除（`world.session_active`）。
+- `world.shutdown`：保存存档、关停全部 Actor 与 World 总线。
+
+角色权限：`world.state` / `world.roster` / `world.transcript` / `world.session.list` / `world.session.export` 为 `read`，其余 `world.*` 为 `chat`。
+
+WebSocket `world.send_message_stream` 与 `agent.send_message_stream` 使用相同的 ack/task/cancel 机制：先发含 `stream_id` 与 `generation_id` 的确认帧，然后逐事件推送，最后 done 帧（`result` 与 `world.send_message` 同形并附 `events`）。事件帧序列：
+
+```json
+{"type": "world.actor.started", "actor_id": "marisa", "actor_name": "雾雨魔理沙", "scene_id": "magic_forest"}
+{"type": "world.actor.chunk", "actor_id": "marisa", "content": "……"}
+{"type": "world.actor.completed", "actor_id": "marisa", "actor_name": "雾雨魔理沙", "scene_id": "magic_forest", "content": "……"}
+{"type": "world.waiting_user"}
+{"type": "world.finish", "world_id": "gensokyo", "session_id": "...", "turns": [{"actor_id": "marisa", "actor_name": "雾雨魔理沙", "scene_id": "magic_forest", "content": "……"}], "waiting_for_user": true, "generation_id": "...", "idempotent_replay": false}
+```
+
+World 运行时事件（`world.started`、`world.shutdown`、`world.actor.started` / `chunk` / `completed`、`world.director.decision`、`world.scene.moved`、`world.waiting_user`）可通过事件订阅的 `world` 分类订阅，已并入 `runtime_observable`；订阅总线随 World/Agent 模式自动选择。取消与断连语义与 `agent.send_message_stream` 一致：连接断开或 `runtime.cancel_stream` 取消时，操作账本收敛为 `cancelled`，不会留下永久 `pending`。
 
 ## 主动定时器 API
 

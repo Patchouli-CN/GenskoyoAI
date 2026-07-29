@@ -38,9 +38,9 @@ GensokyoAI 是一个 Python 纯后端工具包。它不绑定任何具体 UI、�
 
 ## 版本管理与更新日志
 
-GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.7.14.0`；Python 包版本不带 `v`，为 `2026.7.14.0`。Runtime 协议版本采用独立语义版本，当前开发分支为 `2.0.0`、主版本为 `2`；memory schema 当前为 `2`，其他公开 schema 为 `1`。
+GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.7.30.0`；Python 包版本不带 `v`，为 `2026.7.30.0`。Runtime 协议版本采用独立语义版本，当前为 `2.1.0`、主版本为 `2`；memory schema 当前为 `2`，world session schema 为 `1`，其他公开 schema 为 `1`。
 
-[Changelog 索引](./docs/changelog.md) 说明正式发布与开发快照；当前最新正式累计发布记录见 [`docs/changelog/v2026.7.14.0.md`](./docs/changelog/v2026.7.14.0.md)。
+[Changelog 索引](./docs/changelog.md) 说明正式发布与开发快照；当前最新正式发布记录见 [`docs/changelog/v2026.7.30.0.md`](./docs/changelog/v2026.7.30.0.md)。
 
 ## Runtime API
 
@@ -118,6 +118,18 @@ GensokyoAI 不是简单的问答机器人，而是围绕“角色扮演”设计
 启用场景系统后，角色所处的环境（博丽神社、魔法森林、红魔馆……）被外置为常驻的结构化状态，而不是靠角色在每句对话里反复复述"我在哪"。角色开场就置身于某个场景，剧情推进时可以主动切换场景（`scene_switch`），一时想不起自己在哪也能主动查看（`get_current_scene`）。
 
 这带来两个直接好处：一是角色扮演的注意力可以更集中在人设与对话本身，小模型也能有更稳定的临场表现；二是当前场景随会话持久化，退出重进仍停留在上次的地点。场景库全局共享、用 YAML 定义，所有角色共用同一套幻想乡地点。详见 [快速上手](./QUICKSTART.md) 与 [默认配置](./config/default.yaml) 的 `scene` 节。
+
+### 一台戏：多角色世界（GensokyoWorld）
+
+启用 `world` 配置后，可以从"演一个角色"升级到"单模型演一整台戏"：多个角色同处一个舞台，由导演（Director）根据剧情、在场角色与戏剧时机决定每轮谁发言、何时切人、何时把话筒交还用户——不是按顺序轮流说话的群聊。
+
+- **一个模型演全员**：所有角色共享同一个 ModelClient（共享大脑、统一限流），但每个角色拥有独立的会话、工作记忆与长期记忆，绝不串台；不在场的角色不知道该场景发生的事。
+- **共享剧本与舞台**：公开对话按场景分片记入 SharedTranscript，角色移动由 WorldStage 统一管理；场景切换可让用户自动跟随当前演员。
+- **各记各的视角**：一段表演结束后，世界会为在场角色各写一份"自己视角"的记忆——同一件事，魔理沙记的是得意，主人记的是有人擅闯。
+- **世界会主动推进**：整个世界只有一个主动定时器；段落结束后世界统一规划下一次剧情推进，到点由导演从当下在场角色中选角开口。用户发言永远优先，自动取消旧的主动意图。
+- **可存档可恢复**：World 会话独立持久化（舞台、剧本、各角色私有会话），退出后完整恢复，roster 差异会给出结构化诊断而不是静默串角色。
+
+控制台加 `--world`（或 `world.enabled: true`）即可进入；完整示例见 [world 示例配置](./config/world_example.yaml)，Runtime 客户端使用 `world.*` RPC（见 [Runtime API](./docs/runtime_api.md)）。单角色模式完全不受影响。
 
 ### 更好的会话管理
 
@@ -467,6 +479,7 @@ GensokyoAI 提供前端无关的 Runtime 服务边界，当前可通过 [`bridge
 - `initiative_timer.current` / `initiative_timer.update` / `initiative_timer.cancel` / `initiative_timer.trigger`：查看、编辑、取消或立即触发 AI 主动定时器摘要。
 - `memory.list` / `memory.search` / `memory.get` / `memory.update` / `memory.delete` / `memory.graph`：管理显式 `session_id` 对应的语义记忆与话题图。
 - `scene.current` / `scene.list` / `scene.get` / `scene.switch` / `scene.graph`：查询、切换当前场景，列出场景库与连通图，供前端程序化编排舞台。
+- `world.init` / `world.start` / `world.send_message` / `world.send_message_stream` / `world.state` / `world.roster` / `world.transcript` / `world.move` / `world.session.*` / `world.shutdown`：多角色 World 编排——装配与恢复 World、驱动用户回合（返回各角色发言 `turns`）、查询舞台/花名册/共享剧本、移动用户场景、管理 World 存档；WebSocket 流式逐帧推送 `world.actor.*` / `world.waiting_user` / `world.finish` 事件。
 - `dependency.status` / `dependency.install`：查询和安装白名单内 Provider 可选依赖；安装动作受 Runtime 资源闸门保护。
 - `external_tool.status`：查询外部工具来源状态。
 

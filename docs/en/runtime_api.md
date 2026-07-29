@@ -4,8 +4,8 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 
 ## Versioning and Compatibility
 
-- Current package version: `2026.7.14.0`
-- Current protocol version: `2.0.0`
+- Current package version: `2026.7.30.0`
+- Current protocol version: `2.1.0`
 - Current protocol major version: `2`
 - Compatibility policy: within the same major version, new fields and methods may be added; removing fields, changing semantics, or changing error structures requires a breaking change.
 - Clients should call `runtime.info` first, then decide available features based on `protocol_version`, `capabilities`, `methods`, `legacy_methods`, and `method_specs`.
@@ -19,6 +19,7 @@ HTTP, WebSocket, and SSE use `user_id -> agent_id -> session_id -> message_id`. 
 - Network Agent/session RPCs require `agent_id`. Conversation-context operations also require `session_id` and never rely on a process-global current session.
 - Session writes require the last observed `expected_revision`. Conflicts return `session.revision_conflict`.
 - Message sends also require a 1-128 character `idempotency_key`; retries must reuse it.
+- `world.*` multi-character orchestration methods are isolated per `user_id -> agent_id` tenant the same way; `world.send_message` / `world.send_message_stream` require an `idempotency_key` (sharing the `operations.json` ledger with Agent messages, keyed by the World session id). Worlds have no session revision concept, so writes do not require `expected_revision` (the World turn lock already serializes turns).
 - Before calling a Provider, the Runtime persists a message operation in `operations.json`. Clients can query `pending`, `succeeded`, `failed`, or `cancelled` through `message.status` with `agent_id`, `session_id`, and `idempotency_key`.
 - The trusted local JSON Lines bridge retains single-user implicit-current-session compatibility.
 
@@ -35,12 +36,12 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
 ```json
 {
   "name": "GensokyoAI Runtime",
-  "package_version": "2026.7.14.0",
+  "package_version": "2026.7.30.0",
   "protocol": "gensokyo-runtime-rpc",
-  "protocol_version": "2.0.0",
+  "protocol_version": "2.1.0",
   "protocol_major_version": 2,
-  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph"],
+  "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -380,6 +381,35 @@ The generation token stream itself cannot resume across WebSocket connections. R
 - Reusing a key for a different message returns `message.idempotency_conflict` without calling the Provider.
 
 `GET /health` only reports process liveness. `GET /ready` and `runtime.ready` report whether new work is accepted. During drain, readiness returns HTTP `503`, existing operations are allowed to settle up to the configured timeout, and new work fails with `runtime.draining`.
+
+## World Multi-Character Orchestration API
+
+The `world.*` methods drive GensokyoWorld multi-character orchestration: one model performs an entire play, and the Director decides who speaks each turn, when to switch, and when to hand the mic back to the user. A single-character Agent and a World are mutually exclusive within one RuntimeService instance (`world.init` and `agent.init` reject each other with `world.agent_mode_active` / `world.world_mode_active`); a multi-tenant process can host Agents and Worlds side by side per `user_id -> agent_id`.
+
+- `world.init`: assembles (or resumes) a World. Params: `config_path` (optional, `admin` only over the network), `session_id` (optional; resumes that archive when provided), `start` (default `true`). Returns the same snapshot as `world.state` plus `resume_diagnostics` (roster/session differences found during resume).
+- `world.start`: opening beat (idempotent).
+- `world.send_message`: params `message`, `idempotency_key`; returns `{world_id, session_id, turns, waiting_for_user, generation_id, idempotent_replay}` where `turns[]` are `{actor_id, actor_name, scene_id, content}` — the speeches of this automatic performance segment.
+- `world.send_message_stream`: aggregate form identical to `world.send_message` plus the full `events` list; WebSocket uses incremental frames (see below).
+- `world.state`: World snapshot (`world_id`, `session_id`, `protagonist`, `current_actor_id`, `waiting_for_user`, `stage`, `roster`, `transcript_counts`, `started`, `resume_diagnostics`).
+- `world.roster`: cast list with stage positions (`actor_id`, `name`, `scene_id`, `is_current`).
+- `world.transcript`: shared transcript (public layer only; no Director reasoning or private character content). Params `scene_id` (optional, defaults to the user's current scene), `limit` (1-500).
+- `world.move`: param `scene_id`; moves the user to the given scene and broadcasts a public transition event.
+- `world.session.create` / `world.session.list` / `world.session.resume` / `world.session.delete` / `world.session.export`: World session management; `world_id` defaults to the current World. The active running session is refused for deletion (`world.session_active`).
+- `world.shutdown`: saves the session, then shuts down every Actor and the World event bus.
+
+Role permissions: `world.state` / `world.roster` / `world.transcript` / `world.session.list` / `world.session.export` require `read`; all other `world.*` methods require `chat`.
+
+WebSocket `world.send_message_stream` uses the same ack/task/cancel mechanics as `agent.send_message_stream`: an acknowledgement frame with `stream_id` and `generation_id`, then per-event frames, then a done frame (`result` matches `world.send_message` plus `events`). The event frame sequence:
+
+```json
+{"type": "world.actor.started", "actor_id": "marisa", "actor_name": "Marisa Kirisame", "scene_id": "magic_forest"}
+{"type": "world.actor.chunk", "actor_id": "marisa", "content": "..."}
+{"type": "world.actor.completed", "actor_id": "marisa", "actor_name": "Marisa Kirisame", "scene_id": "magic_forest", "content": "..."}
+{"type": "world.waiting_user"}
+{"type": "world.finish", "world_id": "gensokyo", "session_id": "...", "turns": [{"actor_id": "marisa", "actor_name": "Marisa Kirisame", "scene_id": "magic_forest", "content": "..."}], "waiting_for_user": true, "generation_id": "...", "idempotent_replay": false}
+```
+
+World runtime events (`world.started`, `world.shutdown`, `world.actor.started` / `chunk` / `completed`, `world.director.decision`, `world.scene.moved`, `world.waiting_user`) can be subscribed through the `world` event category and are included in `runtime_observable`; the subscription bus is chosen automatically for World vs Agent mode. Cancellation and disconnect semantics match `agent.send_message_stream`: on disconnect or `runtime.cancel_stream`, the operation ledger converges to `cancelled` instead of staying `pending` forever.
 
 ## Initiative Timer API
 

@@ -10,8 +10,8 @@ For version format, where to use `v` and where not, and the difference between R
 
 Brief rules:
 
-- Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.7.14.0`, and the only previous official release was `v2026.5.13.0`.
-- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.7.14.0`.
+- Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.7.30.0`, and the first official release was `v2026.5.13.0`.
+- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.7.30.0`.
 - Runtime protocol version uses independent semantic versioning without `v`; the current development branch uses `2.0.0` with major `2`; client compatibility prioritizes `protocol_major_version`.
 - Schema versions continue to use integers, e.g. `1`, `2`, `3`.
 
@@ -38,6 +38,8 @@ Each change entry should ideally include:
 - Adds readiness, graceful drain, and a remote administration surface disabled by default on HTTP/WS. Network `method_specs` now expose actual resource requirements and result-schema completeness.
 - Session schema moves from `1` to `2`; legacy files gain revision/message identity while unknown extension fields are preserved.
 - The file backend targets single-node remote multi-user service. Multi-node production still requires PostgreSQL and shared object storage.
+- Runtime Protocol `2.1.0` adds the `world.*` multi-character orchestration methods (14) and the `world.orchestration` capability; World sessions use an independent `world session schema v1`; `world.send_*` reuses the message idempotency ledger. Protocol major stays `2` — no client migration needed.
+- The forced initiative fallback chain (`fallback_on_no_schedule` and 3 related keys) is removed; legacy keys only warn on validation. Runtime event redaction is unified to the `[REDACTED]` placeholder.
 
 ---
 
@@ -141,10 +143,11 @@ Use one or two sentences to explain the most important changes in this version, 
 
 ## Current Project Version Records
 
-Official release records start at `v2026.5.13.0`. It was the only previous official release; the 6.x and `v2026.7.4.0` files are unpublished development snapshots or candidate notes and must not be treated as official versions:
+Official release records start at `v2026.5.13.0`. The 6.x and `v2026.7.4.0` files are unpublished development snapshots or candidate notes and must not be treated as official versions:
 
-- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md): cumulative official release since the sole official baseline `v2026.5.13.0`.
-- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md): the only previous official release and first public Alpha baseline.
+- [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md): official release covering the completed multi-character GensokyoWorld and Runtime robustness.
+- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md): cumulative official release since the first official baseline `v2026.5.13.0`.
+- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md): the first official release and first public Alpha baseline.
 - [`v2026.6.21.0.md`](../changelog/v2026.6.21.0.md): unpublished development snapshot covering HTTP/WebSocket migration, DDG search, and initiative timers.
 - [`v2026.6.22.0.md`](../changelog/v2026.6.22.0.md): unpublished development snapshot covering security and character openings.
 - [`v2026.6.23.0.md`](../changelog/v2026.6.23.0.md): unpublished development snapshot covering background timers and character data.

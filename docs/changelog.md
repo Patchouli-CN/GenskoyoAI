@@ -10,8 +10,8 @@
 
 简要规则：
 
-- 对外版本和 changelog 使用 `vYYYY.M.D.N`；当前正式 release 为 `v2026.7.14.0`，此前唯一正式 release 是 `v2026.5.13.0`。
-- [`pyproject.toml`](../pyproject.toml) 中的 package version 不带 `v`，当前为 `2026.7.14.0`。
+- 对外版本和 changelog 使用 `vYYYY.M.D.N`；当前正式 release 为 `v2026.7.30.0`，首个正式 release 是 `v2026.5.13.0`。
+- [`pyproject.toml`](../pyproject.toml) 中的 package version 不带 `v`，当前为 `2026.7.30.0`。
 - Runtime protocol version 使用独立语义版本且不带 `v`，当前开发分支为 `2.0.0`、major 为 `2`；客户端兼容性优先看 `protocol_major_version`。
 - schema version 继续使用整数，例如 `1`、`2`、`3`。
 
@@ -38,6 +38,8 @@
 - 新增 readiness、优雅 drain 和默认关闭的 HTTP/WS 远程管理面；网络 `method_specs` 会声明真实资源必填字段及结果 schema 完整度。
 - Session schema 从 `1` 升到 `2`；旧文件自动补 `revision`、`message_id` 和消息 revision，并保留未知扩展字段。
 - 默认文件后端定位为单节点远程多用户；多节点生产部署仍要求 PostgreSQL 和共享对象存储。
+- Runtime Protocol `2.1.0` 新增 `world.*` 多角色编排方法（14 个）与 capability `world.orchestration`；World 会话使用独立的 `world session schema v1`；`world.send_*` 复用消息幂等账本。协议 major 保持 `2`，客户端无迁移负担。
+- 主动定时器强制兜底链（`fallback_on_no_schedule` 等 4 键）已移除，旧键仅警告迁移；Runtime 事件脱敏占位符统一为 `[REDACTED]`。
 
 ---
 
@@ -141,10 +143,11 @@
 
 ## 当前项目版本记录
 
-正式发布记录从 `v2026.5.13.0` 开始。`v2026.5.13.0` 是此前唯一正式 release；6.x 与 `v2026.7.4.0` 文件是未发布开发快照或候选记录，不应视作正式版本：
+正式发布记录从 `v2026.5.13.0` 开始。6.x 与 `v2026.7.4.0` 文件是未发布开发快照或候选记录，不应视作正式版本：
 
-- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md)：自唯一正式基线 `v2026.5.13.0` 以来的累计正式发布。
-- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md)：此前唯一正式 release，首个公开 Alpha 基线。
+- [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md)：正式发布，多角色 GensokyoWorld 完整落地与 Runtime 健壮性记录。
+- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md)：自首个正式基线 `v2026.5.13.0` 以来的累计正式发布。
+- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md)：首个正式 release，首个公开 Alpha 基线。
 - [`v2026.6.21.0.md`](changelog/v2026.6.21.0.md)：未发布开发快照，HTTP/WebSocket 入口迁移、DDG 搜索与主动定时器记录。
 - [`v2026.6.22.0.md`](changelog/v2026.6.22.0.md)：未发布开发快照，安全与角色开场记录。
 - [`v2026.6.23.0.md`](changelog/v2026.6.23.0.md)：未发布开发快照，主动定时器后台化与角色资料记录。

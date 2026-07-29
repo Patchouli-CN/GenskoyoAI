@@ -5,7 +5,7 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 / 8 已完成、已提交（最新 `5665bd4`，已 push）；阶段 9（Runtime / WebSocket / Console）已完成、已验证全绿、尚未提交**。下一步是 **阶段 10**（文档与完整验收，最后阶段）。
+多角色 `GensokyoWorld` **全部 10 个阶段已完成**：阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 / 8 / 9 已提交（最新 `54e9f34`，已 push 至阶段 8）；**阶段 10（文档与完整验收）已完成、已验证全绿、尚未提交**。多角色功能整体交付完毕，后续只剩用户决定的正式发布与 §5.6「待用户定夺」的设计级事项。
 
 - 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
 - 当前测试：`609 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
@@ -85,7 +85,7 @@
 - **✅ 7 — DialogueLoop 抽象 + 对话欲 + fallback 链删除**：`core/dialogue_loop.py`（Protocol + `InitiativePlan`）、`core/initiative_scheduler.py`（纯调度器，替换式计划 + fire 时效校验）、`world/initiative.py`（World 段落结束一次世界规划，全世界一个定时器；到点 Director initiative 按当下在场选角；用户发言取消重规划）。**§7.3 按用户 07-29 决策实现**：`ThinkEngine.decide_drive_initiative()` 一次 LLM 出四维动机 + 调度决策（注入对话欲/心情状态，动机回灌累积器）；`core/agent/drive_accumulator.py` 纯算术累积 + 心情非对称半衰期 + 泄压 + session.metadata 持久化；`drive_enabled` 默认关。**强制 fallback 链整体删除**：4 个配置键移除，旧键 loader 丢弃 + validator 迁移警告（不报错），事件 payload 移除 fallback 字段，`source` 新增 `"drive"`。**审查修复**：trigger() 不再持锁跨 LLM 生成；触发与回合经信号量互斥 + 时效校验。定向 22 例 + 全量 579 passed 全绿，未提交。
 - **✅ 8 — 持久化恢复**：`GensokyoWorld.resume(config, session_id)` 恢复编排：存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过旧剧本。§5.6 归档 4 条一并落地：`create_async` per-key 锁消除 TOCTOU、`list()` docstring 补自愈副作用、roster diagnostics 并入 stage 键与 current_actor（幽灵占位不漏诊）、`core/migrations` 高版本文件不再静默降级（session/memory 两路）。定向 8 例 + 全量 587 passed 全绿，未提交。
 - **✅ 9 — Runtime / WebSocket / Console**：`RuntimeState.world`（与 agent 互斥、绝不影响 root 租户路由）；`world.init/start/send_message[_stream]/state/roster/transcript/move/session.create/list/resume/delete/export/shutdown` 14 个 RPC；WS 流式分流 `world.send_message_stream`（ack 先于参数校验，world.finish 终帧聚合 turns）；`runtime.info` capability `world.orchestration`。接线清单全落地：auth `required_role` world 分支（read/chat，不再 fallthrough admin）、`_NETWORK_RESOURCE_PREFIXES`+`_is_tenant_method` 加 `world.`（租户隔离）、`NETWORK_IDEMPOTENCY_METHODS` 加 world.send_*（复用幂等账本，World 存档槽位）、event_contract 加 8 个 world 事件契约 + `_runtime_event_category_map` 加 world 分类并入 runtime_observable、事件订阅/录制改从 `_runtime_event_bus()`（World 模式取 World 总线）、**两套脱敏统一为 `sanitize_event_payload`**（字段并集 + password 子串 + 统一 `[REDACTED]`）。**§5.6 归档 4 条一并落地**：WS 断连/取消落在发送窗口的幂等账本确定性收敛（`_send_streaming_rpc_frames` finally 显式 aclose + service 层 GeneratorExit 收敛 cancelled + 网络/本地两层关闭链）；`_await_cancelled_task` 抑制一切任务异常（清理链不再被心跳异常截断）；`_load_tenant_catalog` 按租户隔离损坏（单租户 operations.json 损坏只跳过该租户并 warning，不静默重建空账本）；`dependency.install` 改 `asyncio.to_thread` + timeout 钳配置上限。console：`backends/console/world_backend.py`（动态发言者前缀、**显示单一通道**——用户回合与主动剧情都只经 World 总线事件显示，turn lock 保证不交错，无 stream/bus 双份问题）、CLI `--world`（或 world.enabled 自动选择，含 --resume/--new-session/--list-sessions 的 World 存档语义）、`/world` `/roster` `/stage` `/transcript` 命令、单角色会话命令在 World 模式友好拦截。定向 22 例（robustness 4 + world_rpc 11 + world_console 6 + WS world 分流 1）+ 全量 `609 passed, 3 subtests passed` 全绿，未提交。
-- **⏳ 10 — 文档与完整验收**：README 中英、QUICKSTART、runtime_api、changelog/version、草案状态。
+- **✅ 10 — 文档与完整验收**：README 中英新增「一台戏：多角色世界」亮点与 `world.*` RPC 清单；QUICKSTART 新增 World 快速上手（world_example 一键开演 + `--world` 参数表）；`docs/runtime_api.md` 新增「World 多角色编排 API」章节（14 方法/权限/WS 帧协议/事件分类），协议版本 `2.0.0`→`2.1.0`（major 2 不变，纯增量）；`docs/multi_character_design.md` 草案状态转「已实现」；changelog `v2026.7.30.0`（正式发布，中英双版）+ `pyproject.toml` bump `2026.7.30.0` + `world session schema v1` 入 schema 表；`rpc.py` `RUNTIME_PROTOCOL_VERSION` 与版本一致性测试同步。default.yaml world 节与 world_example.yaml 阶段 2.1 已就绪无需改。全量 `609 passed, 3 subtests passed` 全绿，未提交。
 
 ## 5. 关键陷阱（血泪，别踩）
 
@@ -186,11 +186,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 9 完成）
+## 8. 未提交改动清单（截至阶段 10 完成）
 
-阶段 9 已改（M）：`GensokyoAI/runtime/{service,rpc,auth,event_contract}.py`、`GensokyoAI/backends/web_server/http_adapter.py`、`GensokyoAI/world/{world,__init__}.py`（`model_streaming` property + docstring）、`GensokyoAI/cli/main.py`（`--world`）、`tests/test_runtime_http_adapter.py`（WS world 分流用例）、`tests/test_runtime_dependencies.py`（`[REDACTED]` 统一断言）、`.gitignore`（`runtime_data/`）、`docs/{todo,gsk-ai-multi-character}.md`
-阶段 9 新增（??）：`GensokyoAI/backends/console/world_backend.py`、`tests/test_runtime_robustness.py`、`tests/test_world_runtime_rpc.py`、`tests/test_world_console.py`
+阶段 10 已改（M）：`pyproject.toml`（2026.7.30.0）、`GensokyoAI/runtime/rpc.py`（协议 2.1.0）、`README.md`、`README_en.md`、`QUICKSTART.md`、`docs/runtime_api.md`（World API 章节 + 2.1.0）、`docs/en/runtime_api.md`（英文同步）、`docs/changelog.md`、`docs/en/changelog.md`、`docs/multi_character_design.md`（草案状态）、`docs/{todo,gsk-ai-multi-character}.md`、`tests/test_runtime_dependencies.py`（版本断言同步）
+阶段 10 新增（??）：`docs/changelog/v2026.7.30.0.md`、`docs/en/changelog/v2026.7.30.0.md`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(world): world.* RPC 与 World 控制台接入（阶段 9）`
+`docs(world): 多角色文档与版本收尾（阶段 10）`
 

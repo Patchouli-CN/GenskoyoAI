@@ -1,6 +1,6 @@
 [project]
 name = "GensokyoAI"
-version = "2026.7.14.0"
+version = "2026.7.30.0"
 description = "幻想乡 AI 角色扮演引擎 - 一个专为角色扮演设计的异步 AI 对话框架"
 readme = "README.md"
 license = { text = "Apache-2.0" }

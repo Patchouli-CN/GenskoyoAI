@@ -38,9 +38,9 @@ Core boundaries:
 
 ## Version Management & Changelog
 
-GensokyoAI release versions use calendar versioning. The latest release is `v2026.7.14.0`; the Python package version omits the `v` prefix: `2026.7.14.0`. The Runtime protocol uses independent semantic versioning, currently `1.1.0` with major version `1`; memory schema is `2`, while all other public schemas remain `1`.
+GensokyoAI release versions use calendar versioning. The latest release is `v2026.7.30.0`; the Python package version omits the `v` prefix: `2026.7.30.0`. The Runtime protocol uses independent semantic versioning, currently `2.1.0` with major version `2`; memory schema is `2`, world session schema is `1`, while all other public schemas remain `1`.
 
-The [Changelog Index](./docs/en/changelog.md) distinguishes official releases from development snapshots; the latest cumulative official release notes are in [`docs/en/changelog/v2026.7.14.0.md`](./docs/en/changelog/v2026.7.14.0.md).
+The [Changelog Index](./docs/en/changelog.md) distinguishes official releases from development snapshots; the latest official release notes are in [`docs/en/changelog/v2026.7.30.0.md`](./docs/en/changelog/v2026.7.30.0.md).
 
 ## Runtime API
 
@@ -118,6 +118,18 @@ With the initiative timer enabled, a character can, after a normal reply, only s
 With the scene system enabled, the environment a character is in (the Hakurei Shrine, the Forest of Magic, the Scarlet Devil Mansion...) becomes persistent, structured state instead of something the character has to restate in every message. Characters open the conversation already situated in a scene, can switch scenes on their own as the story moves (`scene_switch`), and can look up where they are when they lose track (`get_current_scene`).
 
 Two direct benefits: the character's attention stays on personality and dialogue rather than on remembering their location—so even smaller models perform more consistently in-scene; and the current scene is persisted with the session, so resuming later keeps the character right where they left off. The scene library is globally shared and defined in YAML, with all characters drawing from the same set of Gensokyo locations. See the [Quickstart](./QUICKSTART.md) and the `scene` section of the [default config](./config/default.yaml).
+
+### A Whole Play: Multi-Character World (GensokyoWorld)
+
+With the `world` config enabled, you go from "playing one character" to "one model performing an entire play": multiple characters share one stage, and a Director decides—based on the story, who's present, and dramatic timing—who speaks each turn, when to hand over, and when to give the mic back to you. It is not a round-robin group chat.
+
+- **One model, every role**: all characters share a single ModelClient (one brain, unified rate limits), but each keeps its own session, working memory, and long-term memory—no cross-talk; characters who left the scene don't know what happened there.
+- **Shared transcript and stage**: public dialogue is recorded per scene in a SharedTranscript, and movement is managed by the WorldStage; the user can automatically follow the current actor across scenes.
+- **Everyone remembers their own angle**: after each performance segment, the world writes a perspective memory for every character present—the same event, Marisa remembers as a triumph, the mansion's owner as an intruder.
+- **The world moves the story on its own**: there is exactly one initiative timer per world; after each segment the world plans the next push, and when it fires the Director picks a speaker from whoever is present right now. Your messages always take priority and cancel pending intents.
+- **Save and resume**: world sessions persist independently (stage, transcript, each actor's private session) and restore completely, with structured diagnostics for roster differences instead of silently mixing up characters.
+
+Run the console with `--world` (or `world.enabled: true`) to enter; see the [world example config](./config/world_example.yaml) for a complete setup, and `world.*` RPC in the [Runtime API](./docs/runtime_api.md) for clients. Single-character mode is completely unaffected.
 
 ### Better Session Management
 
@@ -464,6 +476,7 @@ Main capabilities currently exposed:
 - `initiative_timer.current` / `initiative_timer.update` / `initiative_timer.cancel` / `initiative_timer.trigger`: view, edit, cancel, or immediately trigger AI initiative timer summaries.
 - `memory.list` / `memory.search` / `memory.get` / `memory.update` / `memory.delete` / `memory.graph`: manage current session semantic memory and topic graph.
 - `scene.current` / `scene.list` / `scene.get` / `scene.switch` / `scene.graph`: query and switch the current scene, list the scene library and connectivity graph—so frontends can orchestrate the stage programmatically.
+- `world.init` / `world.start` / `world.send_message` / `world.send_message_stream` / `world.state` / `world.roster` / `world.transcript` / `world.move` / `world.session.*` / `world.shutdown`: multi-character World orchestration—assemble and resume a World, drive user turns (returning per-actor `turns`), query stage/roster/shared transcript, move the user across scenes, and manage World sessions; WebSocket streams `world.actor.*` / `world.waiting_user` / `world.finish` events frame by frame.
 - `dependency.status` / `dependency.install`: query and install whitelist provider optional dependencies; installation actions are protected by Runtime resource gates.
 - `external_tool.status`: query external tool source status.
 

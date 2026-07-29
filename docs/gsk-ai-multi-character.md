@@ -480,7 +480,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 7. **主循环主动定时器**：✅ 已完成（阶段 7）：DialogueLoop 协议、纯调度器、World 主循环计划/触发、§7.3 对话欲（四维动机接入短期思考）、强制 fallback 链删除，见 §7 状态标注。
 8. **持久化恢复**：✅ 已完成（阶段 8）：`GensokyoWorld.resume(config, session_id)` 恢复编排——存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过上一次已投影剧本。审查修复（§5.6 归档 4 条）一并落地：`create_async` per-key 锁消除 create TOCTOU；`list()` docstring 补自愈副作用；roster diagnostics 并入 stage 键（除 `__user__`）与 `current_actor_id`（幽灵占位不再漏诊）；`core/migrations` 对更高未知 schema_version 不再静默降级改写版本（session/memory 两路），与 world/persistence 硬拒绝契约对齐为「不静默降级」。export/delete/list 仍由 `WorldPersistence` 提供（阶段 2.3 已测），阶段 9 接 RPC。
 9. **Runtime / WebSocket / Console**：✅ 已完成（阶段 9）：world.* RPC（14 个）、WS 流式 actor 事件（`world.finish` 终帧聚合）、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`，见 §8 状态标注。§5.6 归档 runtime 4 条（WS 取消账本、清理链、租户启动隔离、依赖安装阻塞）与 world.\* 接线清单全部落地。
-10. **文档与完整验收**：更新草案状态、README 中英、QUICKSTART、runtime_api、default/world example、changelog/version。
+10. **文档与完整验收**：✅ 已完成（阶段 10）：README 中英多角色章节、QUICKSTART World 快速上手、runtime_api「World 多角色编排 API」章节（协议 `2.1.0`）、`multi_character_design.md` 草案状态转已实现、changelog `v2026.7.30.0`（package 版本同步 bump、`world session schema v1` 入表）、default/world example 配置核对（阶段 2.1 已就绪）。
 
 ---
 
