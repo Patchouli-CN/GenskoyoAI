@@ -882,6 +882,11 @@ class GensokyoWorld:
         return self._waiting_for_user
 
     @property
+    def model_streaming(self) -> bool:
+        """底层模型是否开启流式输出（前端显示策略用）。"""
+        return bool(self._config.model.stream)
+
+    @property
     def event_bus(self) -> EventBus:
         """World 自有事件总线（Runtime/控制台订阅 world.* 事件的入口）。"""
         return self._world_bus

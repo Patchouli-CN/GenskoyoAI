@@ -135,6 +135,18 @@ def required_role(method: str) -> str:
         "agent.delete",
     }:
         return "admin"
+    if method.startswith("world."):
+        # world 命名空间必须显式分支：fallthrough 默认 admin 会把
+        # 所有 world.* 变成仅管理员可用
+        if method in {
+            "world.state",
+            "world.roster",
+            "world.transcript",
+            "world.session.list",
+            "world.session.export",
+        }:
+            return "read"
+        return "chat"
     if method.startswith(("agent.", "session.", "initiative_timer.")):
         read_suffixes = (".list", ".current", ".messages", ".export", ".status")
         if method == "initiative_timer.hesitation":

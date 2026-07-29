@@ -134,6 +134,20 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("initiative_timer.trigger", "initiative_timer_trigger"),
     RpcMethodSpec("initiative_timer.hesitation", "initiative_timer_hesitation"),
     RpcMethodSpec("initiative_timer.hesitation.set", "initiative_timer_hesitation_set"),
+    RpcMethodSpec("world.init", "world_init"),
+    RpcMethodSpec("world.start", "world_start"),
+    RpcMethodSpec("world.send_message", "world_send_message"),
+    RpcMethodSpec("world.send_message_stream", "world_send_message_stream"),
+    RpcMethodSpec("world.state", "world_state"),
+    RpcMethodSpec("world.roster", "world_roster"),
+    RpcMethodSpec("world.transcript", "world_transcript"),
+    RpcMethodSpec("world.move", "world_move"),
+    RpcMethodSpec("world.session.create", "world_session_create"),
+    RpcMethodSpec("world.session.list", "world_session_list"),
+    RpcMethodSpec("world.session.resume", "world_session_resume"),
+    RpcMethodSpec("world.session.delete", "world_session_delete"),
+    RpcMethodSpec("world.session.export", "world_session_export"),
+    RpcMethodSpec("world.shutdown", "world_shutdown"),
     RpcMethodSpec("memory.list", "memory_list"),
     RpcMethodSpec("memory.search", "memory_search"),
     RpcMethodSpec("memory.get", "memory_get"),
@@ -303,6 +317,8 @@ NETWORK_IDEMPOTENCY_METHODS = frozenset(
         "message.status",
         "send_message",
         "send_message_stream",
+        "world.send_message",
+        "world.send_message_stream",
     }
 )
 
@@ -315,6 +331,7 @@ _NETWORK_RESOURCE_PREFIXES = (
     "initiative_timer.",
     "model.",
     "media.",
+    "world.",
 )
 _NETWORK_RESOURCE_LEGACY_METHODS = frozenset(
     {
@@ -355,9 +372,46 @@ _MESSAGE_RESULT_SCHEMA: dict[str, Any] = {
     "additionalProperties": True,
 }
 
+_WORLD_MESSAGE_RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "user_id": {"type": "string"},
+        "agent_id": {"type": "string"},
+        "world_id": {"type": "string"},
+        "session_id": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "turns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "actor_id": {"type": "string"},
+                    "actor_name": {"type": "string"},
+                    "scene_id": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["actor_id", "actor_name", "scene_id", "content"],
+                "additionalProperties": True,
+            },
+        },
+        "waiting_for_user": {"type": "boolean"},
+        "generation_id": {"type": "string"},
+        "idempotent_replay": {"type": "boolean"},
+    },
+    "required": [
+        "world_id",
+        "turns",
+        "waiting_for_user",
+        "generation_id",
+        "idempotent_replay",
+    ],
+    "additionalProperties": True,
+}
+
 _PUBLIC_RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
     "agent.send_message": _MESSAGE_RESULT_SCHEMA,
     "agent.send_message_stream": _MESSAGE_RESULT_SCHEMA,
+    "world.send_message": _WORLD_MESSAGE_RESULT_SCHEMA,
+    "world.send_message_stream": _WORLD_MESSAGE_RESULT_SCHEMA,
     "message.status": {
         "type": "object",
         "properties": {

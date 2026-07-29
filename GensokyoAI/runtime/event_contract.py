@@ -12,13 +12,18 @@ from msgspec import Struct
 SENSITIVE_FIELD_NAMES = {
     "api_key",
     "apikey",
+    "api-key",
     "authorization",
+    "auth",
     "access_token",
     "refresh_token",
     "token",
     "password",
+    "passwd",
     "secret",
     "client_secret",
+    "headers",
+    "extra_headers",
 }
 REDACTED_VALUE = "[REDACTED]"
 
@@ -140,6 +145,51 @@ RUNTIME_EVENT_CONTRACT: dict[str, RuntimeEventSpec] = {
         optional_fields=("reason", "source"),
         description="主动定时器因新消息或替换被丢弃。",
     ),
+    "world.started": RuntimeEventSpec(
+        event="world.started",
+        required_fields=("world_id",),
+        optional_fields=("session_id", "roster", "stage"),
+        description="World 完成装配与开场。",
+    ),
+    "world.shutdown": RuntimeEventSpec(
+        event="world.shutdown",
+        required_fields=("world_id",),
+        description="World 关闭。",
+    ),
+    "world.actor.started": RuntimeEventSpec(
+        event="world.actor.started",
+        required_fields=("actor_id", "actor_name", "scene_id"),
+        optional_fields=("turn_index",),
+        description="某 Actor 开始一回合发言。",
+    ),
+    "world.actor.chunk": RuntimeEventSpec(
+        event="world.actor.chunk",
+        required_fields=("actor_id", "content"),
+        description="Actor 发言的流式片段。",
+    ),
+    "world.actor.completed": RuntimeEventSpec(
+        event="world.actor.completed",
+        required_fields=("actor_id", "actor_name", "scene_id", "content"),
+        optional_fields=("turn_index",),
+        description="某 Actor 回合完成。",
+    ),
+    "world.director.decision": RuntimeEventSpec(
+        event="world.director.decision",
+        required_fields=("action",),
+        optional_fields=("next_actor_id", "phase", "scene_id", "reason"),
+        description="导演完成一次选角决策。",
+    ),
+    "world.scene.moved": RuntimeEventSpec(
+        event="world.scene.moved",
+        required_fields=("occupant_id", "to_scene_id"),
+        optional_fields=("from_scene_id", "user_moved"),
+        description="舞台上角色/用户位置变化（含用户跟随）。",
+    ),
+    "world.waiting_user": RuntimeEventSpec(
+        event="world.waiting_user",
+        required_fields=("world_id",),
+        description="一段自动表演结束，等待用户。",
+    ),
 }
 
 
@@ -151,7 +201,7 @@ def sanitize_event_payload(payload: Any) -> Any:
         for key, value in payload.items():
             key_text = str(key).lower()
             if key_text in SENSITIVE_FIELD_NAMES or any(
-                part in key_text for part in ("api_key", "token", "secret")
+                part in key_text for part in ("api_key", "token", "secret", "password")
             ):
                 cleaned[key] = REDACTED_VALUE
             else:

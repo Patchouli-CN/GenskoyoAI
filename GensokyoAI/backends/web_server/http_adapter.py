@@ -13,7 +13,7 @@ import json
 import math
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -553,9 +553,9 @@ async def _handle_ws_text(
         authorize_rpc(method, _current_request_principal())
         if security is not None:
             _require_remote_admin_enabled(method, security)
-        if method == "agent.send_message_stream":
+        if method in {"agent.send_message_stream", "world.send_message_stream"}:
             await _start_streaming_rpc_task(
-                ws, service, request_id, params, send_lock, stream_tasks
+                ws, service, request_id, params, send_lock, stream_tasks, method=method
             )
             return
         if method == "runtime.cancel_stream":
@@ -592,11 +592,14 @@ async def _start_streaming_rpc_task(
     params: dict[str, Any],
     send_lock: asyncio.Lock,
     stream_tasks: dict[str, asyncio.Task[None]] | None,
+    *,
+    method: str = "agent.send_message_stream",
 ) -> str:
     stream_id = str(params.pop("stream_id", None) or uuid4())
     generation_id = str(uuid4())
     if stream_tasks is not None and stream_id in stream_tasks:
         raise ValueError(f"Runtime stream already exists: {stream_id}")
+    # ack 帧先于参数校验发出（协议 v2：客户端先拿 stream_id/generation_id）
     await _send_ws_json(
         ws,
         send_lock,
@@ -614,6 +617,7 @@ async def _start_streaming_rpc_task(
             generation_id,
             params,
             send_lock,
+            method=method,
         )
     )
     if stream_tasks is not None:
@@ -645,27 +649,51 @@ async def _send_streaming_rpc_frames(
     generation_id: str,
     params: dict[str, Any],
     send_lock: asyncio.Lock,
+    *,
+    method: str = "agent.send_message_stream",
 ) -> None:
     events: list[dict[str, Any]] = []
     final_content = ""
     final_reasoning = ""
     session_payload: dict[str, Any] | None = None
+    world_finish: dict[str, Any] = {}
+    is_world = method == "world.send_message_stream"
 
+    # 显式持有流并在 finally 关闭：WS 断连/取消落在发送窗口时，
+    # 确定性关闭链让 service 层把幂等账本收敛为 cancelled，而不是永久 pending
+    if is_world:
+        stream = cast(
+            AsyncGenerator[dict[str, Any]],
+            service.iter_world_message_stream(
+                **params,
+                generation_id=generation_id,
+            ),
+        )
+    else:
+        stream = cast(
+            AsyncGenerator[dict[str, Any]],
+            service.iter_message_stream(
+                **params,
+                generation_id=generation_id,
+            ),
+        )
     try:
-        async for event in service.iter_message_stream(
-            **params,
-            generation_id=generation_id,
-        ):
+        async for event in stream:
             event.setdefault("generation_id", generation_id)
             events.append(event)
-            if event.get("type") == "content":
-                final_content += event.get("content", "")
-            if reasoning := event.get("reasoning_content"):
-                final_reasoning += reasoning
-            if event.get("type") == "finish":
-                final_content = event.get("content", final_content)
-                final_reasoning = event.get("reasoning_content", final_reasoning) or ""
-                session_payload = event.get("session")
+            event_type = event.get("type")
+            if is_world:
+                if event_type == "world.finish":
+                    world_finish = event
+            else:
+                if event_type == "content":
+                    final_content += event.get("content", "")
+                if reasoning := event.get("reasoning_content"):
+                    final_reasoning += reasoning
+                if event_type == "finish":
+                    final_content = event.get("content", final_content)
+                    final_reasoning = event.get("reasoning_content", final_reasoning) or ""
+                    session_payload = event.get("session")
             await _send_ws_json(
                 ws,
                 send_lock,
@@ -723,7 +751,26 @@ async def _send_streaming_rpc_frames(
             )
         await _send_ws_json(ws, send_lock, rpc_error(request_id, error))
         return
+    finally:
+        # 三条出口（完成/取消/异常）都确定性关闭 service 流；
+        # 正常消费完时 aclose 是无操作
+        await stream.aclose()
 
+    if is_world:
+        # world 流的聚合结果与非流式 world.send_message 同形（turns 列表）
+        result = {
+            **{key: value for key, value in world_finish.items() if key != "type"},
+            "events": events,
+        }
+    else:
+        result = {
+            "role": "assistant",
+            "content": final_content,
+            "reasoning_content": final_reasoning or None,
+            "generation_id": generation_id,
+            "events": events,
+            "session": session_payload,
+        }
     await _send_ws_json(
         ws,
         send_lock,
@@ -733,14 +780,7 @@ async def _send_streaming_rpc_frames(
             "stream_id": stream_id,
             "generation_id": generation_id,
             "done": True,
-            "result": {
-                "role": "assistant",
-                "content": final_content,
-                "reasoning_content": final_reasoning or None,
-                "generation_id": generation_id,
-                "events": events,
-                "session": session_payload,
-            },
+            "result": result,
         },
     )
 
@@ -856,7 +896,9 @@ async def _cleanup_ws_subscriptions(
 
 
 async def _await_cancelled_task(task: asyncio.Task[Any]) -> None:
-    with contextlib.suppress(asyncio.CancelledError):
+    # 清理路径只等待任务结束，绝不传播任务自身异常：
+    # 心跳等任一任务失败不得截断 handle_ws 的 finally 清理链
+    with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
 
 

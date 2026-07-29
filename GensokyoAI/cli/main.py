@@ -30,6 +30,11 @@ def parse_args():
     parser.add_argument("--config", type=str, default="config/default.yaml", help="配置文件路径")
     parser.add_argument("--list-sessions", action="store_true", help="列出所有会话")
     parser.add_argument("--no-stream", action="store_true", help="禁用流式输出")
+    parser.add_argument(
+        "--world",
+        action="store_true",
+        help="进入多角色 World 模式（config world.enabled 为 true 时自动启用）",
+    )
 
     return parser.parse_args()
 
@@ -74,6 +79,11 @@ async def main():
     config_file = Path(args.config) if args.config else None
     loader = ConfigLoader()
     config = loader.load(config_file)
+
+    # 多角色 World 模式：--world 显式开启，或 config world.enabled 自动选择
+    if args.world or config.world.enabled:
+        await _run_world(args, config)
+        return
 
     # 加载角色
     character_file = None
@@ -127,6 +137,86 @@ async def main():
     # 构建并运行控制台后端
     backend = (
         ConsoleBackendBuilder(agent)
+        .with_stream_mode(not args.no_stream)
+        .with_color_theme(
+            {
+                "user": "bold #f5e6d3",
+                "assistant": "bold #ffb7c5",
+                "system": "dim #c9b1d4",
+                "error": "bold #c41e3a",
+                "success": "bold #98d8a8",
+                "info": "#a4cde0",
+                "cmd": "bold #d4a0d4",
+                "prompt": "bold #ffe4a0",
+            }
+        )
+        .build()
+    )
+
+    try:
+        await backend.run_interactive()
+    finally:
+        # 清理：关闭全局 HTTP session，释放连接池
+        await close_client_session()
+
+
+async def _run_world(args, config) -> None:
+    """多角色 World 模式入口：装配/恢复 World 并运行 World 控制台。"""
+    from datetime import datetime
+
+    from GensokyoAI.backends.console.world_backend import WorldConsoleBackendBuilder
+    from GensokyoAI.world import GensokyoWorld, WorldPersistence
+    from GensokyoAI.world.world import WorldAssemblyError
+
+    if not config.world.enabled:
+        console.print("[red]✗ world.enabled 为 false：请在配置中启用 world 节后再使用 --world[/]")
+        return
+
+    persistence = (
+        WorldPersistence(config.world.persistence.save_path)
+        if config.world.persistence.enabled
+        else None
+    )
+
+    if args.list_sessions:
+        records = persistence.list(config.world.id) if persistence is not None else []
+        if records:
+            console.print("[bold]World 历史存档:[/]")
+            for record in sorted(records, key=lambda item: item.updated_at, reverse=True):
+                created = datetime.fromtimestamp(record.created_at).strftime("%Y-%m-%d %H:%M")
+                console.print(
+                    f"  ○ {record.session_id[:8]}... - {created} "
+                    f"[yellow]({len(record.roster)} 角色)[/]"
+                )
+        else:
+            console.print("[dim]没有 World 历史存档[/]")
+        return
+
+    try:
+        if args.resume:
+            if persistence is None:
+                console.print("[red]✗ world.persistence 已禁用，无法恢复存档[/]")
+                return
+            world = await GensokyoWorld.resume(config, args.resume)
+            console.print(f"[green]✓ 已恢复 World 存档: {args.resume[:8]}...[/]")
+        elif args.new_session or persistence is None:
+            world = await GensokyoWorld.create(config)
+            console.print("[green]✓ 新 World 已就绪[/]")
+        else:
+            records = persistence.list(config.world.id)
+            if records:
+                latest = max(records, key=lambda item: item.updated_at)
+                world = await GensokyoWorld.resume(config, latest.session_id)
+                console.print(f"[green]✓ 已恢复最近 World 存档: {latest.session_id[:8]}...[/]")
+            else:
+                world = await GensokyoWorld.create(config)
+                console.print("[green]✓ 新 World 已就绪[/]")
+    except WorldAssemblyError as error:
+        console.print(f"[red]✗ {error}[/]")
+        return
+
+    backend = (
+        WorldConsoleBackendBuilder(world)
         .with_stream_mode(not args.no_stream)
         .with_color_theme(
             {

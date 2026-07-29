@@ -1500,13 +1500,13 @@ class RuntimeEventSubscriptionTests(unittest.TestCase):
 
         payload = RuntimeService._runtime_event_payload(event)
 
-        self.assertEqual(payload["data"]["api_key"], "[redacted]")
-        self.assertEqual(payload["data"]["Authorization"], "[redacted]")
-        self.assertEqual(payload["data"]["nested"]["refresh_token"], "[redacted]")
+        self.assertEqual(payload["data"]["api_key"], "[REDACTED]")
+        self.assertEqual(payload["data"]["Authorization"], "[REDACTED]")
+        self.assertEqual(payload["data"]["nested"]["refresh_token"], "[REDACTED]")
         self.assertEqual(payload["data"]["nested"]["safe"], "visible")
-        self.assertEqual(payload["data"]["items"][0]["password"], "[redacted]")
+        self.assertEqual(payload["data"]["items"][0]["password"], "[REDACTED]")
         self.assertEqual(payload["data"]["items"][0]["value"], 1)
-        self.assertEqual(payload["metadata"]["headers"], "[redacted]")
+        self.assertEqual(payload["metadata"]["headers"], "[REDACTED]")
         self.assertEqual(payload["metadata"]["safe_meta"], "ok")
 
     def test_event_subscription_reports_backpressure_when_queue_is_full(self):

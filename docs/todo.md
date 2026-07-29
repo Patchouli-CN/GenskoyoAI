@@ -5,12 +5,11 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 已完成、已提交（最新 `abef464`，已 push）；阶段 8（持久化恢复）已完成、已验证全绿、尚未提交**。下一步从 **阶段 9** 继续。
+多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 / 8 已完成、已提交（最新 `5665bd4`，已 push）；阶段 9（Runtime / WebSocket / Console）已完成、已验证全绿、尚未提交**。下一步是 **阶段 10**（文档与完整验收，最后阶段）。
 
 - 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`587 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
+- 当前测试：`609 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
 - 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
-- **阶段 9 开工前必读 §5.6**：runtime 审查发现（WS 取消账本、清理链、启动隔离、依赖安装阻塞）与 **world.\* 接线清单**（auth.py 默认 admin、_is_tenant_method 前缀表等坑）都在那里。
 
 ---
 
@@ -85,7 +84,7 @@
 - **✅ 6 — 私有记忆投影**：`world/memory_projector.py`（`WorldMemoryProjector` 一次批量结构化调用生成各在场角色 `PerspectiveMemory`，校验丢弃不在场者，失败回退确定性公开摘要）；World 段落结束后台投影（按场景游标只投新增、参与者=发言者∪在场、逐 Actor `add_async` 自捕获、config 可停用、shutdown 先 flush）。定向 6 例 + 全量 558 passed 全绿，未提交。
 - **✅ 7 — DialogueLoop 抽象 + 对话欲 + fallback 链删除**：`core/dialogue_loop.py`（Protocol + `InitiativePlan`）、`core/initiative_scheduler.py`（纯调度器，替换式计划 + fire 时效校验）、`world/initiative.py`（World 段落结束一次世界规划，全世界一个定时器；到点 Director initiative 按当下在场选角；用户发言取消重规划）。**§7.3 按用户 07-29 决策实现**：`ThinkEngine.decide_drive_initiative()` 一次 LLM 出四维动机 + 调度决策（注入对话欲/心情状态，动机回灌累积器）；`core/agent/drive_accumulator.py` 纯算术累积 + 心情非对称半衰期 + 泄压 + session.metadata 持久化；`drive_enabled` 默认关。**强制 fallback 链整体删除**：4 个配置键移除，旧键 loader 丢弃 + validator 迁移警告（不报错），事件 payload 移除 fallback 字段，`source` 新增 `"drive"`。**审查修复**：trigger() 不再持锁跨 LLM 生成；触发与回合经信号量互斥 + 时效校验。定向 22 例 + 全量 579 passed 全绿，未提交。
 - **✅ 8 — 持久化恢复**：`GensokyoWorld.resume(config, session_id)` 恢复编排：存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过旧剧本。§5.6 归档 4 条一并落地：`create_async` per-key 锁消除 TOCTOU、`list()` docstring 补自愈副作用、roster diagnostics 并入 stage 键与 current_actor（幽灵占位不漏诊）、`core/migrations` 高版本文件不再静默降级（session/memory 两路）。定向 8 例 + 全量 587 passed 全绿，未提交。
-- **⏳ 9 — Runtime / WebSocket / Console**（下一步）：`world.*` RPC（init/start/send_message[_stream]/state/roster/transcript/move/session.*/shutdown）、流式 actor 事件、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`。`RuntimeState` 加 `world: GensokyoWorld | None`。**必读 §5.6 的 world.\* 接线清单**（auth.py required_role 默认 fallthrough admin、`_is_tenant_method` 前缀表漏加=跨用户共享 world 状态、WS 流式方法硬编码分流、root `state.agent` 不能碰）与 runtime 审查发现 4 条（WS 取消账本、清理链、启动隔离、依赖安装阻塞）。
+- **✅ 9 — Runtime / WebSocket / Console**：`RuntimeState.world`（与 agent 互斥、绝不影响 root 租户路由）；`world.init/start/send_message[_stream]/state/roster/transcript/move/session.create/list/resume/delete/export/shutdown` 14 个 RPC；WS 流式分流 `world.send_message_stream`（ack 先于参数校验，world.finish 终帧聚合 turns）；`runtime.info` capability `world.orchestration`。接线清单全落地：auth `required_role` world 分支（read/chat，不再 fallthrough admin）、`_NETWORK_RESOURCE_PREFIXES`+`_is_tenant_method` 加 `world.`（租户隔离）、`NETWORK_IDEMPOTENCY_METHODS` 加 world.send_*（复用幂等账本，World 存档槽位）、event_contract 加 8 个 world 事件契约 + `_runtime_event_category_map` 加 world 分类并入 runtime_observable、事件订阅/录制改从 `_runtime_event_bus()`（World 模式取 World 总线）、**两套脱敏统一为 `sanitize_event_payload`**（字段并集 + password 子串 + 统一 `[REDACTED]`）。**§5.6 归档 4 条一并落地**：WS 断连/取消落在发送窗口的幂等账本确定性收敛（`_send_streaming_rpc_frames` finally 显式 aclose + service 层 GeneratorExit 收敛 cancelled + 网络/本地两层关闭链）；`_await_cancelled_task` 抑制一切任务异常（清理链不再被心跳异常截断）；`_load_tenant_catalog` 按租户隔离损坏（单租户 operations.json 损坏只跳过该租户并 warning，不静默重建空账本）；`dependency.install` 改 `asyncio.to_thread` + timeout 钳配置上限。console：`backends/console/world_backend.py`（动态发言者前缀、**显示单一通道**——用户回合与主动剧情都只经 World 总线事件显示，turn lock 保证不交错，无 stream/bus 双份问题）、CLI `--world`（或 world.enabled 自动选择，含 --resume/--new-session/--list-sessions 的 World 存档语义）、`/world` `/roster` `/stage` `/transcript` 命令、单角色会话命令在 World 模式友好拦截。定向 22 例（robustness 4 + world_rpc 11 + world_console 6 + WS world 分流 1）+ 全量 `609 passed, 3 subtests passed` 全绿，未提交。
 - **⏳ 10 — 文档与完整验收**：README 中英、QUICKSTART、runtime_api、changelog/version、草案状态。
 
 ## 5. 关键陷阱（血泪，别踩）
@@ -106,6 +105,7 @@
 **已修过的隐蔽 bug（别改回去）**
 - `ActionExecutor.complete_response()` 曾顺手清空流式队列，导致流尾最后一个 chunk 必丢（真模型下被网络时序掩盖，假 Provider 下才现形）。现在它只解析 future，队列由下次 `prepare_response()` 整体替换；`_send_stream_impl` 退出前会排空 `get_chunk_task` 结果与队列残余。
 - 事件链 `MESSAGE_RECEIVED → ACTION_DECIDED → GENERATE_RESPONSE` 曾两跳都不转发 `system_contexts`，console 的 `<attention>` 注入与 RPC 的 `system_contexts` 参数从来没到过模型。阶段 3 已修，新增字段务必确认全链透传。
+- **World console 显示曾走 stream/bus 双通道**：send 迭代 `send_message_stream` 显示一份、World 总线订阅又显示一份，`_in_user_turn` 时间标志挡不住异步调度的事件（回调落地时标志已清）。阶段 9 定为**单一通道**：send 用非流式 `world.send_message` 驱动回合，显示全部由 World 总线订阅承担（turn lock 保证用户回合与主动剧情不交错）。别再给 console 加回 stream 迭代显示。
 
 **代码风格既成事实**
 - 已使用 Python 3.14 的 PEP 758 语法（无括号 `except A, B:`）。项目硬要求 3.14+，用旧版本跑会直接语法错误——不是代码写错了。
@@ -151,12 +151,12 @@
 - `WorldPersistence.create` 的 exists→write 有 TOCTOU 竞态（走 `_lock_for` 或 `open "xb"`）；`list()` 名义只读实际会 quarantine/回写（自愈），docstring 补副作用说明；roster diagnostics 并入 stage 键（除 `__user__`）与 `current_actor_id`，防幽灵占位。
 - `core/migrations` 把更高未知 schema_version 当 legacy 静默降级 vs `world/persistence` 硬拒绝——跨版本契约需统一。
 
-**阶段 9 处理（runtime，两提交重构后的审查发现）**
-- WS 断连/取消落在发送窗口 → 幂等账本永久 pending（fail-closed 放大）：`_send_streaming_rpc_frames` finally 显式 `aclose()` + service 层把 GeneratorExit 也收敛 cancelled（**需验证**）。
-- `handle_ws` finally 清理链可被心跳异常截断 → 事件订阅/流任务泄漏：清理助手按任务 `suppress(Exception)`。
-- 单租户 `operations.json` 损坏拖垮整个进程启动：catalog 按租户隔离失败。
-- `dependency.install` 在 async 链路同步 `subprocess.run` 最长 600s 冻结全循环：`to_thread` + timeout 钳上限。
-- **world.\* 接线清单（缺一不可）**：`rpc.py` `RPC_METHOD_SPECS`+`_PUBLIC_RESULT_SCHEMAS`；`auth.py` `required_role`（**默认 fallthrough 是 admin，不给 world. 加分支就全变 admin-only**）；`rpc.py` `_NETWORK_RESOURCE_PREFIXES` + `service.py` `_is_tenant_method`（**漏加 = 跨用户共享同一 world 状态**）；`NETWORK_SESSION/REVISION/IDEMPOTENCY_METHODS` 按写语义补；`http_adapter.py:556` WS 流式方法硬编码分流（且 ack 帧先于参数校验）；`RuntimeState` 加 `world` 字段但**绝不能碰 root 的 `state.agent`**（`_uses_network_tenancy` 依赖它为 None）；`event_contract`+`_runtime_event_category_map` 加 world 事件分类；两套脱敏（`sanitize_event_payload` vs `_redact_sensitive_fields`）选定一套。
+**阶段 9 处理（runtime，两提交重构后的审查发现）——✅ 四条已全部落地（阶段 9）**
+- ~~WS 断连/取消落在发送窗口 → 幂等账本永久 pending~~：`_send_streaming_rpc_frames` finally 显式 `aclose()` + service 层 `_iter_message_stream_locked`/`iter_world_message_stream` 捕获 GeneratorExit 收敛 cancelled + 网络/本地两层确定性关闭链。回归：`tests/test_runtime_robustness.py`。
+- ~~`handle_ws` finally 清理链可被心跳异常截断~~：`_await_cancelled_task` 改为 `suppress(CancelledError, Exception)`，任一任务失败不再截断清理链。
+- ~~单租户 `operations.json` 损坏拖垮整个进程启动~~：`_load_tenant_catalog` 按租户 try/except 隔离，损坏只跳过该租户并 warning（不静默重建空账本）。
+- ~~`dependency.install` 同步 `subprocess.run` 冻结循环~~：`RuntimeService.install_dependencies` 改 `asyncio.to_thread` + timeout 钳到 `dependency_install_timeout_seconds` 上限。
+- **world.\* 接线清单（缺一不可）**：`rpc.py` `RPC_METHOD_SPECS`+`_PUBLIC_RESULT_SCHEMAS`；`auth.py` `required_role`（**默认 fallthrough 是 admin，不给 world. 加分支就全变 admin-only**）；`rpc.py` `_NETWORK_RESOURCE_PREFIXES` + `service.py` `_is_tenant_method`（**漏加 = 跨用户共享同一 world 状态**）；`NETWORK_SESSION/REVISION/IDEMPOTENCY_METHODS` 按写语义补；`http_adapter.py:556` WS 流式方法硬编码分流（且 ack 帧先于参数校验）；`RuntimeState` 加 `world` 字段但**绝不能碰 root 的 `state.agent`**（`_uses_network_tenancy` 依赖它为 None）；`event_contract`+`_runtime_event_category_map` 加 world 事件分类；两套脱敏（`sanitize_event_payload` vs `_redact_sensitive_fields`）选定一套。——✅ 全部按单落地（阶段 9）；脱敏统一为 `sanitize_event_payload`（service 私有实现已删，字段并集 + `[REDACTED]` 统一）。
 - 其余 minor：`_begin_message_operation` 丢弃 replay 返回值（哑弹）；错误码不稳定三处（裸 ValueError→`runtime.error`）；SSE 无心跳半开泄漏订阅；replay 与订阅间丢失窗口；只读 RPC 写副作用（`_activate_tenant_session`）；反代下限流误伤（X-Forwarded-For 不可达）；RPC body 上限可被 chunked 绕过；`allowed_origins` 带 path 静默判 None；`list_sessions` 游标建在可变排序键上。
 
 **待用户定夺（设计级，未擅自改）**
@@ -186,11 +186,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 8 完成）
+## 8. 未提交改动清单（截至阶段 9 完成）
 
-阶段 8 已改（M）：`GensokyoAI/world/{persistence,world}.py`、`GensokyoAI/core/migrations.py`、`docs/{todo,gsk-ai-multi-character}.md`
-阶段 8 新增（??）：`tests/test_world_resume.py`
+阶段 9 已改（M）：`GensokyoAI/runtime/{service,rpc,auth,event_contract}.py`、`GensokyoAI/backends/web_server/http_adapter.py`、`GensokyoAI/world/{world,__init__}.py`（`model_streaming` property + docstring）、`GensokyoAI/cli/main.py`（`--world`）、`tests/test_runtime_http_adapter.py`（WS world 分流用例）、`tests/test_runtime_dependencies.py`（`[REDACTED]` 统一断言）、`.gitignore`（`runtime_data/`）、`docs/{todo,gsk-ai-multi-character}.md`
+阶段 9 新增（??）：`GensokyoAI/backends/console/world_backend.py`、`tests/test_runtime_robustness.py`、`tests/test_world_runtime_rpc.py`、`tests/test_world_console.py`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(world): World 会话恢复编排与持久化契约加固（阶段 8）`
+`feat(world): world.* RPC 与 World 控制台接入（阶段 9）`
 

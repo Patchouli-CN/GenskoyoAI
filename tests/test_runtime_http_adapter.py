@@ -115,6 +115,39 @@ class FakeHttpRuntimeService:
             "session": None,
         }
 
+    async def iter_world_message_stream(self, message, generation_id=None):
+        yield {
+            "type": "world.actor.started",
+            "actor_id": "marisa",
+            "actor_name": "雾雨魔理沙",
+            "scene_id": "world_default",
+        }
+        yield {"type": "world.actor.chunk", "actor_id": "marisa", "content": "DA☆ZE"}
+        yield {
+            "type": "world.actor.completed",
+            "actor_id": "marisa",
+            "actor_name": "雾雨魔理沙",
+            "scene_id": "world_default",
+            "content": "DA☆ZE",
+        }
+        yield {"type": "world.waiting_user"}
+        yield {
+            "type": "world.finish",
+            "world_id": "testworld",
+            "session_id": "ws1",
+            "turns": [
+                {
+                    "actor_id": "marisa",
+                    "actor_name": "雾雨魔理沙",
+                    "scene_id": "world_default",
+                    "content": "DA☆ZE",
+                }
+            ],
+            "waiting_for_user": True,
+            "generation_id": generation_id,
+            "idempotent_replay": False,
+        }
+
     async def upload_media(self, agent_id, data, *, filename, content_type):
         self.uploaded_media = {
             "agent_id": agent_id,
@@ -399,6 +432,49 @@ class RuntimeHttpAdapterAppTests(AioHTTPTestCase):
         self.assertEqual(frames[2]["event"]["error"]["code"], "runtime.error")
         self.assertFalse(frames[3]["ok"])
         self.assertEqual(frames[3]["error"]["technical_message"], "stream boom")
+
+    async def test_websocket_world_streaming_rpc_uses_world_event_frames(self):
+        ws = await self.client.ws_connect("/ws")
+        await ws.send_str(
+            json.dumps(
+                {
+                    "id": "world-stream-1",
+                    "method": "world.send_message_stream",
+                    "params": {"message": "把书放下！"},
+                }
+            )
+        )
+
+        frames = []
+        for _ in range(7):
+            message = await ws.receive(timeout=2)
+            self.assertEqual(message.type, WSMsgType.TEXT)
+            frames.append(json.loads(message.data))
+        await ws.close()
+
+        self.assertIn("stream_id", frames[0]["result"])
+        event_types = [frame["event"]["type"] for frame in frames[1:6]]
+        self.assertEqual(
+            event_types,
+            [
+                "world.actor.started",
+                "world.actor.chunk",
+                "world.actor.completed",
+                "world.waiting_user",
+                "world.finish",
+            ],
+        )
+        generation_id = frames[0]["result"]["generation_id"]
+        self.assertTrue(
+            all(frame["event"]["generation_id"] == generation_id for frame in frames[1:6])
+        )
+        self.assertTrue(frames[6]["done"])
+        result = frames[6]["result"]
+        self.assertEqual(result["world_id"], "testworld")
+        self.assertEqual(result["turns"][0]["actor_id"], "marisa")
+        self.assertEqual(result["turns"][0]["content"], "DA☆ZE")
+        self.assertTrue(result["waiting_for_user"])
+        self.assertEqual(len(result["events"]), 5)
 
     async def test_websocket_sends_heartbeat_frame(self):
         with patch(

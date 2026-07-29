@@ -40,3 +40,4 @@ htmlcov/
 
 *.bak
 .mypy_cache/
+runtime_data/

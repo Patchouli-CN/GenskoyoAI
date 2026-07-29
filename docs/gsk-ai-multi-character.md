@@ -408,6 +408,16 @@ class DialogueLoop(Protocol):
 
 ## 8. Runtime RPC、流式协议与 Console
 
+> ✅ **状态：已实现（阶段 9）**。定向 22 例（`tests/test_runtime_robustness.py` 4 + `tests/test_world_runtime_rpc.py` 11 + `tests/test_world_console.py` 6 + WS world 分流 1）+ 全量 `609 passed, 3 subtests passed`，ruff / format / pyright 全绿。
+>
+> 落地要点：
+> - `RuntimeState.world` 与 agent 互斥（init 双向硬校验），绝不影响 root 租户路由判定；world.init/start/send_message[_stream]/state/roster/transcript/move/session.*/shutdown 14 个 RPC 全部经 `RPC_METHOD_SPECS` 注册并可经 `runtime.info` 发现（capability `world.orchestration`）。
+> - 网络模型：`world.` 进 `_NETWORK_RESOURCE_PREFIXES` 与 `_is_tenant_method`（租户状态隔离）；`world.send_*` 进 `NETWORK_IDEMPOTENCY_METHODS`（幂等账本复用，World 存档槽位）；auth `required_role` world 分支 read/chat；WS `world.send_message_stream` 与 agent 流同等的 ack/task/cancel 支持，终帧 `world.finish` 聚合 turns。
+> - World 事件入契约（8 个 `world.*` RuntimeEventSpec）与 `world` 事件分类（并入 `runtime_observable`）；事件订阅/录制经 `_runtime_event_bus()` 在 World/Agent 总线间选择；两套脱敏统一为 `sanitize_event_payload`。
+> - §5.6 归档 runtime 4 条修复一并落地（WS 取消账本确定性关闭链、清理链容错、租户目录启动隔离、依赖安装线程卸载+超时钳制）。
+> - console：`backends/console/world_backend.py`（**显示单一通道**：send 用非流式驱动回合，显示全部由 World 总线订阅承担——用户回合与主动剧情天然不重复）；CLI `--world`（或 `world.enabled` 自动选择）；`/world` `/roster` `/stage` `/transcript`。
+> - 设计偏差记录：world 网络写不要求 `expected_revision`（World 无 session revision 概念，turn lock 已串行化）；console 放弃「send 迭代 stream」改为单通道 bus 显示（消除 stream/bus 双通道重复）。
+
 ### 8.1 Runtime
 
 修改：
@@ -469,7 +479,7 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
 6. **私有记忆投影**：✅ 已完成（阶段 6）：各视角摘要批量生成与后台写入，见 §6 状态标注。
 7. **主循环主动定时器**：✅ 已完成（阶段 7）：DialogueLoop 协议、纯调度器、World 主循环计划/触发、§7.3 对话欲（四维动机接入短期思考）、强制 fallback 链删除，见 §7 状态标注。
 8. **持久化恢复**：✅ 已完成（阶段 8）：`GensokyoWorld.resume(config, session_id)` 恢复编排——存档舞台/共享剧本分片/各 actor 私有会话还原（缺失降级新建 + warning 诊断，绝不静默串角色），roster 差异经 `world.resume_diagnostics` 呈现，原存档作为活动存档续写，投影游标跳过上一次已投影剧本。审查修复（§5.6 归档 4 条）一并落地：`create_async` per-key 锁消除 create TOCTOU；`list()` docstring 补自愈副作用；roster diagnostics 并入 stage 键（除 `__user__`）与 `current_actor_id`（幽灵占位不再漏诊）；`core/migrations` 对更高未知 schema_version 不再静默降级改写版本（session/memory 两路），与 world/persistence 硬拒绝契约对齐为「不静默降级」。export/delete/list 仍由 `WorldPersistence` 提供（阶段 2.3 已测），阶段 9 接 RPC。
-9. **Runtime / WebSocket / Console**：world.* RPC、流式 actor 事件、前端命令。
+9. **Runtime / WebSocket / Console**：✅ 已完成（阶段 9）：world.* RPC（14 个）、WS 流式 actor 事件（`world.finish` 终帧聚合）、console `world_backend.py` + `--world` + `/world` `/roster` `/stage` `/transcript`，见 §8 状态标注。§5.6 归档 runtime 4 条（WS 取消账本、清理链、租户启动隔离、依赖安装阻塞）与 world.\* 接线清单全部落地。
 10. **文档与完整验收**：更新草案状态、README 中英、QUICKSTART、runtime_api、default/world example、changelog/version。
 
 ---

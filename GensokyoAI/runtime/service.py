@@ -12,14 +12,14 @@ import asyncio
 import hashlib
 import json
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import yaml
-from msgspec import Struct
+from msgspec import Struct, to_builtins
 
 from GensokyoAI.core.agent import Agent
 from GensokyoAI.core.agent.model_registry import ModelRegistryService
@@ -28,7 +28,7 @@ from GensokyoAI.core.character_package import CharacterPackageService
 from GensokyoAI.core.character_validator import CharacterValidator
 from GensokyoAI.core.config import ConfigLoader
 from GensokyoAI.core.config_validator import ConfigDiagnostic, ConfigValidator
-from GensokyoAI.core.events import Event, SystemEvent
+from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.core.migrations import migration_diagnostics_summary
 from GensokyoAI.core.schema_versions import (
     CONFIG_SCHEMA_VERSION,
@@ -41,6 +41,7 @@ from GensokyoAI.core.schema_versions import (
 from GensokyoAI.core.version import package_version
 from GensokyoAI.runtime.auth import authorize_rpc, current_principal
 from GensokyoAI.runtime.dependencies import InstallScope, dependency_status, install_dependencies
+from GensokyoAI.runtime.event_contract import sanitize_event_payload
 from GensokyoAI.runtime.event_store import RuntimeEventStore
 from GensokyoAI.runtime.media_store import MediaStore
 from GensokyoAI.runtime.operation_store import RuntimeOperationStore
@@ -52,6 +53,7 @@ from GensokyoAI.runtime.resource_control import (
     resource_scope,
 )
 from GensokyoAI.runtime.rpc import (
+    NETWORK_IDEMPOTENCY_METHODS,
     NETWORK_REVISION_METHODS,
     NETWORK_SESSION_METHODS,
     RpcError,
@@ -65,6 +67,10 @@ from GensokyoAI.runtime.rpc import (
 from GensokyoAI.session.context import SessionContext
 from GensokyoAI.tools.external_manager import ExternalToolManager
 from GensokyoAI.utils.helpers import utc_now
+from GensokyoAI.utils.logger import logger
+from GensokyoAI.world.persistence import WorldPersistence
+from GensokyoAI.world.types import USER_OCCUPANT_ID
+from GensokyoAI.world.world import GensokyoWorld, WorldAssemblyError
 
 RUNTIME_EVENT_BACKPRESSURE_DROPPED = "runtime.backpressure.dropped"
 MAX_TENANT_AGENTS_PER_USER = 8
@@ -77,23 +83,6 @@ RUNTIME_COMPATIBILITY_NOTES: tuple[dict[str, str], ...] = (
         "replacement": "Use runtime.info.method_specs to map legacy methods to namespaced replacements.",
     },
 )
-REDACTED_VALUE = "[redacted]"
-SENSITIVE_EVENT_FIELD_NAMES = {
-    "api_key",
-    "apikey",
-    "api-key",
-    "authorization",
-    "auth",
-    "token",
-    "access_token",
-    "refresh_token",
-    "secret",
-    "client_secret",
-    "password",
-    "passwd",
-    "headers",
-    "extra_headers",
-}
 
 
 class RuntimeState(Struct):
@@ -103,6 +92,10 @@ class RuntimeState(Struct):
     config_path: Path | None = None
     character_path: Path | None = None
     agent: Agent | None = None
+    # 多角色 World 模式；与单角色 agent 互斥（init 时硬校验）。
+    # root 服务的 state.agent 必须保持为 None 才能走网络租户路由，
+    # world 字段绝不影响 _uses_network_tenancy 的判定。
+    world: GensokyoWorld | None = None
     started: bool = False
 
 
@@ -162,6 +155,8 @@ class RuntimeService:
         self._active_network_operations = 0
         self._drained_event = asyncio.Event()
         self._drained_event.set()
+        # world_init 时记录的 World 存档根（world.session.* 未装配 World 时也可读存档）
+        self._world_persistence_path: Path | None = None
         if self._tenant_key is None:
             self._load_tenant_catalog()
 
@@ -191,6 +186,8 @@ class RuntimeService:
             return await self._delete_tenant_agent(principal.user_id, params)
         if method in {"agent.init", "init"}:
             return await self._init_tenant_agent(principal.user_id, params)
+        if method == "world.init":
+            return await self._init_tenant_world(principal.user_id, params)
 
         if not self._is_tenant_method(method):
             return await dispatch_rpc(self, method, params)
@@ -215,12 +212,7 @@ class RuntimeService:
                     recoverable=True,
                     action_hint="请从 session.messages 响应读取 revision 后重试。",
                 )
-        if method in {
-            "agent.send_message",
-            "agent.send_message_stream",
-            "send_message",
-            "send_message_stream",
-        }:
+        if method in NETWORK_IDEMPOTENCY_METHODS and method != "message.status":
             idempotency_key = params.get("idempotency_key")
             if not isinstance(idempotency_key, str) or not idempotency_key.strip():
                 raise RpcError(
@@ -280,6 +272,46 @@ class RuntimeService:
             )
             self._tenant_services[key] = service
         result = await service.handle("agent.init", params)
+        self._save_tenant_manifest(user_id, agent_id, service)
+        return self._attach_resource_ids(result, user_id, agent_id)
+
+    async def _init_tenant_world(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """网络路径 world.init：World 状态按 (user_id, agent_id) 租户隔离。"""
+        principal = current_principal()
+        if not principal.has_role("admin") and params.get("config_path") is not None:
+            raise RpcError(
+                "Custom World config path requires the admin role",
+                code="authorization.forbidden",
+                user_message="普通聊天身份只能从服务端默认配置装配 World。",
+                recoverable=False,
+                details={"required_role": "admin"},
+            )
+        agent_id = params.pop("agent_id", None) or str(uuid4())
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Runtime agent_id must be a non-empty string")
+        if len(agent_id.strip()) > 128:
+            raise ValueError("Runtime agent_id must not exceed 128 characters")
+        agent_id = agent_id.strip()
+        key = (user_id, agent_id)
+        service = self._tenant_services.get(key)
+        if service is None:
+            owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
+            if owned_count >= MAX_TENANT_AGENTS_PER_USER:
+                raise RpcError(
+                    "Runtime per-user Agent limit exceeded",
+                    code="agent.limit_exceeded",
+                    user_message="当前用户创建的 Agent 数量已达到上限。",
+                    recoverable=True,
+                    details={"maximum": MAX_TENANT_AGENTS_PER_USER},
+                )
+            storage_root = self._tenant_storage_root(user_id, agent_id)
+            service = RuntimeService(
+                self.state.root_dir,
+                tenant_key=key,
+                storage_root=storage_root,
+            )
+            self._tenant_services[key] = service
+        result = await service.handle("world.init", params)
         self._save_tenant_manifest(user_id, agent_id, service)
         return self._attach_resource_ids(result, user_id, agent_id)
 
@@ -352,14 +384,22 @@ class RuntimeService:
                 agent_id = manifest["agent_id"]
                 if not isinstance(user_id, str) or not isinstance(agent_id, str):
                     continue
+                # 单个租户的持久化损坏（如 operations.json 不可读）只跳过该租户，
+                # 绝不拖垮整个进程启动；损坏文件原样保留待人工处理，
+                # 不静默重建空账本（那会丢掉幂等恢复语义）
+                service = RuntimeService(
+                    self.state.root_dir,
+                    tenant_key=(user_id, agent_id),
+                    storage_root=manifest_path.parent,
+                )
             except OSError, KeyError, json.JSONDecodeError:
                 continue
-            key = (user_id, agent_id)
-            self._tenant_services[key] = RuntimeService(
-                self.state.root_dir,
-                tenant_key=key,
-                storage_root=manifest_path.parent,
-            )
+            except Exception as error:
+                logger.warning(
+                    f"⚠️ [Runtime] 租户目录加载失败，已跳过: {manifest_path.parent} ({error})"
+                )
+                continue
+            self._tenant_services[(user_id, agent_id)] = service
 
     @staticmethod
     def _save_tenant_manifest(
@@ -411,6 +451,7 @@ class RuntimeService:
                 "model.",
                 "media.",
                 "message.",
+                "world.",
             )
         ) or method in {
             "send_message",
@@ -496,7 +537,9 @@ class RuntimeService:
         return {
             "ok": True,
             "root_dir": str(self.state.root_dir),
-            "initialized": self.state.agent is not None or bool(self._tenant_services),
+            "initialized": self.state.agent is not None
+            or self.state.world is not None
+            or bool(self._tenant_services),
             "started": self.state.started
             or any(service.state.started for service in self._tenant_services.values()),
             "active_tenant_agents": len(self._tenant_services),
@@ -555,6 +598,7 @@ class RuntimeService:
                 "runtime.versioning",
                 "session.management",
                 "initiative_timer.management",
+                "world.orchestration",
             ],
             "methods": rpc_methods(),
             "legacy_methods": legacy_rpc_methods(),
@@ -812,6 +856,14 @@ class RuntimeService:
         memory and think engine are session-scoped.
         """
         async with self._lock:
+            # 与 World 模式互斥：同一 RuntimeService 实例绝不同时持有两者
+            if self.state.world is not None:
+                raise RpcError(
+                    "Runtime World and Agent modes are mutually exclusive",
+                    code="world.world_mode_active",
+                    user_message="当前 Runtime 已装配多角色 World，请先 world.shutdown 再初始化 Agent。",
+                    recoverable=False,
+                )
             if self.state.agent is not None:
                 await self._shutdown_locked()
 
@@ -853,7 +905,7 @@ class RuntimeService:
             self._resource_gates = agent.runtime_context.resource_gates
             agent.runtime_context.model_client.update_resource_gates(self._resource_gates)
             agent.runtime_context.tool_executor.update_resource_gates(self._resource_gates)
-            self._start_event_recording(agent)
+            self._start_event_recording(agent.event_bus)
 
             current = agent.session_manager.get_current_session()
             character_name = agent.config.character.name if agent.config.character else None
@@ -1452,19 +1504,28 @@ class RuntimeService:
                 self._network_operation_scope("agent.send_message_stream"),
                 service._tenant_operation_lock,
             ):
-                async for event in service.iter_message_stream(
-                    message,
-                    system_contexts,
-                    session_id=session_id,
-                    idempotency_key=idempotency_key,
-                    expected_revision=expected_revision,
-                    generation_id=generation_id,
-                ):
-                    yield {
-                        "user_id": principal.user_id,
-                        "agent_id": agent_id,
-                        **event,
-                    }
+                # 显式持有并关闭内层流：消费者提前关闭本生成器时，
+                # 确定性关闭链保证 service 层账本被收敛，而非依赖 GC 终结
+                inner_stream = cast(
+                    AsyncGenerator[dict[str, Any]],
+                    service.iter_message_stream(
+                        message,
+                        system_contexts,
+                        session_id=session_id,
+                        idempotency_key=idempotency_key,
+                        expected_revision=expected_revision,
+                        generation_id=generation_id,
+                    ),
+                )
+                try:
+                    async for event in inner_stream:
+                        yield {
+                            "user_id": principal.user_id,
+                            "agent_id": agent_id,
+                            **event,
+                        }
+                finally:
+                    await inner_stream.aclose()
             return
 
         await self._ensure_started()
@@ -1511,14 +1572,21 @@ class RuntimeService:
                 request_fingerprint=fingerprint,
                 generation_id=resolved_generation_id,
             )
-            async for event in self._iter_message_stream_locked(
-                message,
-                system_contexts,
-                generation_id=resolved_generation_id,
-                idempotency_key=idempotency_key,
-                session_id=session.session_id,
-            ):
-                yield event
+            locked_stream = cast(
+                AsyncGenerator[dict[str, Any]],
+                self._iter_message_stream_locked(
+                    message,
+                    system_contexts,
+                    generation_id=resolved_generation_id,
+                    idempotency_key=idempotency_key,
+                    session_id=session.session_id,
+                ),
+            )
+            try:
+                async for event in locked_stream:
+                    yield event
+            finally:
+                await locked_stream.aclose()
 
     async def _iter_message_stream_locked(
         self,
@@ -1550,6 +1618,11 @@ class RuntimeService:
                     full_reasoning += reasoning
                 yield event
                 index += 1
+        except GeneratorExit:
+            # 消费者中途关闭流（WS 断连/取消落在发送窗口）：把账本收敛为
+            # cancelled，避免幂等记录永久 pending 卡死后续同键重试
+            self._cancel_message_operation(session_id, idempotency_key)
+            raise
         except asyncio.CancelledError:
             self._cancel_message_operation(session_id, idempotency_key)
             yield {
@@ -1677,6 +1750,464 @@ class RuntimeService:
         payload = setter(bool(enabled), persist=persist)
         return payload if isinstance(payload, dict) else {}
 
+    # ==================== World 多角色编排 ====================
+
+    async def world_init(
+        self,
+        config_path: str | None = None,
+        session_id: str | None = None,
+        start: bool = True,
+    ) -> dict[str, Any]:
+        """装配（或恢复）多角色 World；与单角色 Agent 模式互斥。"""
+        async with self._lock:
+            if self.state.agent is not None:
+                raise RpcError(
+                    "Runtime Agent and World modes are mutually exclusive",
+                    code="world.agent_mode_active",
+                    user_message="当前 Runtime 已初始化单角色 Agent，请先 shutdown 再装配 World。",
+                    recoverable=False,
+                )
+            if self.state.world is not None:
+                await self._shutdown_locked()
+
+            config_file = (
+                self._resolve_optional(config_path)
+                or self.state.config_path
+                or self.state.root_dir / "config" / "default.yaml"
+            )
+            loader = ConfigLoader()
+            config = loader.load(config_file)
+            if self._storage_root is not None:
+                # 网络租户：World 存档与 Actor 会话根按租户隔离，绝不跨用户共享
+                config.world.persistence.save_path = self._storage_root / "worlds"
+                config.world.persistence.save_path.mkdir(parents=True, exist_ok=True)
+                config.session.save_path = self._storage_root / "sessions"
+                config.session.save_path.mkdir(parents=True, exist_ok=True)
+            elif not config.world.persistence.save_path.is_absolute():
+                config.world.persistence.save_path = (
+                    self.state.root_dir / config.world.persistence.save_path
+                )
+            try:
+                world = (
+                    await GensokyoWorld.resume(config, session_id)
+                    if session_id
+                    else await GensokyoWorld.create(config)
+                )
+            except WorldAssemblyError as error:
+                raise RpcError(
+                    f"World assembly failed: {error}",
+                    code="world.assembly_failed",
+                    user_message="World 装配失败，请检查 world 配置与角色文件。",
+                    recoverable=False,
+                    details={
+                        "diagnostics": [to_builtins(diagnostic) for diagnostic in error.diagnostics]
+                    },
+                ) from error
+            if start:
+                await world.start()
+                self.state.started = True
+
+            self.state.world = world
+            self.state.config_path = config_file
+            self._world_persistence_path = config.world.persistence.save_path
+            self._start_event_recording(world.event_bus)
+            return self._world_state_payload(world)
+
+    async def world_start(self) -> dict[str, Any]:
+        """启动已装配的 World（开场；幂等）。"""
+
+        world = await self._ensure_world_started()
+        return self._world_state_payload(world)
+
+    async def world_send_message(
+        self,
+        message: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """用户发言（聚合返回本段自动表演全部回合）。"""
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("Runtime world message must not be empty")
+        await self._ensure_world_started()
+        async with (
+            self._resource_scope("runtime", "agent_message"),
+            self._resource_scope("agent_message", "agent_message"),
+            self._lock,
+        ):
+            world = self._require_world()
+            ledger_id = self._world_ledger_id(world)
+            fingerprint = self._world_message_fingerprint(world, message)
+            replay = self._lookup_operation_replay(
+                ledger_id, idempotency_key, request_fingerprint=fingerprint
+            )
+            if replay is not None:
+                return replay
+            generation_id = str(uuid4())
+            self._begin_message_operation(
+                ledger_id,
+                idempotency_key,
+                request_fingerprint=fingerprint,
+                generation_id=generation_id,
+            )
+            try:
+                world_turns = await world.send_message(message)
+                turns = [
+                    {
+                        "actor_id": turn.actor_id,
+                        "actor_name": turn.actor_name,
+                        "scene_id": turn.scene_id,
+                        "content": turn.content,
+                    }
+                    for turn in world_turns
+                ]
+                result = self._world_message_result(
+                    world, turns, generation_id=generation_id, idempotent_replay=False
+                )
+                self._succeed_message_operation(ledger_id, idempotency_key, result)
+                return result
+            except asyncio.CancelledError:
+                self._cancel_message_operation(ledger_id, idempotency_key)
+                raise
+            except Exception as error:
+                self._fail_message_operation(ledger_id, idempotency_key, error)
+                raise
+
+    async def iter_world_message_stream(
+        self,
+        message: str,
+        agent_id: str | None = None,
+        idempotency_key: str | None = None,
+        *,
+        generation_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield World 流式事件（world.actor.* / world.waiting_user / world.finish）。"""
+
+        principal = current_principal()
+        if self._uses_network_tenancy(principal.network):
+            if not agent_id:
+                raise ValueError("Runtime agent_id is required")
+            if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+                raise ValueError("Runtime idempotency_key is required")
+            service = self._require_tenant_service(principal.user_id, agent_id)
+            async with (
+                self._network_operation_scope("world.send_message_stream"),
+                service._tenant_operation_lock,
+            ):
+                # 显式持有并关闭内层流（对齐 agent 流的确定性关闭链）
+                inner_stream = cast(
+                    AsyncGenerator[dict[str, Any]],
+                    service.iter_world_message_stream(
+                        message,
+                        idempotency_key=idempotency_key,
+                        generation_id=generation_id,
+                    ),
+                )
+                try:
+                    async for event in inner_stream:
+                        yield {
+                            "user_id": principal.user_id,
+                            "agent_id": agent_id,
+                            **event,
+                        }
+                finally:
+                    await inner_stream.aclose()
+            return
+
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("Runtime world message must not be empty")
+        await self._ensure_world_started()
+        async with (
+            self._resource_scope("runtime", "agent_stream"),
+            self._resource_scope("agent_message", "agent_stream"),
+            self._resource_scope("stream", "agent_stream"),
+            self._lock,
+        ):
+            world = self._require_world()
+            ledger_id = self._world_ledger_id(world)
+            fingerprint = self._world_message_fingerprint(world, message)
+            replay = self._lookup_operation_replay(
+                ledger_id, idempotency_key, request_fingerprint=fingerprint
+            )
+            resolved_generation_id = generation_id or str(uuid4())
+            if replay is not None:
+                yield {
+                    "type": "world.finish",
+                    **replay,
+                    "generation_id": replay.get("generation_id") or resolved_generation_id,
+                }
+                return
+            self._begin_message_operation(
+                ledger_id,
+                idempotency_key,
+                request_fingerprint=fingerprint,
+                generation_id=resolved_generation_id,
+            )
+            turns: list[dict[str, Any]] = []
+            try:
+                async for event in world.send_message_stream(message):
+                    event = {**event, "generation_id": resolved_generation_id}
+                    if event.get("type") == "world.actor.completed":
+                        turns.append(
+                            {
+                                "actor_id": event.get("actor_id"),
+                                "actor_name": event.get("actor_name"),
+                                "scene_id": event.get("scene_id"),
+                                "content": event.get("content", ""),
+                            }
+                        )
+                    yield event
+            except GeneratorExit:
+                # 消费者中途关闭流：账本收敛 cancelled（对齐 agent 流语义）
+                self._cancel_message_operation(ledger_id, idempotency_key)
+                raise
+            except asyncio.CancelledError:
+                self._cancel_message_operation(ledger_id, idempotency_key)
+                yield {
+                    "type": "cancelled",
+                    "generation_id": resolved_generation_id,
+                    "turns": turns,
+                }
+                raise
+            except Exception as error:
+                self._fail_message_operation(ledger_id, idempotency_key, error)
+                yield {
+                    "type": "error",
+                    "generation_id": resolved_generation_id,
+                    "turns": turns,
+                    "error": runtime_error_to_dict(error),
+                }
+                raise
+            result = self._world_message_result(
+                world,
+                turns,
+                generation_id=resolved_generation_id,
+                idempotent_replay=False,
+            )
+            self._succeed_message_operation(ledger_id, idempotency_key, result)
+            yield {"type": "world.finish", **result}
+
+    async def world_send_message_stream(
+        self,
+        message: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """world.send_message 的流式聚合形态（非 WS 传输下返回完整事件序列）。"""
+        events: list[dict[str, Any]] = []
+        async for event in self.iter_world_message_stream(
+            message,
+            idempotency_key=idempotency_key,
+        ):
+            events.append(event)
+
+        finish_event = events[-1] if events else {}
+        return {
+            **{key: value for key, value in finish_event.items() if key != "type"},
+            "events": events,
+        }
+
+    async def world_state(self) -> dict[str, Any]:
+        """World 当前状态快照（舞台/roster/等待状态/恢复诊断）。"""
+
+        return self._world_state_payload(self._require_world())
+
+    async def world_roster(self) -> list[dict[str, Any]]:
+        """在场角色名单及各自舞台位置。"""
+
+        world = self._require_world()
+        snapshot = world.state_snapshot()
+        return [
+            {
+                "actor_id": actor_id,
+                "name": name,
+                "scene_id": snapshot.stage.get(actor_id),
+                "is_current": actor_id == snapshot.current_actor_id,
+            }
+            for actor_id, name in snapshot.roster.items()
+        ]
+
+    async def world_transcript(
+        self,
+        scene_id: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """共享剧本（公开层）；默认返回用户当前场景分片。"""
+
+        world = self._require_world()
+        limit = self._validate_page_limit(limit, maximum=500)
+        snapshot = world.state_snapshot()
+        target_scene = scene_id or snapshot.stage.get(USER_OCCUPANT_ID)
+        if not target_scene:
+            raise ValueError("Runtime world transcript requires scene_id")
+        entries = world.transcript_history(target_scene, limit)
+        return {
+            "world_id": snapshot.world_id,
+            "scene_id": target_scene,
+            "entries": [to_builtins(entry) for entry in entries],
+            "entry_count": len(entries),
+        }
+
+    async def world_move(self, scene_id: str) -> dict[str, Any]:
+        """把用户移动到指定场景（World 层完成校验与公开过渡事件）。"""
+
+        if not isinstance(scene_id, str) or not scene_id.strip():
+            raise ValueError("Runtime world move requires scene_id")
+        world = await self._ensure_world_started()
+        await world.move_user(scene_id.strip())
+        return self._world_state_payload(world)
+
+    async def world_session_create(
+        self,
+        config_path: str | None = None,
+        start: bool = True,
+    ) -> dict[str, Any]:
+        """强制新建 World 存档（同 world.init 不带 session_id）。"""
+
+        return await self.world_init(config_path=config_path, session_id=None, start=start)
+
+    async def world_session_list(self, world_id: str | None = None) -> dict[str, Any]:
+        """列出某 world 的全部存档。"""
+
+        resolved_world_id = self._world_id_or_current(world_id)
+        records = await asyncio.to_thread(self._world_persistence().list, resolved_world_id)
+        return {
+            "world_id": resolved_world_id,
+            "sessions": [to_builtins(record) for record in records],
+        }
+
+    async def world_session_resume(
+        self,
+        session_id: str,
+        config_path: str | None = None,
+        start: bool = True,
+    ) -> dict[str, Any]:
+        """恢复指定 World 存档（先关闭当前 World，再按存档恢复编排）。"""
+
+        return await self.world_init(config_path=config_path, session_id=session_id, start=start)
+
+    async def world_session_delete(
+        self,
+        session_id: str,
+        world_id: str | None = None,
+    ) -> dict[str, Any]:
+        """删除指定 World 存档；运行中的活动存档拒绝删除。"""
+
+        resolved_world_id = self._world_id_or_current(world_id)
+        world = self.state.world
+        if (
+            world is not None
+            and world.world_id == resolved_world_id
+            and world.session_id == session_id
+        ):
+            raise RpcError(
+                "Cannot delete the active World session",
+                code="world.session_active",
+                user_message="不能删除正在运行的 World 存档，请先 world.shutdown 或切换存档。",
+                recoverable=False,
+            )
+        deleted = await self._world_persistence().delete_async(resolved_world_id, session_id)
+        if not deleted:
+            raise ValueError(f"World session does not exist: {session_id}")
+        return {"deleted": True, "world_id": resolved_world_id, "session_id": session_id}
+
+    async def world_session_export(
+        self,
+        session_id: str,
+        world_id: str | None = None,
+    ) -> dict[str, Any]:
+        """导出机器可读的独立 World session bundle。"""
+
+        resolved_world_id = self._world_id_or_current(world_id)
+        return await asyncio.to_thread(
+            self._world_persistence().export, resolved_world_id, session_id
+        )
+
+    async def world_shutdown(self) -> dict[str, Any]:
+        """关闭 World：保存存档、关停全部 Actor 与 World 总线。"""
+
+        self._require_world()
+        async with self._lock:
+            await self._shutdown_locked()
+        return {"ok": True, "shutdown": True}
+
+    def _require_world(self) -> GensokyoWorld:
+        if self.state.world is None:
+            raise RpcError(
+                "Runtime World is not initialized. Call world.init first.",
+                code="world.not_initialized",
+                user_message="World 尚未初始化，请先调用 world.init。",
+                recoverable=True,
+                action_hint="调用 world.init 装配多角色世界后再试。",
+            )
+        return self.state.world
+
+    async def _ensure_world_started(self) -> GensokyoWorld:
+        world = self._require_world()
+        if not self.state.started:
+            async with self._lock:
+                if not self.state.started:
+                    await world.start()
+                    self.state.started = True
+        return world
+
+    def _world_state_payload(self, world: GensokyoWorld) -> dict[str, Any]:
+        snapshot = world.state_snapshot()
+        return {
+            "world_id": snapshot.world_id,
+            "session_id": snapshot.session_id,
+            "protagonist": snapshot.protagonist,
+            "current_actor_id": snapshot.current_actor_id,
+            "waiting_for_user": snapshot.waiting_for_user,
+            "stage": dict(snapshot.stage),
+            "roster": dict(snapshot.roster),
+            "transcript_counts": dict(snapshot.transcript_counts),
+            "started": self.state.started,
+            "resume_diagnostics": [
+                to_builtins(diagnostic) for diagnostic in world.resume_diagnostics
+            ],
+        }
+
+    @staticmethod
+    def _world_ledger_id(world: GensokyoWorld) -> str:
+        """幂等账本的会话槽位：World 存档 id，未启用持久化时用稳定占位。"""
+
+        return world.session_id or f"world:{world.world_id}:ephemeral"
+
+    @staticmethod
+    def _world_message_fingerprint(world: GensokyoWorld, message: str) -> str:
+        return RuntimeOperationStore.request_fingerprint(
+            {"world_id": world.world_id, "message": message}
+        )
+
+    @staticmethod
+    def _world_message_result(
+        world: GensokyoWorld,
+        turns: list[dict[str, Any]],
+        *,
+        generation_id: str,
+        idempotent_replay: bool,
+    ) -> dict[str, Any]:
+        return {
+            "world_id": world.world_id,
+            "session_id": world.session_id,
+            "turns": turns,
+            "waiting_for_user": world.waiting_for_user,
+            "generation_id": generation_id,
+            "idempotent_replay": idempotent_replay,
+        }
+
+    def _world_persistence(self) -> WorldPersistence:
+        if self._storage_root is not None:
+            return WorldPersistence(self._storage_root / "worlds")
+        root = self._world_persistence_path or (self.state.root_dir / "sessions" / "worlds")
+        return WorldPersistence(root)
+
+    def _world_id_or_current(self, world_id: str | None) -> str:
+        if isinstance(world_id, str) and world_id.strip():
+            return world_id.strip()
+        world = self.state.world
+        if world is not None:
+            return world.world_id
+        raise ValueError("Runtime world_id is required when no World is initialized")
+
     async def dependency_status(self, providers: list[str] | None = None) -> dict[str, Any]:
         """Return optional Provider dependency status for generic clients."""
 
@@ -1695,8 +2226,14 @@ class RuntimeService:
             self._resource_scope("dependency_install", "dependency_install"),
         ):
             configured_timeout = self._resource_control_config().dependency_install_timeout_seconds
-            effective_timeout = configured_timeout if timeout == 600 else timeout
-            return install_dependencies(providers, scope=scope, timeout=effective_timeout)
+            requested_timeout = configured_timeout if timeout == 600 else timeout
+            # 调用方 timeout 只允许比配置上限更短，防止无限期占用工作线程
+            effective_timeout = max(1, min(int(requested_timeout), int(configured_timeout)))
+            # pip install 同步 subprocess 最长可达数分钟，放工作线程执行，
+            # 避免冻结整个事件循环
+            return await asyncio.to_thread(
+                install_dependencies, providers, scope=scope, timeout=effective_timeout
+            )
 
     async def external_tool_status(self, include_tools: bool = True) -> dict[str, Any]:
         """Return external tool source status without exposing transport details."""
@@ -1933,7 +2470,7 @@ class RuntimeService:
                 "agent_id": agent_id,
             }
 
-        agent = self._require_agent()
+        event_bus = self._runtime_event_bus()
         resolved_events = self._resolve_runtime_event_types(event_types, categories)
         if queue_size < 1:
             raise ValueError("Subscription queue_size must be greater than or equal to 1")
@@ -1983,7 +2520,7 @@ class RuntimeService:
                 queue.put_nowait(payload)
 
         for event_type in resolved_events:
-            subscription_ids.append(agent.event_bus.subscribe(event_type, enqueue_event))
+            subscription_ids.append(event_bus.subscribe(event_type, enqueue_event))
 
         subscription_id = ",".join(subscription_ids)
         self._runtime_event_subscriptions[subscription_id] = subscription_ids
@@ -2002,6 +2539,12 @@ class RuntimeService:
             ),
         }
 
+    def _runtime_event_bus(self) -> EventBus:
+        """Runtime 状态事件的订阅总线：World 模式取 World 总线，否则取 Agent 总线。"""
+        if self.state.world is not None:
+            return self.state.world.event_bus
+        return self._require_agent().event_bus
+
     async def close_event_subscription(self, subscription_id: str) -> dict[str, Any]:
         """Close a previously created Runtime event subscription."""
 
@@ -2012,14 +2555,14 @@ class RuntimeService:
                 result = await service.close_event_subscription(inner_id)
                 return {**result, "subscription_id": subscription_id}
 
-        agent = self._require_agent()
+        event_bus = self._runtime_event_bus()
         subscription_ids = self._runtime_event_subscriptions.pop(subscription_id, None)
         if subscription_ids is None:
             raise ValueError(f"Runtime event subscription does not exist: {subscription_id}")
 
         removed = 0
         for event_bus_subscription_id in subscription_ids:
-            if agent.event_bus.unsubscribe(event_bus_subscription_id):
+            if event_bus.unsubscribe(event_bus_subscription_id):
                 removed += 1
         return {"subscription_id": subscription_id, "closed": True, "removed": removed}
 
@@ -2097,25 +2640,29 @@ class RuntimeService:
         return agent
 
     async def _shutdown_locked(self) -> None:
+        for subscription_id in list(self._runtime_event_subscriptions):
+            try:
+                await self.close_event_subscription(subscription_id)
+            except Exception:
+                self._runtime_event_subscriptions.pop(subscription_id, None)
         agent = self.state.agent
         if agent is not None:
-            for subscription_id in list(self._runtime_event_subscriptions):
-                try:
-                    await self.close_event_subscription(subscription_id)
-                except Exception:
-                    self._runtime_event_subscriptions.pop(subscription_id, None)
             await agent.shutdown()
+        world = self.state.world
+        if world is not None:
+            await world.shutdown()
         self._event_store_subscription_ids.clear()
         self._recorded_event_payloads.clear()
         self.state.agent = None
+        self.state.world = None
         self.state.started = False
 
-    def _start_event_recording(self, agent: Agent) -> None:
+    def _start_event_recording(self, event_bus: EventBus) -> None:
         if self._event_store is None or self._event_store_subscription_ids:
             return
         for event_type in SystemEvent:
             self._event_store_subscription_ids.append(
-                agent.event_bus.subscribe(event_type, self._record_runtime_event)
+                event_bus.subscribe(event_type, self._record_runtime_event)
             )
 
     async def _record_runtime_event(self, event: Event) -> None:
@@ -2355,29 +2902,9 @@ class RuntimeService:
 
     @staticmethod
     def _sanitize_runtime_event_value(value: Any) -> Any:
-        return RuntimeService._redact_sensitive_fields(RuntimeService._json_compatible(value))
-
-    @staticmethod
-    def _redact_sensitive_fields(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                str(key): (
-                    REDACTED_VALUE
-                    if RuntimeService._is_sensitive_event_field(str(key))
-                    else RuntimeService._redact_sensitive_fields(item)
-                )
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [RuntimeService._redact_sensitive_fields(item) for item in value]
-        return value
-
-    @staticmethod
-    def _is_sensitive_event_field(field_name: str) -> bool:
-        normalized = field_name.lower().replace("-", "_")
-        return normalized in SENSITIVE_EVENT_FIELD_NAMES or any(
-            marker in normalized for marker in ("api_key", "token", "secret", "password")
-        )
+        # 脱敏统一走 event_contract.sanitize_event_payload（全项目唯一实现），
+        # 这里只先做 JSON 兼容化
+        return sanitize_event_payload(RuntimeService._json_compatible(value))
 
     @staticmethod
     def _json_compatible(value: Any) -> Any:
@@ -2463,6 +2990,16 @@ class RuntimeService:
             SystemEvent.INITIATIVE_TIMER_TRIGGERED,
             SystemEvent.INITIATIVE_TIMER_DISCARDED,
         )
+        categories["world"] = (
+            SystemEvent.WORLD_STARTED,
+            SystemEvent.WORLD_SHUTDOWN,
+            SystemEvent.WORLD_ACTOR_TURN_STARTED,
+            SystemEvent.WORLD_ACTOR_TURN_CHUNK,
+            SystemEvent.WORLD_ACTOR_TURN_COMPLETED,
+            SystemEvent.WORLD_DIRECTOR_DECISION,
+            SystemEvent.WORLD_SCENE_MOVED,
+            SystemEvent.WORLD_WAITING_USER,
+        )
         categories["runtime_observable"] = (
             *categories["tool"],
             *categories["model"],
@@ -2470,6 +3007,7 @@ class RuntimeService:
             *categories["persistence"],
             *categories["error"],
             *categories["initiative_timer"],
+            *categories["world"],
         )
         return categories
 
@@ -2531,6 +3069,40 @@ class RuntimeService:
             "message_count": len(messages),
         }
 
+    def _lookup_operation_replay(
+        self,
+        ledger_id: str,
+        idempotency_key: str | None,
+        *,
+        request_fingerprint: str | None = None,
+    ) -> dict[str, Any] | None:
+        """查幂等账本：有记录则按状态 replay 或抛错；无记录/无账本返回 None。
+
+        ``ledger_id`` 对 Agent 会话是 session_id，对 World 是 World 存档槽位。
+        """
+        if idempotency_key is None:
+            return None
+        key = self._normalize_idempotency_key(idempotency_key)
+        if self._operation_store is None:
+            return None
+        operation = self._operation_store.get(ledger_id, key)
+        if operation is None:
+            return None
+        stored_fingerprint = operation.get("request_fingerprint")
+        if request_fingerprint and stored_fingerprint != request_fingerprint:
+            raise RpcError(
+                "Idempotency key was already used for a different request",
+                code="message.idempotency_conflict",
+                user_message="同一幂等键不能用于不同的消息请求。",
+                recoverable=False,
+                action_hint="请为新的消息请求生成新的 idempotency_key。",
+                details={
+                    "operation_id": operation.get("operation_id"),
+                    "session_id": ledger_id,
+                },
+            )
+        return self._operation_replay(operation)
+
     def _idempotent_response(
         self,
         agent: Agent,
@@ -2544,23 +3116,11 @@ class RuntimeService:
         key = idempotency_key.strip()
         if not key or len(key) > 128:
             raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
-        if self._operation_store is not None:
-            operation = self._operation_store.get(session_id, key)
-            if operation is not None:
-                stored_fingerprint = operation.get("request_fingerprint")
-                if request_fingerprint and stored_fingerprint != request_fingerprint:
-                    raise RpcError(
-                        "Idempotency key was already used for a different request",
-                        code="message.idempotency_conflict",
-                        user_message="同一幂等键不能用于不同的消息请求。",
-                        recoverable=False,
-                        action_hint="请为新的消息请求生成新的 idempotency_key。",
-                        details={
-                            "operation_id": operation.get("operation_id"),
-                            "session_id": session_id,
-                        },
-                    )
-                return self._operation_replay(operation)
+        replay = self._lookup_operation_replay(
+            session_id, key, request_fingerprint=request_fingerprint
+        )
+        if replay is not None:
+            return replay
         messages = agent.session_manager.persistence.load_messages(session_id)
         for index, message in enumerate(messages):
             if message.get("role") != "user" or message.get("idempotency_key") != key:

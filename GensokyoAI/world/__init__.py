@@ -5,9 +5,9 @@ WorldStage 管理角色在场位置，SharedTranscript 承载全场景可见的�
 GensokyoWorld 作为对话主循环驱动整台戏。
 
 当前已落地数据层/持久化（阶段 2）、Director 选角（阶段 4）、
-GensokyoWorld 主类/状态机（阶段 5）与私有记忆投影（阶段 6）；
-DialogueLoop 抽象（阶段 7）、持久化恢复（阶段 8）与 Runtime/Console 接入（阶段 9）
-在后续阶段接入。
+GensokyoWorld 主类/状态机（阶段 5）、私有记忆投影（阶段 6）、
+DialogueLoop 抽象与对话欲（阶段 7）、持久化恢复（阶段 8）与
+Runtime/Console 接入（阶段 9）。
 """
 
 from .director import Director
