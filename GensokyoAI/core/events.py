@@ -132,7 +132,9 @@ class Event(Struct):
     """事件"""
 
     type: SystemEvent
-    id: str = field(default_factory=lambda: str(uuid4())[:8])
+    # 全量 uuid：8 位短 id（32 bit）在并发 pending 请求下会撞键，
+    # 导致 respond 串到错误的等待方（跨工具串答）
+    id: str = field(default_factory=lambda: uuid4().hex)
     source: str = "unknown"
     data: Any = None
     timestamp: datetime = field(default_factory=utc_now)
@@ -266,10 +268,15 @@ class EventBus:
             )
 
     async def flush_critical(self, timeout: float | None = None) -> None:
-        """尽量在停机前处理关键事件，避免保存/错误等事件直接丢弃。"""
+        """尽量在停机前处理关键事件，避免保存/错误等事件直接丢弃。
+
+        非关键事件先暂存、最后按原序放回队列——不得让排在关键事件之前的
+        普通事件把关键事件挡在停机点之外。
+        """
         if self._event_queue.empty():
             return
         deadline = asyncio.get_running_loop().time() + (timeout or self._stop_drain_timeout)
+        stashed: list[Event] = []
         while not self._event_queue.empty() and asyncio.get_running_loop().time() < deadline:
             try:
                 event = self._event_queue.get_nowait()
@@ -280,11 +287,15 @@ class EventBus:
                     await self._process_event(event)
                     self._stats["critical_flushed"] += 1
                 else:
-                    await self._event_queue.put(event)
-                    break
+                    stashed.append(event)
             finally:
                 with contextlib.suppress(ValueError):
                     self._event_queue.task_done()
+        for event in stashed:
+            try:
+                self._event_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                break
 
     async def _event_worker(self) -> None:
         """事件处理工作器"""

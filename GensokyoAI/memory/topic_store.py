@@ -16,7 +16,9 @@ Design Philosophy:
 import asyncio
 import json
 import math
+import os
 import re
+import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +82,45 @@ class TopicAwareStore:
 
     # ==================== 持久化 ====================
 
+    @property
+    def _bak_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".bak")
+
+    @staticmethod
+    def _read_json_file(path: Path) -> dict:
+        with open(path, "rb") as f:
+            return msgspec.json.decode(f.read())
+
+    def _quarantine_corrupt(self, error: Exception) -> None:
+        """把损坏的主文件隔离到 .corrupt-<时间戳>，避免后续保存覆盖犯罪现场。"""
+        quarantine = self.path.with_name(
+            f"{self.path.name}.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        )
+        try:
+            os.replace(self.path, quarantine)
+            logger.warning(f"话题存储文件已隔离: {quarantine}（原因: {error}）")
+        except OSError as quarantine_error:
+            logger.warning(f"损坏文件隔离失败: {quarantine_error}")
+
+    def _read_payload_with_backup(self) -> dict:
+        """读取主文件；损坏时尝试 .bak 恢复并回写主文件，均失败则隔离后抛出。"""
+        try:
+            return self._read_json_file(self.path)
+        except Exception as main_error:
+            bak_path = self._bak_path
+            if bak_path.exists():
+                try:
+                    data = self._read_json_file(bak_path)
+                except Exception:
+                    data = None
+                if data is not None:
+                    self._quarantine_corrupt(main_error)
+                    self._write_sync(data)
+                    logger.warning(f"话题存储主文件损坏，已从备份恢复: {self.path}")
+                    return data
+            self._quarantine_corrupt(main_error)
+            raise
+
     def _load_sync(self) -> None:
         """同步加载"""
         if not self.path.exists():
@@ -87,8 +128,7 @@ class TopicAwareStore:
 
         migration_failed_recorded = False
         try:
-            with open(self.path, "rb") as f:
-                data = msgspec.json.decode(f.read())
+            data = self._read_payload_with_backup()
             from_schema_version = data.get("schema_version") if isinstance(data, dict) else None
             try:
                 data, changed = migrate_memory_store_payload(data)
@@ -192,17 +232,28 @@ class TopicAwareStore:
                 )
             logger.warning(f"加载话题存储失败: {e}")
 
+    def _replace_with_backup(self, tmp_path: Path) -> None:
+        """原子替换主文件；替换前把旧主文件复制为 .bak（崩溃可回滚）。"""
+        if self.path.exists():
+            try:
+                shutil.copy2(self.path, self._bak_path)
+            except OSError as error:
+                logger.warning(f"话题存储备份失败（不影响保存）: {error}")
+        os.replace(tmp_path, self.path)
+
     def _write_sync(self, data: dict) -> None:
-        """同步写入话题存储，用于启动时迁移。"""
+        """同步原子写入话题存储（tmp + replace），用于启动时迁移与备份恢复。"""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         json_bytes = msgspec.json.format(
             msgspec.json.encode(data, enc_hook=_json_encoder), indent=2
         )
-        with open(self.path, "wb") as f:
+        tmp_path = self.path.with_name(self.path.name + ".tmp")
+        with open(tmp_path, "wb") as f:
             f.write(json_bytes)
+        self._replace_with_backup(tmp_path)
 
     async def _save_async(self) -> None:
-        """异步保存"""
+        """异步保存（tmp + 原子替换 + .bak，避免崩溃窗口留下半截文件）"""
         async with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -215,8 +266,10 @@ class TopicAwareStore:
                 msgspec.json.encode(data, enc_hook=_json_encoder), indent=2
             )
 
-            async with ayafileio.open(self.path, "wb") as f:
+            tmp_path = self.path.with_name(self.path.name + ".tmp")
+            async with ayafileio.open(tmp_path, "wb") as f:
                 await f.write(json_bytes)
+            self._replace_with_backup(tmp_path)
 
     def _index_topic(self, topic: Topic) -> None:
         """构建关键词索引"""
@@ -446,8 +499,11 @@ class TopicAwareStore:
             if scores:
                 best_id, best_score = max(scores.items(), key=lambda x: x[1])
 
-                if best_score >= 7.0:
-                    topic = self._topics[best_id]
+                # _score_topics 是 LLM 调用（秒级窗口），期间话题可能被并发删除，
+                # 直接索引会 KeyError——话题已消失时按无匹配处理，走降级命名。
+                best_topic = self._topics.get(best_id)
+                if best_score >= 7.0 and best_topic is not None:
+                    topic = best_topic
                     self._update_topic(topic, memory, importance, best_score, emotional_valence)
                     self._refresh_topic(topic, boost=0.03)  # 刷新
                     self._update_edges(topic.id, scores)
@@ -455,8 +511,10 @@ class TopicAwareStore:
                     logger.debug(f"更新话题: {topic.name} (相关性: {best_score:.1f})")
                     return topic
 
-        # 最终降级：生成默认话题名
+        # 最终降级：生成默认话题名（探测未占用名，避免删过话题后撞名覆盖索引）
         fallback_name = f"话题{len(self._topics) + 1}"
+        while fallback_name.lower() in self._topic_name_index:
+            fallback_name += "_"
         logger.info(f"使用降级话题名: {fallback_name}")
 
         topic = Topic(

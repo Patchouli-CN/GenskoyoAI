@@ -61,7 +61,9 @@ async def remember(
         else:
             return "「嗯，记住了～」"
 
-    return "「记住了～」"
+    # 事件总线未启动/请求超时/无订阅者时 result 为 None——诚实报失败，
+    # 不能让模型以为已经记住（对比 update_memory 的失败路径）。
+    return "「记忆写入失败了…（事件总线无响应，刚才的内容没有保存成功）」"
 
 
 @tool()

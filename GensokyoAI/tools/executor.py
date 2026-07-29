@@ -40,7 +40,7 @@ class ToolExecutor:
         self._event_bus = event_bus
         self._external_tool_manager = external_tool_manager
         self._resource_gates = resource_gates or {}
-        # Actor 身份：单角色模式为 SINGLE_ACTOR_ID / world_id=None，
+        # Actor 身份：单角色模式默认取角色名 / world_id=None，
         # 多角色模式由 World 装配时按 roster 注入稳定 id。
         self._actor_id = actor_id
         self._world_id = world_id
@@ -363,7 +363,8 @@ class ToolExecutor:
         """判断某工具是否可并发执行。
 
         写状态工具（记忆写入、scene_switch 等）声明 ``parallel_safe=False``，需串行；
-        本地注册表查不到的工具（含外部工具）保守视为并行安全，保持既有行为。
+        本地注册表查不到的工具（含外部工具）默认视为并行安全——这是乐观选择
+        （外部工具也可能是写状态），为保持既有行为而保留。
         """
         if not name or not isinstance(name, str):
             return True
@@ -373,32 +374,39 @@ class ToolExecutor:
     async def execute_batch(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """批量执行工具调用。
 
-        纯查询工具（``parallel_safe=True``）并发执行；写状态工具
-        （``parallel_safe=False``）按调用顺序串行，避免同一 Actor 私有状态被并发修改
-        导致竞态。返回结果顺序与入参一致（按 tool_call_id 对齐）。
+        按调用顺序扫描：连续的纯查询工具（``parallel_safe=True``）组成并发段
+        （gather）；写状态工具（``parallel_safe=False``）在其原位串行执行。
+        这样同批「先写后读」的依赖语义（如 remember 后 recall）保持正确，
+        写状态工具彼此也不会并发。返回结果顺序与入参一致（按 tool_call_id 对齐）。
         """
         results: list[dict[str, Any] | None] = [None] * len(tool_calls)
-        parallel_indices: list[int] = []
-        serial_indices: list[int] = []
-        for i, tc in enumerate(tool_calls):
-            if self._is_parallel_safe(tc.get("name")):
-                parallel_indices.append(i)
+        index = 0
+        while index < len(tool_calls):
+            if self._is_parallel_safe(tool_calls[index].get("name")):
+                # 收集连续并发段，段内 gather 并发
+                segment_start = index
+                while index < len(tool_calls) and self._is_parallel_safe(
+                    tool_calls[index].get("name")
+                ):
+                    index += 1
+                segment = list(range(segment_start, index))
+                segment_results = await asyncio.gather(
+                    *(self.execute(tool_calls[i]) for i in segment)
+                )
+                for i, res in zip(segment, segment_results, strict=True):
+                    results[i] = res
             else:
-                serial_indices.append(i)
+                # 写状态工具原位串行，等待前面的并发段完成后再执行
+                results[index] = await self.execute(tool_calls[index])
+                index += 1
 
-        # 并行组：并发执行
-        if parallel_indices:
-            parallel_results = await asyncio.gather(
-                *(self.execute(tool_calls[i]) for i in parallel_indices)
-            )
-            for i, res in zip(parallel_indices, parallel_results, strict=True):
-                results[i] = res
-
-        # 串行组：按原始调用顺序逐个执行，保证写状态不并发
-        for i in serial_indices:
-            results[i] = await self.execute(tool_calls[i])
-
-        return [r for r in results if r is not None]
+        # execute() 所有路径必返回 dict；空槽位说明契约被破坏，显式失败而非静默错位
+        final: list[dict[str, Any]] = []
+        for result in results:
+            if result is None:
+                raise RuntimeError("工具批量执行结果出现空槽位，execute() 契约被破坏")
+            final.append(result)
+        return final
 
     def execute_sync(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """同步执行（兼容非异步环境）"""
@@ -432,6 +440,26 @@ class ToolExecutor:
             return self._error_result(
                 tool_call, name, self._tool_not_found_error(name), legacy_prefix="错误"
             )
+
+        # async 工具不能裸调用：直接 func(**args) 只会得到未 await 的协程，
+        # 副作用没发生却被序列化成 "<coroutine object ...>" 当成功返回。
+        if tool_def.is_async:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self.execute(tool_call))
+            error = ToolError(
+                error_code="tool.sync_not_supported",
+                technical_message=(
+                    f"Async tool '{name}' cannot run via execute_sync "
+                    "while an event loop is already running."
+                ),
+                user_message="该工具不支持当前同步调用方式。",
+                recoverable=True,
+                action_hint="请改用异步 execute() 调用该工具。",
+                details={"name": name},
+            )
+            return self._error_result(tool_call, name, error, legacy_prefix="错误")
 
         try:
             result = tool_def.func(**arguments)

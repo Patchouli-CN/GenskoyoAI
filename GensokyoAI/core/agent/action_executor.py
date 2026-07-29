@@ -27,6 +27,10 @@ class ActionExecutor:
         # 流式响应管理
         self._stream_queue: asyncio.Queue[StreamChunk] | None = None
         self._response_future: asyncio.Future | None = None
+        # 当前响应槽位绑定的请求 id：超时/取消后旧的「孤儿生成」仍在事件 worker
+        # 里运行，其 feed/complete 必须凭 id 判定为过期并丢弃，否则会把下一个
+        # 请求的 future 用旧回复解决（详见 _impl.py 的 60s 超时路径）。
+        self._current_request_id: str | None = None
 
         self._subscribe_events()
         logger.debug("⚡ [ActionExecutor] 初始化完成")
@@ -75,9 +79,11 @@ class ActionExecutor:
         """执行 SPEAK - 请求生成响应"""
         # 发布生成响应事件，由 ResponseHandler 订阅处理；
         # 透传本轮系统上下文与 world 标记（World 舞台/在场/共享剧本）。
+        # request_id 优先取发送方在 MESSAGE_RECEIVED 时铸造的绑定 id（用于
+        # 超时后识别孤儿生成），无绑定的旧路径回退为本事件 id。
         data: dict[str, Any] = {
             "user_input": user_input,
-            "request_id": event.id,
+            "request_id": event.data.get("request_id") or event.id,
         }
         if system_contexts := event.data.get("system_contexts"):
             data["system_contexts"] = system_contexts
@@ -117,6 +123,10 @@ class ActionExecutor:
         action_data = event.data.get("action", {})
         logger.debug(f"🤫 [ActionExecutor] WAIT: {action_data.get('reason', '')}")
 
+        # 过期请求的 WAIT 不得解决新请求的 future
+        if not self.is_current_request(event.data.get("request_id")):
+            logger.debug("🤫 [ActionExecutor] 忽略过期请求的 WAIT")
+            return
         if self._response_future and not self._response_future.done():
             self._response_future.set_result("")
             self._cleanup_response()
@@ -157,14 +167,27 @@ class ActionExecutor:
 
     # ==================== 流式响应支持 ====================
 
-    def prepare_response(self) -> asyncio.Future:
-        """准备接收响应。"""
+    def prepare_response(self, request_id: str | None = None) -> asyncio.Future:
+        """准备接收响应，并把新槽位绑定到该请求 id。"""
         self._response_future = asyncio.Future()
         self._stream_queue = asyncio.Queue()
+        self._current_request_id = request_id
         return self._response_future
 
-    async def feed_chunk(self, chunk: StreamChunk) -> None:
-        """喂入流式块。"""
+    def is_current_request(self, request_id: str | None) -> bool:
+        """判断给定请求是否仍持有当前响应槽位。
+
+        `request_id=None` 表示旧式无绑定事件，视为当前（保持兼容）。
+        """
+        if request_id is None:
+            return True
+        return self._response_future is not None and self._current_request_id == request_id
+
+    async def feed_chunk(self, chunk: StreamChunk, request_id: str | None = None) -> None:
+        """喂入流式块；过期请求的 chunk 直接丢弃。"""
+        if not self.is_current_request(request_id):
+            logger.debug(f"⚡ [ActionExecutor] 丢弃过期请求的流式块: {request_id}")
+            return
         if self._stream_queue:
             await self._stream_queue.put(chunk)
 
@@ -183,9 +206,13 @@ class ActionExecutor:
                 return None
         return None
 
-    def complete_response(self, full_response: str = "") -> None:
+    def complete_response(self, full_response: str = "", request_id: str | None = None) -> None:
         """响应完成。只解析 future，不清空流式队列——消费方可能还没排完
-        最后几个 chunk，清空会丢失流尾；队列随下一次 prepare_response 整体替换。"""
+        最后几个 chunk，清空会丢失流尾；队列随下一次 prepare_response 整体替换。
+        过期请求的 complete 直接忽略，不得解决新请求的 future。"""
+        if not self.is_current_request(request_id):
+            logger.debug(f"⚡ [ActionExecutor] 忽略过期请求的 complete: {request_id}")
+            return
         if self._response_future and not self._response_future.done():
             self._response_future.set_result(full_response)
 
@@ -205,3 +232,4 @@ class ActionExecutor:
                     break
         self._response_future = None
         self._stream_queue = None
+        self._current_request_id = None

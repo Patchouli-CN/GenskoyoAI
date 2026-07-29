@@ -375,6 +375,7 @@ class SceneServiceListeners:
             return
 
         scene_id = (event.data or {}).get("scene_id", "")
+        from_scene_id = manager.current_scene_id
         try:
             scene = await manager.switch_scene(scene_id)
         except Exception as e:
@@ -384,13 +385,16 @@ class SceneServiceListeners:
         self._persist_current_scene(scene.id)
         self.event_bus.respond(event, {"ok": True, "scene_id": scene.id, "name": scene.name})
 
-        # 广播场景切换，供前端提示当前场景
+        # 广播场景切换，供前端提示当前场景；from_scene_id/actor_id 供
+        # World 更新 WorldStage（谁在移动、从哪移动到哪）。
         self.event_bus.publish(
             Event(
                 type=SystemEvent.SCENE_SWITCHED,
                 source="scene_service",
                 data={
                     "scene_id": scene.id,
+                    "from_scene_id": from_scene_id,
+                    "actor_id": getattr(self.agent, "actor_id", None),
                     "name": scene.name,
                     "description": scene.description,
                     "render": scene.render(),

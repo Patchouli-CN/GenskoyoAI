@@ -140,16 +140,23 @@ class SessionManager:
                 self._persistence.save_session(session)
 
     def replace_messages(self, session_id: str, messages: list[dict]) -> bool:
-        """全量替换指定会话消息，并同步持久化与工作记忆缓存。"""
+        """全量替换指定会话消息，并同步持久化与工作记忆缓存。
+
+        工作记忆实例必须原地更新而非换新：Agent 侧的 MessageBuilder/
+        ResponseHandler/ActionPlanner 在构造期捕获了该实例，换新会让它们
+        持有孤儿引用（编辑内容被后续保存静默回滚）。
+        """
         session = self._sessions.get(session_id)
         if session is None:
             return False
 
         previous = self._persistence.load_messages(session_id)
         normalized_messages, changed = self._merge_message_model(previous, messages)
-        wm = WorkingMemoryManager(max_turns=self._working_max_turns)
+        wm = self._working_memories.get(session_id)
+        if wm is None:
+            wm = WorkingMemoryManager(max_turns=self._working_max_turns)
+            self._working_memories[session_id] = wm
         wm.replace_messages(normalized_messages)
-        self._working_memories[session_id] = wm
 
         session.total_turns = len(normalized_messages) // 2
         if changed:

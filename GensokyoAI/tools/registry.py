@@ -64,8 +64,12 @@ class ToolRegistry:
                 logger.warning(f"导入模块 {name} 失败: {e}")
 
     def get(self, name: str) -> ToolDefinition | None:
-        """获取工具"""
-        return self._tools.get(name) or get_tool(name)
+        """获取工具（仅查本实例注册表）。
+
+        不回退进程级全局注册表：否则 unregister 形同虚设，且任何一处
+        register() 都会把工具泄漏给所有 Actor 的 registry，破坏多角色隔离。
+        """
+        return self._tools.get(name)
 
     def list(self) -> list[ToolDefinition]:
         """列出所有工具"""

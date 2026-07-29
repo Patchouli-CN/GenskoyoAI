@@ -5,11 +5,12 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 已完成、已提交；阶段 4 已完成、已验证全绿、尚未提交**。下一步从 **阶段 5** 继续。
+多角色 `GensokyoWorld` 分阶段实施中。**阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 已完成、已提交（最新 `4ca2a83`）；阶段 5 开工前已完成全项目深度审查 + 阻塞项修复（审查修复批未提交）**。下一步从 **阶段 5** 继续。
 
 - 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`518 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个阶段 4 之外的历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），world 相关文件全部 format 干净。
+- 当前测试：`541 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
 - 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
+- **阶段 5 开工前必读 §5.6**：全项目深度审查的已修清单与各阶段遗留任务都在那里。
 
 ---
 
@@ -120,6 +121,54 @@
 
 ---
 
+## 5.6 深度审查归档（2026-07-29 全项目审查，阶段 5 开工前执行）
+
+6 个只读审查代理分区审查（core/agent、world/、tools、config、runtime、memory/session/scene），以下为分诊结果。**多角色增量（1a–4）本身扎实，无 critical**；发现的问题多为存量隐患。
+
+**已修复（本批未提交，定向 17 例 `tests/test_review_robustness.py` + validator 6 例，全量 541 passed）**
+- **C1 孤儿生成**：响应槽位请求代际绑定。`request_id` 由发送方铸造并全链透传（MESSAGE_RECEIVED→ACTION_DECIDED→GENERATE_RESPONSE）；超时/取消后旧生成的 feed/complete/MESSAGE_SENT/主动定时器调度全部作废；`_execute_wait` 同样按 id 校验。无绑定旧事件（request_id=None）保持兼容。
+- **C1' 会话切换陈旧组件**：`Agent._reset_session_scoped_state()` 统一失效（builder/handler 懒加载重建；`planner.update_memory_context`、`think_engine.update_semantic_memory` 就地更新，不动事件订阅）；`SessionManager.replace_messages` 原地复用 wm 实例——前端编辑不再被静默回滚。
+- **Agent 信号注册 opt-out**：`Agent(setup_signal_handlers=False)`。多 Actor 下进程信号 last-wins 且先 shutdown 者直接 `sys.exit`，**World 装配 Actor 必传 False，由 World 统一接管**。
+- **topics.json**：tmp+原子替换+`.bak`+损坏隔离 `.corrupt-*`+bak 恢复（原先崩溃即整个语义记忆静默清空）；顺带修 LLM 打分窗口并发删除 KeyError 与降级话题名撞名。
+- **单角色语义记忆路径净化** `sanitize_path_id(character_name)`（防 `../../` 路径遍历 + 与会话目录规则一致）。
+- **SCENE_SWITCHED 载荷** +`from_scene_id`/`actor_id`（阶段 5 WorldStage 联动用）。
+- **config validator world 节硬化**：标量类型（id/enabled/user_initial_scene/两个 bool/actor.enabled/initial_scene）、persistence 非 dict 报错、protagonist 禁指 disabled actor、`temperature≤2`、`context_entries > max_entries_per_scene` 交叉警告。
+- **工具/事件**：`execute_batch` 分段执行（同批「先写后读」语义正确，结果仍按 id 对齐）；`execute_sync` 对 async 工具守卫（无 loop 走 asyncio.run 真执行，有 loop 结构化错误——原先静默假成功）；`ToolRegistry.get` 去全局回退（unregister 真生效、跨 Actor 不泄漏）；`remember` 总线无响应时诚实报失败（原先假「记住了～」）；`Event.id` 全量 uuid（request 键 32bit 会撞）；`flush_critical` 暂存普通事件、不再被截断丢关键事件。
+
+**阶段 5 必做（装配期）**
+- **world 记忆根按显示名碰撞**：roster 两个 actor 净化后同名（或同角色卡挂两个 actor）→ 共享 `memory/world_<id>/<name>` 互踩。配置校验不读角色文件做不了，**装配时校验净化后名字唯一并硬报错**。
+- 共享 ModelClient 显式绑 World bus；Actor 全部 `setup_signal_handlers=False`。
+- WorldStage 读方法无锁（单循环内安全）：**stage 只在事件循环内访问**，不得从工作线程读。
+
+**阶段 6 注意**
+- `WorldMemoryProjector` 直调 `add_async` 必须自己捕获异常（内部已部分兜底但不保证不抛）。
+
+**阶段 7 处理（定时器重构时一并，§7.3 对话欲累积的前置）**
+- `InitiativeTimerManager.trigger()` 持锁跨整个 LLM 生成，discard/update/cancel 全阻塞 → 用户输入卡一整轮；`_run_timer` 已正确移出锁外，`trigger()` 对齐。
+- 已触发的定时器无法被 discard 打断：回合生成中途到点会对同一 Actor 发起第二次并发生成，私历顺序错乱。World 高频驱动下概率放大。
+
+**阶段 8 处理**
+- `WorldPersistence.create` 的 exists→write 有 TOCTOU 竞态（走 `_lock_for` 或 `open "xb"`）；`list()` 名义只读实际会 quarantine/回写（自愈），docstring 补副作用说明；roster diagnostics 并入 stage 键（除 `__user__`）与 `current_actor_id`，防幽灵占位。
+- `core/migrations` 把更高未知 schema_version 当 legacy 静默降级 vs `world/persistence` 硬拒绝——跨版本契约需统一。
+
+**阶段 9 处理（runtime，两提交重构后的审查发现）**
+- WS 断连/取消落在发送窗口 → 幂等账本永久 pending（fail-closed 放大）：`_send_streaming_rpc_frames` finally 显式 `aclose()` + service 层把 GeneratorExit 也收敛 cancelled（**需验证**）。
+- `handle_ws` finally 清理链可被心跳异常截断 → 事件订阅/流任务泄漏：清理助手按任务 `suppress(Exception)`。
+- 单租户 `operations.json` 损坏拖垮整个进程启动：catalog 按租户隔离失败。
+- `dependency.install` 在 async 链路同步 `subprocess.run` 最长 600s 冻结全循环：`to_thread` + timeout 钳上限。
+- **world.\* 接线清单（缺一不可）**：`rpc.py` `RPC_METHOD_SPECS`+`_PUBLIC_RESULT_SCHEMAS`；`auth.py` `required_role`（**默认 fallthrough 是 admin，不给 world. 加分支就全变 admin-only**）；`rpc.py` `_NETWORK_RESOURCE_PREFIXES` + `service.py` `_is_tenant_method`（**漏加 = 跨用户共享同一 world 状态**）；`NETWORK_SESSION/REVISION/IDEMPOTENCY_METHODS` 按写语义补；`http_adapter.py:556` WS 流式方法硬编码分流（且 ack 帧先于参数校验）；`RuntimeState` 加 `world` 字段但**绝不能碰 root 的 `state.agent`**（`_uses_network_tenancy` 依赖它为 None）；`event_contract`+`_runtime_event_category_map` 加 world 事件分类；两套脱敏（`sanitize_event_payload` vs `_redact_sensitive_fields`）选定一套。
+- 其余 minor：`_begin_message_operation` 丢弃 replay 返回值（哑弹）；错误码不稳定三处（裸 ValueError→`runtime.error`）；SSE 无心跳半开泄漏订阅；replay 与订阅间丢失窗口；只读 RPC 写副作用（`_activate_tenant_session`）；反代下限流误伤（X-Forwarded-For 不可达）；RPC body 上限可被 chunked 绕过；`allowed_origins` 带 path 静默判 None；`list_sessions` 游标建在可变排序键上。
+
+**待用户定夺（设计级，未擅自改）**
+- **WorkingMemoryManager.add_message 从不 trim**：`max_turns` 形同虚设，长会话全量历史进上下文（token 无界）。episodic 压缩本应接管但已是死子系统（`persistence=None`、无 `add_message` 调用方）。与 §10.5 记忆简化方向直接相关，建议优先决策。
+- 工具路径首段前言重复入记忆（`_record_tool_results` 存 tool_call 消息一份，`MESSAGE_SENT` 又拼全文一份）。
+- 「响应中断」的部分回复被投递却永不记录（`_impl.py` MESSAGE_SENT 过滤）。
+- `MEMORY_WORKING_ADDED` 无发布者（死代码）；ActionPlanner 的 REMEMBER/RECALL 是死路（request 自阻塞 + source 前缀过滤）——是否刻意下线？
+- `configure_web_search_tool` 仍写模块级全局（多 Actor 后初始化者胜；配置相同时无害）。
+- episodic 死子系统：启用前必须先修 `compress()` 竞态与持久化。
+
+---
+
 ## 6. 验证命令（每阶段必跑，对齐 CI）
 
 ```bash
@@ -137,11 +186,11 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 4 完成）
+## 8. 未提交改动清单（截至深度审查修复批完成）
 
-阶段 4 已改（M）：`GensokyoAI/core/events.py`（+`WORLD_DIRECTOR_DECISION`）、`GensokyoAI/world/types.py`（+`DirectorPhase`/`ActorBrief`/`DirectorContext`）、`GensokyoAI/world/__init__.py`、`docs/{todo,gsk-ai-multi-character}.md`（todo.md 另含另一会话 AI 追加的 §5.5 老手笔记，与阶段 4 无关）
-阶段 4 新增（??）：`GensokyoAI/world/director.py`、`tests/test_world_director.py`
+审查修复已改（M）：`GensokyoAI/core/agent/{_impl,action_executor,action_planner,think_engine,runtime_context}.py`、`GensokyoAI/core/{events,event_listeners,config_validator}.py`、`GensokyoAI/session/manager.py`、`GensokyoAI/memory/topic_store.py`、`GensokyoAI/tools/{executor,registry,tool_context}.py`、`GensokyoAI/tools/tool_builtin/memory_tool.py`、`tests/test_world_config.py`、`docs/todo.md`
+审查修复新增（??）：`tests/test_review_robustness.py`
 
 建议 commit message（供用户参考，AI 不要自己提交）：
-`feat(world): Director 智能选角与决策降级（阶段 4）`
+`fix(core): 深度审查修复（孤儿生成请求绑定/会话组件失效/记忆原子写/工具与事件健壮性）`
 

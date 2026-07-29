@@ -82,6 +82,10 @@ class ThinkEngine:
         self._last_long_term_time: datetime | None = None
         self._long_term_interval = timedelta(minutes=config.think_interval_minutes)
 
+    def update_semantic_memory(self, semantic_memory: SemanticMemoryManager) -> None:
+        """会话切换后就地更新语义记忆引用（不中断长期思考循环）。"""
+        self.semantic_memory = semantic_memory
+
     # ==================== 生命周期 ====================
 
     async def start(self) -> None:

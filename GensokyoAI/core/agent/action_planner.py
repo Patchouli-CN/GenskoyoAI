@@ -247,6 +247,19 @@ class ActionPlanner:
 
         return ActionFactory.wait(reason="驱动力不足")
 
+    def update_memory_context(
+        self,
+        working_memory: WorkingMemoryManager,
+        semantic_memory: SemanticMemoryManager,
+    ) -> None:
+        """会话切换后就地更新记忆引用（保留事件订阅与行动历史）。
+
+        本方法不重建实例：ActionPlanner 在构造时已订阅事件总线，换新实例
+        而不退订旧实例会导致双重规划。
+        """
+        self.working_memory = working_memory
+        self.semantic_memory = semantic_memory
+
     # ==================== 行动发布 ====================
 
     def _publish_action(self, action: Action, trigger_event: Event | None = None) -> None:
@@ -263,6 +276,9 @@ class ActionPlanner:
                 data["system_contexts"] = system_contexts
             if trigger_event.data.get("world_turn"):
                 data["world_turn"] = True
+            # 透传发送方铸造的请求绑定 id，供 ActionExecutor 识别过期生成
+            if request_id := trigger_event.data.get("request_id"):
+                data["request_id"] = request_id
         self.event_bus.publish(
             Event(
                 type=SystemEvent.ACTION_DECIDED,

@@ -63,7 +63,8 @@ class AgentRuntimeContext(Struct):
     model_registry_service: ModelRegistryService
     session_manager: SessionManager
     scene_manager: SceneManager
-    # Actor 身份：单角色模式为 SINGLE_ACTOR_ID / None。
+    # Actor 身份：单角色模式默认取角色名（deps 未注入时的兜底），
+    # 多角色模式由 World 注入 roster 稳定 id。
     actor_id: str = SINGLE_ACTOR_ID
     world_id: str | None = None
 

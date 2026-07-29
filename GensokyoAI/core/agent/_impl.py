@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from ...background import BackgroundManager, PersistenceWorker
 from ...memory.semantic import SemanticMemoryManager
@@ -16,6 +17,7 @@ from ...tools.tool_builtin.web_search import configure_web_search_tool
 from ...utils.content_security import detect_prompt_injection
 from ...utils.helpers import safe_get
 from ...utils.logger import logger
+from ...utils.path_security import sanitize_path_id
 from ..config import AppConfig, ConfigLoader
 from ..event_listeners import (
     CoreListeners,
@@ -52,10 +54,15 @@ class Agent:
         config_file: Path | None = None,
         character_file: Path | None = None,
         dependencies: AgentDependencies | None = None,
+        setup_signal_handlers: bool = True,
     ) -> None:
         # 可选依赖注入：多角色（World）模式下共享 ModelClient / resource_gates
         # 与稳定 actor_id / world_id；单角色模式为 None，保持自建行为。
         self._dependencies = dependencies
+        # 是否注册进程级信号处理器。多 Actor 共存时同一事件循环每信号只保留
+        # 一个处理器（last-wins）且其 shutdown 会直接 sys.exit，其余 Actor 的
+        # 最终保存不会执行——World 装配 Actor 时应传 False，由 World 统一接管。
+        self._setup_signal_handlers = setup_signal_handlers
         self._init_config(config, config_file, character_file)
         self._init_infrastructure()
         self._init_core_components()
@@ -158,7 +165,8 @@ class Agent:
             on_shutdown=self._on_shutdown
         )
         self._lazy_components.lifecycle = self.lifecycle
-        self.lifecycle.setup_signal_handlers()
+        if self._setup_signal_handlers:
+            self.lifecycle.setup_signal_handlers()
 
     def _init_think_engine(self) -> None:
         self._think_engine = self._lazy_components.think_engine
@@ -193,7 +201,12 @@ class Agent:
                 raise AgentError("No active session for semantic memory")
 
             memory_path = self._semantic_memory_root or (
-                self._memory_base_path / self.character_name / "memory" / current_session.session_id
+                # 角色名直接来自角色卡 YAML（可分发内容），必须净化：
+                # 防 ../../ 路径遍历，并与会话目录的净化规则保持一致。
+                self._memory_base_path
+                / sanitize_path_id(self.character_name)
+                / "memory"
+                / current_session.session_id
             )
             memory_path.mkdir(parents=True, exist_ok=True)
 
@@ -315,12 +328,16 @@ class Agent:
                 await self.discard_initiative_timer(reason="world_turn_received", source="world")
             else:
                 await self.discard_initiative_timer(reason="user_message_received", source="user")
-            response_future = self._action_executor.prepare_response()  # type: ignore
+            # 铸造请求绑定 id：响应槽位（future/流式队列）凭它识别超时后的
+            # 孤儿生成，旧生成的 feed/complete/记忆写入全部作废。
+            request_id = uuid4().hex
+            response_future = self._action_executor.prepare_response(request_id)  # type: ignore
             self._publish_message_received(
                 user_input,
                 system_contexts,
                 world_turn=world_turn,
                 record_in_working_memory=record_in_working_memory,
+                request_id=request_id,
             )
 
             try:
@@ -379,12 +396,14 @@ class Agent:
                 await self.discard_initiative_timer(reason="world_turn_received", source="world")
             else:
                 await self.discard_initiative_timer(reason="user_message_received", source="user")
-            response_future = self._action_executor.prepare_response()  # type: ignore
+            request_id = uuid4().hex
+            response_future = self._action_executor.prepare_response(request_id)  # type: ignore
             self._publish_message_received(
                 user_input,
                 system_contexts,
                 world_turn=world_turn,
                 record_in_working_memory=record_in_working_memory,
+                request_id=request_id,
             )
 
             full_response = ""
@@ -464,7 +483,7 @@ class Agent:
                     error_code="agent.stream.timeout",
                 )
             finally:
-                self._action_executor.complete_response(full_response)  # type: ignore
+                self._action_executor.complete_response(full_response, request_id=request_id)  # type: ignore
 
     # ==================== World 回合入口 ====================
 
@@ -515,6 +534,7 @@ class Agent:
         *,
         world_turn: bool = False,
         record_in_working_memory: bool = True,
+        request_id: str | None = None,
     ) -> None:
         text_input = self._extract_text_from_content(user_input)
         report = detect_prompt_injection(text_input)
@@ -522,6 +542,8 @@ class Agent:
             "content": user_input,
             "system_contexts": system_contexts,
         }
+        if request_id is not None:
+            data["request_id"] = request_id
         if world_turn:
             data["world_turn"] = True
             data["actor_id"] = self.actor_id
@@ -595,10 +617,27 @@ class Agent:
 
     # ==================== 会话管理 ====================
 
-    def create_session(self) -> SessionContext:
-        session = self.session_manager.create_session()
+    def _reset_session_scoped_state(self) -> None:
+        """会话切换后失效所有捕获了旧会话记忆实例的缓存状态。
+
+        MessageBuilder/ResponseHandler 走懒加载重建（下次访问时用新会话的
+        记忆实例重建）；ActionPlanner/ThinkEngine 持有事件订阅与后台任务，
+        不能简单换新，就地更新其记忆引用。
+        """
         self._working_memory = None
         self._semantic_memory = None
+        self._message_builder = None
+        self._response_handler = None
+        self._lazy_components.message_builder = None
+        self._lazy_components.response_handler = None
+        if self._action_planner is not None:
+            self._action_planner.update_memory_context(self.working_memory, self.semantic_memory)
+        if self._think_engine is not None:
+            self._think_engine.update_semantic_memory(self.semantic_memory)
+
+    def create_session(self) -> SessionContext:
+        session = self.session_manager.create_session()
+        self._reset_session_scoped_state()
         self.scene_manager.reset_for_session(None)
         self.event_bus.publish(
             Event(type=SystemEvent.SESSION_CREATED, source="agent", data={"session": session})
@@ -607,8 +646,7 @@ class Agent:
 
     def resume_session(self, session_id: str) -> bool:
         if self.session_manager.set_current_session(session_id):
-            self._working_memory = None
-            self._semantic_memory = None
+            self._reset_session_scoped_state()
             session = self.session_manager.get_current_session()
             self.event_bus.publish(
                 Event(type=SystemEvent.SESSION_RESUMED, source="agent", data={"session": session})
@@ -752,6 +790,7 @@ class Agent:
         user_input = event.data.get("user_input", "")
         system_contexts = list(event.data.get("system_contexts", []) or [])
         world_turn = bool(event.data.get("world_turn"))
+        request_id = event.data.get("request_id")
         # MessageBuilder 需要文本做检索/搜索提示；实际多模态内容已在工作记忆中
         text_input = self._extract_text_from_content(user_input)
 
@@ -779,7 +818,7 @@ class Agent:
                     break
                 if chunk.content:
                     full_response += chunk.content
-                await self._action_executor.feed_chunk(chunk)  # type: ignore
+                await self._action_executor.feed_chunk(chunk, request_id=request_id)  # type: ignore
 
         except Exception as e:
             logger.error(f"生成响应异常: {e}")
@@ -792,11 +831,15 @@ class Agent:
                         content=error_msg,
                         error=str(e),
                         error_code="agent.response.failed",
-                    )
+                    ),
+                    request_id=request_id,
                 )
 
         finally:
-            if full_response and "响应中断" not in full_response:
+            # 过期请求（已超时/取消）的孤儿生成必须零副作用：
+            # 不写私有记忆（MESSAGE_SENT）、不调度主动定时器、不解决新请求。
+            is_current = self._action_executor.is_current_request(request_id)  # type: ignore
+            if full_response and "响应中断" not in full_response and is_current:
                 data = {"content": full_response}
                 # reasoning_content 对 DeepSeek thinking mode 是多轮协议状态，
                 # 不是调试展示内容；是否显示仍由 UI/日志层的 debug_silent_output 控制。
@@ -812,9 +855,9 @@ class Agent:
                 # 后台调度主动定时器，不阻塞 complete_response 和用户输入
                 asyncio.create_task(self._initiative_coordinator.schedule_bg(full_response))
 
-            # 🔑 无论如何都要把控制权还给用户
+            # 🔑 无论如何都要把控制权还给用户（过期请求由 id 校验忽略）
             if self._action_executor:
-                self._action_executor.complete_response(full_response)
+                self._action_executor.complete_response(full_response, request_id=request_id)
 
     # ==================== 主动定时器（委托 InitiativeCoordinator） ====================
 

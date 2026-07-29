@@ -106,6 +106,67 @@ class WorldConfigValidationTests(unittest.TestCase):
         self.assertTrue(any(c.startswith("config.") for c in codes))
 
 
+class WorldConfigHardeningTests(unittest.TestCase):
+    """审查后硬化：标量类型、persistence 类型、protagonist 指向 disabled、
+    temperature 上限、transcript 交叉校验。"""
+
+    def setUp(self):
+        self.validator = ConfigValidator()
+
+    def _world_diags(self, data: dict):
+        diags = self.validator.validate_config_dict(data)
+        return [d for d in diags if d.path.startswith("world")]
+
+    def _world_codes(self, data: dict) -> set[str]:
+        return {d.code for d in self._world_diags(data)}
+
+    @staticmethod
+    def _valid_world() -> dict:
+        return {
+            "world": {
+                "enabled": True,
+                "protagonist": "a",
+                "actors": [{"id": "a", "character_file": "x.yaml"}],
+            }
+        }
+
+    def test_valid_world_has_no_hardening_codes(self):
+        self.assertEqual(self._world_codes(self._valid_world()), set())
+
+    def test_persistence_non_dict_flagged(self):
+        data = self._valid_world()
+        data["world"]["persistence"] = "junk"
+        self.assertIn("config.world.persistence_type", self._world_codes(data))
+
+    def test_protagonist_pointing_to_disabled_actor_flagged(self):
+        data = self._valid_world()
+        data["world"]["actors"] = [
+            {"id": "a", "enabled": False},
+            {"id": "b", "character_file": "y.yaml"},
+        ]
+        self.assertIn("config.world.protagonist_disabled", self._world_codes(data))
+
+    def test_director_temperature_max_flagged(self):
+        data = self._valid_world()
+        data["world"]["director"] = {"temperature": 99}
+        self.assertIn("config.field.range", self._world_codes(data))
+
+    def test_scalar_type_errors_flagged(self):
+        data = self._valid_world()
+        data["world"]["id"] = 123
+        data["world"]["actors"][0]["enabled"] = "no"
+        data["world"]["actors"][0]["initial_scene"] = 123
+        codes = self._world_codes(data)
+        self.assertIn("config.field.type", codes)
+
+    def test_transcript_cross_check_warns(self):
+        data = self._valid_world()
+        data["world"]["transcript"] = {"context_entries": 1000, "max_entries_per_scene": 10}
+        diags = self._world_diags(data)
+        warnings = {d.code for d in diags if d.severity == "warning"}
+        self.assertIn("config.world.transcript_entries_exceed_max", warnings)
+
+
 class WorldExampleFileTests(unittest.TestCase):
     def test_world_example_yaml_loads_and_is_enabled(self):
         loader = ConfigLoader()

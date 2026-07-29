@@ -31,8 +31,9 @@ class ToolRuntimeContext(Struct):
     """一次工具调用所归属的运行时上下文。
 
     - ``event_bus``：该 Actor 的事件总线，工具通过它与 memory/scene 服务通信。
-    - ``actor_id``：稳定的 Actor 标识；单角色模式为 ``SINGLE_ACTOR_ID``，
-      多角色模式为 World roster 中的稳定 id。
+    - ``actor_id``：稳定的 Actor 标识；单角色模式默认取角色名
+      （composition 未注入 actor_id 时的兜底），多角色模式为 World
+      roster 中的稳定 id。
     - ``world_id``：所属 World 的 id；单角色模式为 None。
     """
 

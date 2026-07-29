@@ -811,9 +811,29 @@ class ConfigValidator:
             "world", data, self._struct_field_names(WorldConfig), diagnostics
         )
 
+        # 顶层标量字段类型（msgspec 构造期不做类型兜底，垃圾类型会穿透到运行时）
+        self._validate_field_type("world.id", data.get("id"), str, diagnostics)
+        self._validate_field_type("world.enabled", data.get("enabled"), bool, diagnostics)
+        self._validate_field_type(
+            "world.user_initial_scene", data.get("user_initial_scene"), str, diagnostics
+        )
+        self._validate_field_type(
+            "world.project_perspective_memories",
+            data.get("project_perspective_memories"),
+            bool,
+            diagnostics,
+        )
+        self._validate_field_type(
+            "world.user_follows_current_actor",
+            data.get("user_follows_current_actor"),
+            bool,
+            diagnostics,
+        )
+
         enabled = bool(data.get("enabled", False))
         actors = data.get("actors")
         seen_ids: set[str] = set()
+        enabled_ids: set[str] = set()
         enabled_count = 0
 
         if actors is not None and not isinstance(actors, list):
@@ -826,7 +846,9 @@ class ConfigValidator:
             )
         elif isinstance(actors, list):
             for index, actor in enumerate(actors):
-                enabled_count += self._validate_world_actor(index, actor, seen_ids, diagnostics)
+                enabled_count += self._validate_world_actor(
+                    index, actor, seen_ids, enabled_ids, diagnostics
+                )
 
         # 仅在 world 启用时强校验 roster 完整性，避免关闭态误报
         if enabled and enabled_count == 0:
@@ -840,12 +862,22 @@ class ConfigValidator:
 
         protagonist = data.get("protagonist")
         if isinstance(protagonist, str) and protagonist != "__user__":
+            # protagonist 必须指向 enabled 的 actor：disabled actor 不会被装配，
+            # 指向它会在初始化阶段解析不到角色
             if protagonist not in seen_ids:
                 diagnostics.append(
                     self._error(
                         "world.protagonist",
                         "world.protagonist 必须是 '__user__' 或 actors 中某个 id。",
                         code="config.world.protagonist_unknown",
+                    )
+                )
+            elif protagonist not in enabled_ids:
+                diagnostics.append(
+                    self._error(
+                        "world.protagonist",
+                        f"world.protagonist 指向的 actor '{protagonist}' 是 disabled 状态。",
+                        code="config.world.protagonist_disabled",
                     )
                 )
         elif protagonist is not None and not isinstance(protagonist, str):
@@ -859,19 +891,48 @@ class ConfigValidator:
 
         self._validate_world_director(data.get("director"), diagnostics)
         self._validate_world_transcript(data.get("transcript"), diagnostics)
-        if isinstance(data.get("persistence"), dict):
+        persistence = data.get("persistence")
+        if persistence is not None and not isinstance(persistence, dict):
+            diagnostics.append(
+                self._error(
+                    "world.persistence",
+                    "world.persistence 必须是对象。",
+                    code="config.world.persistence_type",
+                )
+            )
+        elif isinstance(persistence, dict):
             self._validate_unknown_fields(
                 "world.persistence",
-                data["persistence"],
+                persistence,
                 self._struct_field_names(WorldPersistenceConfig),
                 diagnostics,
             )
+
+        # 交叉校验：注入条数超过分片上限时永远达不到，静默缩水
+        transcript = data.get("transcript")
+        if isinstance(transcript, dict):
+            context_entries = transcript.get("context_entries")
+            max_entries = transcript.get("max_entries_per_scene")
+            if (
+                isinstance(context_entries, int)
+                and isinstance(max_entries, int)
+                and context_entries > max_entries
+            ):
+                diagnostics.append(
+                    self._warning(
+                        "world.transcript.context_entries",
+                        "context_entries 超过 max_entries_per_scene，"
+                        "实际注入条数将被分片上限截断。",
+                        code="config.world.transcript_entries_exceed_max",
+                    )
+                )
 
     def _validate_world_actor(
         self,
         index: int,
         actor: Any,
         seen_ids: set[str],
+        enabled_ids: set[str],
         diagnostics: list[ConfigDiagnostic],
     ) -> int:
         """校验单个 actor，返回其计入 enabled 的数量（0/1）。"""
@@ -913,7 +974,15 @@ class ConfigValidator:
                 )
             )
 
-        return 1 if actor.get("enabled", True) else 0
+        self._validate_field_type(f"{path}.enabled", actor.get("enabled"), bool, diagnostics)
+        self._validate_field_type(
+            f"{path}.initial_scene", actor.get("initial_scene"), str, diagnostics
+        )
+
+        is_enabled = bool(actor.get("enabled", True))
+        if is_enabled and isinstance(actor_id, str) and actor_id.strip():
+            enabled_ids.add(actor_id)
+        return 1 if is_enabled else 0
 
     def _validate_world_director(self, data: Any, diagnostics: list[ConfigDiagnostic]) -> None:
         if data is None:
@@ -931,7 +1000,11 @@ class ConfigValidator:
             "world.director", data, self._struct_field_names(WorldDirectorConfig), diagnostics
         )
         self._validate_numeric_range(
-            "world.director.temperature", data.get("temperature"), diagnostics, minimum=0.0
+            "world.director.temperature",
+            data.get("temperature"),
+            diagnostics,
+            minimum=0.0,
+            maximum=2.0,
         )
         self._validate_numeric_range(
             "world.director.max_tokens", data.get("max_tokens"), diagnostics, minimum=1
@@ -1322,6 +1395,30 @@ class ConfigValidator:
                     f"Config section '{path}' must be an object",
                     "请确认该配置段使用 YAML 对象写法。",
                     code="config.section.type",
+                )
+            )
+
+    def _validate_field_type(
+        self,
+        path: str,
+        value: Any,
+        expected: type,
+        diagnostics: list[ConfigDiagnostic],
+    ) -> None:
+        """标量字段类型校验；None 视为未设置（由 Struct 默认值兜底），跳过。"""
+        if value is None:
+            return
+        # bool 是 int 子类：期望 bool 时只认 bool，期望其他类型时排除 bool
+        if expected is bool:
+            ok = isinstance(value, bool)
+        else:
+            ok = isinstance(value, expected) and not isinstance(value, bool)
+        if not ok:
+            diagnostics.append(
+                self._error(
+                    path,
+                    f"{path} 必须是 {expected.__name__} 类型，当前为 {type(value).__name__}。",
+                    code="config.field.type",
                 )
             )
 
