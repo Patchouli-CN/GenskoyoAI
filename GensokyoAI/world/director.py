@@ -19,7 +19,7 @@ import re
 from typing import Any
 
 from ..core.agent.model_client import ModelClient
-from ..core.agent.types import ProviderCapability
+from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 from ..core.config import WorldDirectorConfig
 from ..core.events import Event, EventBus, SystemEvent
 from ..utils.logger import logger
@@ -188,13 +188,15 @@ class Director:
     async def _request_decision(self, context: DirectorContext) -> dict[str, Any] | None:
         """调用模型获取决策 JSON；解析失败重试一次，仍失败或异常返回 None。"""
         messages = self._build_messages(context)
+        # thinking 模型的内部思考会消耗 max_tokens 预算，抬下限防止正文被挤空
+        max_tok = max(self._config.max_tokens, DECISION_MIN_MAX_TOKENS)
         max_retries = 1
         for attempt in range(max_retries + 1):
             try:
                 options: dict[str, Any] = {
                     "temperature": self._config.temperature,
-                    "num_predict": self._config.max_tokens,
-                    "max_tokens": self._config.max_tokens,
+                    "num_predict": max_tok,
+                    "max_tokens": max_tok,
                 }
                 if self._supports_structured_output():
                     options["response_format"] = _DIRECTOR_RESPONSE_FORMAT

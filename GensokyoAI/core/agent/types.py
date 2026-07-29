@@ -269,3 +269,11 @@ class StreamChunk(Struct):
     timing: ModelCallTiming | None = None
     web_search_references: list[WebSearchReference] = field(default_factory=list)
     web_search_diagnostics: WebSearchDiagnostics | None = None
+
+
+# 决策/思考类模型调用的 max_tokens 下限。
+# thinking 模型（kimi-k2.5、Claude extended thinking 等）的内部思考会消耗
+# max_tokens 预算：实测 kimi-k2.5 在 max_tokens=300 时 299 token 全被思考烧掉，
+# 正文挤成空串导致决策 JSON 永远解析失败。抬高下限对非 thinking 模型无影响
+# （它们输出本来就短），对 thinking 模型留出思考余量。
+DECISION_MIN_MAX_TOKENS = 1024

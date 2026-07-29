@@ -18,7 +18,7 @@ from typing import Any
 from msgspec import Struct
 
 from ..core.agent.model_client import ModelClient
-from ..core.agent.types import ProviderCapability
+from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 from ..utils.logger import logger
 from .types import ActorBrief
 
@@ -133,8 +133,9 @@ class WorldMemoryProjector:
         )
         options: dict[str, Any] = {
             "temperature": self._temperature,
-            "num_predict": self._max_tokens,
-            "max_tokens": self._max_tokens,
+            # thinking 模型的思考消耗预算，抬下限防止批量投影正文被挤空
+            "num_predict": max(self._max_tokens, DECISION_MIN_MAX_TOKENS),
+            "max_tokens": max(self._max_tokens, DECISION_MIN_MAX_TOKENS),
         }
         if self._supports_structured_output():
             options["response_format"] = _PROJECTION_RESPONSE_FORMAT

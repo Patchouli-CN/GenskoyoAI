@@ -27,10 +27,16 @@ from ..config import InitiativeTimerConfig, ThinkEngineConfig
 from ..events import Event, EventBus, SystemEvent
 from .model_client import ModelClient
 from .motivation_evaluator import MotivationProfile
-from .types import ProviderCapability
+from .types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 
 # 决策 JSON 解析相关（从原 InitiativeTimer 迁移）
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+
+# 决策/思考类调用的 max_tokens 下限统一走 types.DECISION_MIN_MAX_TOKENS：
+# thinking 模型的内部思考会消耗 max_tokens 预算（实测 kimi-k2.5 在 300 时
+# 299 token 全被思考烧掉，正文挤成空串导致决策 JSON 永远解析失败）。
+_DECISION_MIN_MAX_TOKENS = DECISION_MIN_MAX_TOKENS
+
 _INITIATIVE_TIMER_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -269,7 +275,8 @@ class ThinkEngine:
                 messages=[{"role": "system", "content": prompt}],
                 options={
                     "temperature": self.config.think_temperature,
-                    "num_predict": self.config.think_max_tokens,
+                    # thinking 模型的思考消耗预算，抬下限避免正文被挤空
+                    "num_predict": max(self.config.think_max_tokens, _DECISION_MIN_MAX_TOKENS),
                 },
             )
 
@@ -395,7 +402,7 @@ class ThinkEngine:
         max_retries = 1
         for attempt in range(max_retries + 1):
             try:
-                max_tok = max(decision_max_tokens, 200)
+                max_tok = max(decision_max_tokens, _DECISION_MIN_MAX_TOKENS)
                 options: dict[str, Any] = {
                     "temperature": decision_temperature,
                     "num_predict": max_tok,
@@ -471,12 +478,13 @@ class ThinkEngine:
         logger.trace(f"[ThinkEngine] 说话前思考 prompt:\n{thought_prompt}")
 
         try:
+            thought_max_tokens = max(max_tokens, _DECISION_MIN_MAX_TOKENS)
             response = await self.model_client.chat(
                 messages=[{"role": "system", "content": thought_prompt}],
                 options={
                     "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "max_tokens": max_tokens,
+                    "num_predict": thought_max_tokens,
+                    "max_tokens": thought_max_tokens,
                 },
             )
             content = response.message.content
@@ -568,7 +576,7 @@ class ThinkEngine:
         max_retries = 1
         for attempt in range(max_retries + 1):
             try:
-                max_tok = max(decision_max_tokens, 200)
+                max_tok = max(decision_max_tokens, _DECISION_MIN_MAX_TOKENS)
                 options: dict[str, Any] = {
                     "temperature": decision_temperature,
                     "num_predict": max_tok,

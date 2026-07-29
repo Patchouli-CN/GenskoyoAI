@@ -471,9 +471,10 @@ class ModelClient:
         call_model = model or self.config.name
         call_options = options or self._build_options()
 
-        # 传递 think 参数
-        if hasattr(self.config, "think") and self.config.think:
-            kwargs.setdefault("think", True)
+        # 传递 think 参数：True 请求开启思考，False 显式禁用
+        # （kimi-k2.5 等模型服务端默认思考，不打 disabled 关不掉）
+        if hasattr(self.config, "think"):
+            kwargs.setdefault("think", bool(self.config.think))
 
         timing = ModelCallTiming(
             context="chat",
@@ -599,9 +600,10 @@ class ModelClient:
         call_model = model or self.config.name
         call_options = options or self._build_options()
 
-        # 传递 think 参数
-        if hasattr(self.config, "think") and self.config.think:
-            kwargs.setdefault("think", True)
+        # 传递 think 参数：True 请求开启思考，False 显式禁用
+        # （kimi-k2.5 等模型服务端默认思考，不打 disabled 关不掉）
+        if hasattr(self.config, "think"):
+            kwargs.setdefault("think", bool(self.config.think))
 
         timing = ModelCallTiming(
             context="chat_stream",

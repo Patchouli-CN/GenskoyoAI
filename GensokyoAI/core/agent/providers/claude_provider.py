@@ -123,7 +123,8 @@ class ClaudeProvider(BaseProvider):
 
         # Claude extended thinking 支持。
         # Anthropic 要求 thinking budget 小于 max_tokens；开启 thinking 时移除采样参数以避免模型族兼容问题。
-        if kwargs.get("think"):
+        think = kwargs.get("think")
+        if think:
             thinking_budget = self._get_thinking_budget(options, max_tokens)
             if thinking_budget:
                 call_kwargs["thinking"] = {
@@ -132,6 +133,10 @@ class ClaudeProvider(BaseProvider):
                 }
                 call_kwargs.pop("temperature", None)
                 call_kwargs.pop("top_p", None)
+        elif think is False:
+            # 显式禁用：kimi-k2.5 等模型在 anthropic 端点默认开启思考，
+            # 不传参数也会思考；必须显式打 disabled 才能关闭
+            call_kwargs["thinking"] = {"type": "disabled"}
 
         response = await self._client.messages.create(**call_kwargs)
         return self._convert_response(response)
@@ -167,7 +172,8 @@ class ClaudeProvider(BaseProvider):
             call_kwargs["tools"] = self._convert_tools_to_claude(tools)
 
         # Claude extended thinking 支持。
-        if kwargs.get("think"):
+        think = kwargs.get("think")
+        if think:
             thinking_budget = self._get_thinking_budget(options, max_tokens)
             if thinking_budget:
                 call_kwargs["thinking"] = {
@@ -176,6 +182,10 @@ class ClaudeProvider(BaseProvider):
                 }
                 call_kwargs.pop("temperature", None)
                 call_kwargs.pop("top_p", None)
+        elif think is False:
+            # 显式禁用：kimi-k2.5 等模型在 anthropic 端点默认开启思考，
+            # 不传参数也会思考；必须显式打 disabled 才能关闭
+            call_kwargs["thinking"] = {"type": "disabled"}
 
         # 工具调用 / thinking 累积；Claude 流式事件以 content block index 区分多个 block。
         tool_blocks: dict[int, dict[str, Any]] = {}

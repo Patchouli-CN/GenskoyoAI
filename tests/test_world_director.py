@@ -248,7 +248,8 @@ class DirectorPromptAndOptionsTests(unittest.TestCase):
         asyncio.run(_director(client).decide(_context()))
         options = client.calls[0]["options"]
         self.assertEqual(options["temperature"], 0.2)
-        self.assertEqual(options["max_tokens"], 384)
+        # thinking 预算下限：max(配置 384, DECISION_MIN_MAX_TOKENS 1024)
+        self.assertEqual(options["max_tokens"], 1024)
         self.assertEqual(
             options["response_format"]["json_schema"]["name"], "world_director_decision"
         )

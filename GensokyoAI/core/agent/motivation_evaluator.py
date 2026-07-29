@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from msgspec import Struct
 
 from ...utils.logger import logger
+from .types import DECISION_MIN_MAX_TOKENS
 
 if TYPE_CHECKING:
     from .model_client import ModelClient
@@ -88,7 +89,11 @@ class MotivationEvaluator:
         try:
             response = await self.model_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                options={"temperature": 0.3, "num_predict": 200},
+                # thinking 模型的思考消耗预算，抬下限防止正文被挤空
+                options={
+                    "temperature": 0.3,
+                    "num_predict": max(200, DECISION_MIN_MAX_TOKENS),
+                },
             )
             content = response.message.content
             text = content.strip() if isinstance(content, str) else ""
