@@ -20,8 +20,10 @@ uv.lock
 dist/
 
 local.yaml
+local_world.yaml
 
 run.cmd
+run_world.cmd
 GENSOKYOAI.log
 GENSOKYOAI2.log
 
