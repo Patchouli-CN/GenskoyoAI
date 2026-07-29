@@ -1,13 +1,16 @@
 """GensokyoWorld 多角色编排层。
 
 在现有单角色 `Agent`（演员）之上增加「导演 + 舞台」：由 Director 决定每轮谁发言，
-WorldStage 管理角色在场位置，SharedTranscript 承载全场景可见的共享剧本。
+WorldStage 管理角色在场位置，SharedTranscript 承载全场景可见的共享剧本，
+GensokyoWorld 作为对话主循环驱动整台戏。
 
-当前已落地数据层/持久化（阶段 2）与 Director 选角（阶段 4）；
-World 主类与调度状态机在后续阶段接入。
+当前已落地数据层/持久化（阶段 2）、Director 选角（阶段 4）与
+GensokyoWorld 主类/状态机（阶段 5）；记忆投影（阶段 6）、DialogueLoop 抽象（阶段 7）、
+持久化恢复（阶段 8）与 Runtime/Console 接入（阶段 9）在后续阶段接入。
 """
 
 from .director import Director
+from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .memory_paths import build_world_memory_root
 from .persistence import WorldPersistence, WorldPersistenceError
 from .stage import WorldStage
@@ -25,25 +28,33 @@ from .types import (
     WorldPersistenceDiagnostic,
     WorldSessionRecord,
     WorldStateSnapshot,
+    WorldTurn,
 )
+from .world import DEFAULT_SCENE_ID, GensokyoWorld, WorldAssemblyError
 
 __all__ = [
     "USER_OCCUPANT_ID",
+    "DEFAULT_SCENE_ID",
     "ActorBrief",
     "Director",
     "DirectorAction",
     "DirectorContext",
     "DirectorDecision",
     "DirectorPhase",
+    "GensokyoWorld",
     "SpeakerKind",
     "TranscriptEntry",
+    "WorldActorTurnPayload",
+    "WorldAssemblyError",
     "WorldLoadResult",
     "WorldPersistence",
     "WorldPersistenceDiagnostic",
     "WorldPersistenceError",
+    "WorldSceneMovedPayload",
     "WorldSessionRecord",
     "WorldStage",
     "WorldStateSnapshot",
+    "WorldTurn",
     "SharedTranscript",
     "build_world_memory_root",
 ]

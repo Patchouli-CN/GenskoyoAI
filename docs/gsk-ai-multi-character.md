@@ -272,6 +272,17 @@ Director 复用共享 `ModelClient.chat()` 和现有 ThinkEngine 的 JSON schema
 
 ## 5. GensokyoWorld 主类与状态机
 
+> ✅ **状态：主类与状态机已实现（阶段 5）**。定向 10 例（`tests/test_world_main.py`）+ 桥接补充 1 例 + 全量 `552 passed, 3 subtests passed`，ruff / format / pyright 全绿。
+>
+> 落地要点：
+> - `GensokyoAI/world/world.py`：`GensokyoWorld.create(config)` 装配（共享 ModelClient 显式绑 World 总线 + 共享 gates；每 Actor 独立 Agent——`setup_signal_handlers=False`、`manage_initiative_timer=False`、world 记忆根注入；装配期硬校验角色文件存在性与**净化后角色名唯一性**（记忆根碰撞）并抛 `WorldAssemblyError(diagnostics)`）；初始舞台按 begin_scene.scene > initial_scene > user_initial_scene > default_scene > 合成场景 `world_default` 布置。
+> - 开场：protagonist 是角色→以 begin_scene.action（或通用开场提示）主动开场并进导演调度；是 `__user__`→只布置舞台等用户。
+> - 用户回合：turn lock 串行；用户消息入当前场景剧本 → Director after_user → 演员回合（`send_world_turn_stream` 注入场景/在场/共享剧本/身份禁代言）→ 正文入剧本 → Director after_actor 循环至 wait_user/熔断；`current_actor_id` 回合开始即登记（用户跟随依赖）。
+> - 场景联动：订阅各 Actor 总线 `SCENE_SWITCHED`（阶段 3 载荷已含 from_scene_id/actor_id）→ 更新 WorldStage；当前演员移动且 `user_follows_current_actor` 时用户原子跟随；目的地场景写入公开过渡事件；广播 `WORLD_SCENE_MOVED`。
+> - `world/events.py`：`WorldActorTurnPayload` / `WorldSceneMovedPayload` 载荷类型；`SystemEvent` 增补 `WORLD_STARTED/SHUTDOWN/ACTOR_TURN_STARTED/CHUNK/COMPLETED/SCENE_MOVED/WAITING_USER`（事件名已对齐 §8.1 协议）。流式接口产出 `world.actor.*`/`world.waiting_user` 事件序列。
+> - **连带修复（集成才发现）**：world-turn 触发文本此前不到达模型——`build()` 依赖工作记忆提供当前输入，而触发默认不入私历。现 `MessageBuilder.build(ephemeral_input=...)` 与 `build_continuation(ephemeral_input=...)` 以临时 user 消息注入本轮触发（单角色路径调用形态与行为零变化）。
+> - ⏳ 未做：`memory_projector.py`（阶段 6）、`initiative.py` 与 Actor 定时器归属切换（阶段 7，本阶段已用 `manage_initiative_timer=False` 先行关闭 Actor 各自定时器）、完整恢复编排（阶段 8，当前每回合/移动后保存舞台状态到 World 存档）。
+
 新增：
 - `GensokyoAI/world/world.py`
 - `GensokyoAI/world/events.py`（或扩展 `SystemEvent`，推荐 World 自有枚举/载荷再桥接 Runtime）
@@ -435,8 +446,8 @@ WebSocket 为 `world.send_message_stream` 增加与 agent stream 同等的 task/
    - ✅ **1b（已完成）**：状态型工具 `parallel_safe` 元数据 + `execute_batch` 对同一 Actor 状态型工具串行、只读工具并发。
 2. **World 数据层**：配置、types、WorldStage、scene-partitioned SharedTranscript、WorldPersistence。
 3. **Actor bridge**：world-turn 调用、trigger 不入私有 memory、tool continuation 保留 world contexts。
-4. **Director 与主状态机**：✅ Director（阶段 4 已完成，见 §4 状态标注）；⏳ 主状态机（用户/角色开场、调度循环）并入阶段 5 GensokyoWorld 主类实现。
-5. **场景联动**：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤。
+4. **Director 与主状态机**：✅ Director（阶段 4）+ ✅ 主状态机/开场/用户回合（阶段 5，见 §5 状态标注）。
+5. **场景联动**：✅ 已完成（阶段 5）：Actor scene_switch → WorldStage + 用户跟随 + 在场过滤 + 公开过渡事件。
 6. **私有记忆投影**：各视角摘要批量生成与后台写入。
 7. **主循环主动定时器**：提取 DialogueLoop 抽象；单角色由 Agent 持有 timer，World 模式关闭 Actor timer 并由 World 唯一持有，复用 World turn loop。
 8. **持久化恢复**：world bundle + actor session 关联 + export/delete/security。

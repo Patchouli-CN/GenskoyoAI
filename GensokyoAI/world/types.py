@@ -111,6 +111,15 @@ class WorldStateSnapshot(Struct):
     transcript_counts: dict[str, int] = field(default_factory=dict)
 
 
+class WorldTurn(Struct):
+    """一段自动表演中一名 Actor 的发言记录（非流式接口的返回单位）。"""
+
+    actor_id: str
+    actor_name: str
+    scene_id: str
+    content: str
+
+
 class WorldSessionRecord(Struct):
     """可独立持久化的 World 会话记录。
 

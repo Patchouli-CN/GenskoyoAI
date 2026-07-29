@@ -141,7 +141,11 @@ class MessageBuilder:
         return prompt
 
     def build(
-        self, user_input: str, system_contexts: list[str] | None = None
+        self,
+        user_input: str,
+        system_contexts: list[str] | None = None,
+        *,
+        ephemeral_input: bool = False,
     ) -> list[dict[str, str]]:
         """
         构建完整消息列表
@@ -149,6 +153,9 @@ class MessageBuilder:
         Args:
             user_input: 用户输入
             system_contexts: 可选的系统上下文列表，每一项将作为独立的 system 消息插入
+            ephemeral_input: 为 True 时在末尾补一条临时 user 消息（仅本次调用可见）。
+                world-turn 触发文本默认不入私有工作记忆（舞台数据而非角色私历），
+                但模型必须看到本轮触发；单角色路径为 False（输入已在工作记忆末尾）。
 
         Returns:
             消息列表，格式为 [{"role": "...", "content": "..."}]
@@ -197,6 +204,10 @@ class MessageBuilder:
 
         # 5. 工作记忆（当前对话）
         messages.extend(self._working_memory.get_context())
+
+        # 6. world-turn 临时触发：不入私历，但必须让模型看到本轮触发
+        if ephemeral_input and user_input:
+            messages.append({"role": "user", "content": user_input})
 
         return messages
 
@@ -267,7 +278,12 @@ class MessageBuilder:
             f"请优先调用 web_search 工具后再回答。触发依据：{reason_text}。"
         )
 
-    def build_continuation(self, system_contexts: list[str] | None = None) -> list[dict[str, str]]:
+    def build_continuation(
+        self,
+        system_contexts: list[str] | None = None,
+        *,
+        ephemeral_input: str = "",
+    ) -> list[dict[str, str]]:
         """
         构建工具调用后的继续对话消息
 
@@ -277,6 +293,8 @@ class MessageBuilder:
             system_contexts: 本轮系统上下文（World 舞台/在场角色/共享剧本等）；
                 提供时在工具调用后继续保留，避免 Actor 调完工具丢失舞台。
                 单角色路径不传，行为与旧版一致。
+            ephemeral_input: world-turn 本轮触发文本；非空时以临时 user 消息
+                插入工作记忆之前，让模型在 continuation 中仍知道自己在回应什么。
 
         Returns:
             消息列表
@@ -285,6 +303,9 @@ class MessageBuilder:
         if system_contexts:
             for ctx in system_contexts:
                 messages.append({"role": "system", "content": ctx})
+        # world-turn 临时触发（单角色路径为空串，行为不变）
+        if ephemeral_input:
+            messages.append({"role": "user", "content": ephemeral_input})
         # 保留工作记忆中的 provider 私有协议字段，例如 DeepSeek thinking mode
         # 所需的 reasoning_content；展示层是否输出由 debug_silent_output 控制。
         messages.extend(self._working_memory.get_context())

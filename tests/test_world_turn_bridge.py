@@ -140,6 +140,56 @@ class WorldTurnBridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await agent.shutdown()
 
+    async def test_world_turn_trigger_reaches_model_as_ephemeral_user_message(self):
+        tool_call = ToolCall(
+            id="call_1",
+            function=ToolCallFunction(name="fake_search", arguments={"query": "红魔馆"}),
+        )
+        script = [
+            [
+                StreamChunk(
+                    is_tool_call=True,
+                    tool_info={
+                        "message": UnifiedMessage(
+                            role="assistant", content="", tool_calls=[tool_call]
+                        )
+                    },
+                )
+            ],
+            [StreamChunk(content="查到了")],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = await self._boot(tmp, script)
+            agent.tool_registry.register(_fake_search, name="fake_search")
+            try:
+                await agent.send_world_turn(_TRIGGER, _WORLD_CONTEXTS)
+                await self._drain_bus()
+
+                # 首次调用：触发文本以临时 user 消息抵达模型
+                first_users = [
+                    str(m.get("content", ""))
+                    for m in _ScriptedProvider.calls[0]
+                    if m.get("role") == "user"
+                ]
+                self.assertTrue(
+                    any("书堆" in text for text in first_users),
+                    "触发文本应以临时 user 消息注入本轮生成",
+                )
+                # 工具 continuation：触发文本仍保留
+                cont_users = [
+                    str(m.get("content", ""))
+                    for m in _ScriptedProvider.calls[1]
+                    if m.get("role") == "user"
+                ]
+                self.assertTrue(
+                    any("书堆" in text for text in cont_users),
+                    "continuation 应保留本轮触发文本",
+                )
+                # 但触发文本始终不进私有工作记忆
+                self.assertFalse(any("书堆" in text for text in self._wm_texts(agent)))
+            finally:
+                await agent.shutdown()
+
     async def test_world_turn_record_trigger_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             agent = await self._boot(tmp, [[StreamChunk(content="哦？")]])

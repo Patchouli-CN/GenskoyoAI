@@ -123,6 +123,7 @@ class ResponseHandler:
         tools: list[dict] | None,
         *,
         continuation_contexts: list[str] | None = None,
+        continuation_input: str = "",
     ) -> AsyncIterator[StreamChunk]:
         self._last_assistant_reasoning = None
         tool_calls_message: UnifiedMessage | None = None
@@ -169,7 +170,14 @@ class ResponseHandler:
                 yield error_chunk
 
         self._safe_record_results(tool_calls_message, tool_results)
-        cont_messages = self._message_builder.build_continuation(continuation_contexts)
+        # 仅 world 回合注入临时触发；单角色保持旧调用形态（行为零变化，
+        # 也避免依赖旧签名的 duck 类型在单角色路径上被新参数破坏）。
+        if continuation_input:
+            cont_messages = self._message_builder.build_continuation(
+                continuation_contexts, ephemeral_input=continuation_input
+            )
+        else:
+            cont_messages = self._message_builder.build_continuation(continuation_contexts)
 
         continuation_reasoning = ""
 

@@ -126,6 +126,13 @@ class SystemEvent(Enum):
 
     # World 编排事件
     WORLD_DIRECTOR_DECISION = "world.director.decision"  # 导演完成一次选角决策
+    WORLD_STARTED = "world.started"  # World 完成装配与开场
+    WORLD_SHUTDOWN = "world.shutdown"  # World 关闭
+    WORLD_ACTOR_TURN_STARTED = "world.actor.started"  # 某 Actor 开始一回合发言
+    WORLD_ACTOR_TURN_CHUNK = "world.actor.chunk"  # Actor 发言的流式片段
+    WORLD_ACTOR_TURN_COMPLETED = "world.actor.completed"  # 某 Actor 回合完成
+    WORLD_SCENE_MOVED = "world.scene.moved"  # 舞台上角色/用户位置变化（含用户跟随）
+    WORLD_WAITING_USER = "world.waiting_user"  # 一段自动表演结束，等待用户
 
 
 class Event(Struct):

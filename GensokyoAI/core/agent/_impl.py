@@ -55,6 +55,7 @@ class Agent:
         character_file: Path | None = None,
         dependencies: AgentDependencies | None = None,
         setup_signal_handlers: bool = True,
+        manage_initiative_timer: bool = True,
     ) -> None:
         # 可选依赖注入：多角色（World）模式下共享 ModelClient / resource_gates
         # 与稳定 actor_id / world_id；单角色模式为 None，保持自建行为。
@@ -63,6 +64,11 @@ class Agent:
         # 一个处理器（last-wins）且其 shutdown 会直接 sys.exit，其余 Actor 的
         # 最终保存不会执行——World 装配 Actor 时应传 False，由 World 统一接管。
         self._setup_signal_handlers = setup_signal_handlers
+        # 是否由本 Agent 管理主动定时器。主动定时器归属于「对话主循环」：
+        # 单角色模式由 Agent 充当主循环（True）；World 模式的 Actor 只是演员，
+        # 统一由 World 主循环持有定时器（False），避免多个角色各自抢话烧 token。
+        # （阶段 7 的 DialogueLoop 抽象会补完 World 侧的计划与触发。）
+        self._manage_initiative_timer = manage_initiative_timer
         self._init_config(config, config_file, character_file)
         self._init_infrastructure()
         self._init_core_components()
@@ -802,17 +808,25 @@ class Agent:
         # 工具调用后的 continuation 中保留，否则 Actor 调完工具就丢失舞台；
         # 单角色路径维持原行为，不重复注入。
         continuation_contexts = system_contexts if world_turn else None
+        # world-turn 触发文本不入私有工作记忆，以临时 user 消息注入本轮生成
+        # 与 continuation（单角色输入已在工作记忆末尾，不需要）。
+        continuation_input = text_input if world_turn else ""
 
         full_response = ""
         try:
             await self._ensure_background_manager()
             tool_build_result = await self._build_tools()
             self.message_builder.update_tool_build_result(tool_build_result)
-            messages = self.message_builder.build(text_input, system_contexts)
+            messages = self.message_builder.build(
+                text_input, system_contexts, ephemeral_input=world_turn
+            )
             tools = tool_build_result.tools or None
 
             async for chunk in self.response_handler.process_stream(
-                messages, tools, continuation_contexts=continuation_contexts
+                messages,
+                tools,
+                continuation_contexts=continuation_contexts,
+                continuation_input=continuation_input,
             ):
                 if self.is_shutting_down:
                     break
@@ -852,8 +866,10 @@ class Agent:
                         data=data,
                     )
                 )
-                # 后台调度主动定时器，不阻塞 complete_response 和用户输入
-                asyncio.create_task(self._initiative_coordinator.schedule_bg(full_response))
+                # 后台调度主动定时器，不阻塞 complete_response 和用户输入；
+                # World Actor 不各自持有定时器（对话主循环在 World 侧）
+                if self._manage_initiative_timer:
+                    asyncio.create_task(self._initiative_coordinator.schedule_bg(full_response))
 
             # 🔑 无论如何都要把控制权还给用户（过期请求由 id 校验忽略）
             if self._action_executor:
