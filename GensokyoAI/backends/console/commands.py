@@ -223,7 +223,7 @@ def _parse_timer_update_args(args: list[str]) -> tuple[int | None, str | None]:
     cmd_type=CommandType.SYSTEM,
     aliases=["initiative", "itimer"],
     description="管理 AI 主动定时器",
-    usage="/timer [update|summary|cancel|trigger|hesitation] ...",
+    usage="/timer [update|summary|cancel|trigger] ...",
 )
 async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
     """查看、修改、取消或立即触发主动定时器。"""
@@ -237,16 +237,9 @@ async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
     if action in {"show", "current", "status", "list"}:
         timer = agent.current_initiative_timer()
         backend._show_initiative_timer_panel(timer)
-        status_getter = getattr(agent, "initiative_hesitation_status", None)
-        status_suffix = ""
-        if callable(status_getter):
-            hesitation = status_getter()
-            hesitation = hesitation if isinstance(hesitation, dict) else {}
-            state = "开启" if hesitation.get("enabled") else "关闭"
-            status_suffix = f"；犹豫机制当前{state}"
         if timer is None:
-            return CommandResult.success("timer", f"当前没有主动定时器{status_suffix}")
-        return CommandResult.success("timer", f"主动定时器已显示{status_suffix}")
+            return CommandResult.success("timer", "当前没有主动定时器")
+        return CommandResult.success("timer", "主动定时器已显示")
 
     if action == "update":
         delay_seconds, due_at = _parse_timer_update_args(args)
@@ -273,39 +266,9 @@ async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
         backend._show_initiative_trigger_result(result)
         return CommandResult.success("timer", "主动定时器已立即触发")
 
-    if action in {"hesitation", "hesitate"}:
-        status_getter = getattr(agent, "initiative_hesitation_status", None)
-        setter = getattr(agent, "set_initiative_hesitation_enabled", None)
-        mode = args[0].lower() if args else "status"
-        if mode in {"on", "true", "1", "enable", "enabled"}:
-            if not callable(setter):
-                raise RuntimeError("当前 Agent 不支持犹豫机制控制")
-            status = setter(True, persist=True)
-            status = status if isinstance(status, dict) else {}
-            return CommandResult.success(
-                "timer",
-                f"犹豫机制已开启，并已写入配置: {status.get('config_path')}",
-            )
-        if mode in {"off", "false", "0", "disable", "disabled"}:
-            if not callable(setter):
-                raise RuntimeError("当前 Agent 不支持犹豫机制控制")
-            status = setter(False, persist=True)
-            status = status if isinstance(status, dict) else {}
-            return CommandResult.success(
-                "timer",
-                f"犹豫机制已关闭，并已写入配置: {status.get('config_path')}",
-            )
-        if not callable(status_getter):
-            raise RuntimeError("当前 Agent 不支持犹豫机制状态查询")
-        status = status_getter()
-        status = status if isinstance(status, dict) else {}
-        state = "开启" if status.get("enabled") else "关闭"
-        return CommandResult.success("timer", f"犹豫机制当前: {state}")
-
     raise ValueError(
         "未知 timer 子命令。可用: /timer, /timer update delay <秒数>, "
-        "/timer update due <ISO时间>, /timer summary <摘要>, /timer cancel, /timer trigger, "
-        "/timer hesitation [on|off|status]"
+        "/timer update due <ISO时间>, /timer summary <摘要>, /timer cancel, /timer trigger"
     )
 
 

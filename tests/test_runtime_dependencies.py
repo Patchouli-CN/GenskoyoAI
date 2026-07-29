@@ -41,6 +41,7 @@ from GensokyoAI.runtime.rpc import (
     RUNTIME_PROTOCOL_MAJOR_VERSION,
     RUNTIME_PROTOCOL_VERSION,
     RpcMethodNotFoundError,
+    deprecated_rpc_methods,
     dispatch_rpc,
     legacy_rpc_methods,
     resolve_rpc_handler,
@@ -574,8 +575,6 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
             "initiative_timer.update",
             "initiative_timer.cancel",
             "initiative_timer.trigger",
-            "initiative_timer.hesitation",
-            "initiative_timer.hesitation.set",
             "scene.current",
             "scene.list",
             "scene.get",
@@ -583,7 +582,7 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
             "scene.graph",
         }
 
-        self.assertEqual(len(added_since_v2026_5_13_0), 14)
+        self.assertEqual(len(added_since_v2026_5_13_0), 12)
         self.assertTrue(added_since_v2026_5_13_0.issubset(methods))
         self.assertIn("runtime.info", methods)
         self.assertIn("dependency.status", methods)
@@ -1584,44 +1583,48 @@ class ConfigValidationAndRuntimePathTests(unittest.TestCase):
 
         self.assertTrue(config.initiative_timer.allow_frontend_edit_summary)
 
-    def test_config_loader_accepts_hesitation_enabled_field(self):
+    def test_config_loader_drops_hesitation_enabled_field_with_warning(self):
+        # hesitation_enabled 已退役：加载时静默丢弃（不报 unknown error），
+        # validate_dict 给出 deprecated 迁移警告
         config = ConfigLoader()._dict_to_config({"initiative_timer": {"hesitation_enabled": True}})
         diagnostics = ConfigLoader().validate_dict(
             {"initiative_timer": {"hesitation_enabled": True}}
         )
 
-        self.assertTrue(config.initiative_timer.hesitation_enabled)
+        self.assertFalse(hasattr(config.initiative_timer, "hesitation_enabled"))
         self.assertFalse(any(item.severity == "error" for item in diagnostics))
+        self.assertTrue(
+            any(
+                item.path == "initiative_timer.hesitation_enabled" and item.severity == "warning"
+                for item in diagnostics
+            )
+        )
 
-    def test_runtime_exposes_initiative_hesitation_rpc_methods(self):
-        self.assertIn("initiative_timer.hesitation", rpc_methods())
-        self.assertIn("initiative_timer.hesitation.set", rpc_methods())
+    def test_initiative_hesitation_rpc_methods_are_deprecated_legacy(self):
+        self.assertNotIn("initiative_timer.hesitation", rpc_methods())
+        self.assertNotIn("initiative_timer.hesitation.set", rpc_methods())
+        self.assertIn("initiative_timer.hesitation", legacy_rpc_methods())
+        self.assertIn("initiative_timer.hesitation.set", legacy_rpc_methods())
+        deprecated = {item["method"] for item in deprecated_rpc_methods()}
+        self.assertIn("initiative_timer.hesitation", deprecated)
+        self.assertIn("initiative_timer.hesitation.set", deprecated)
 
-    def test_runtime_hesitation_rpc_reads_and_sets_agent_state(self):
+    def test_runtime_hesitation_rpc_returns_retirement_payload(self):
         class FakeAgent:
-            def __init__(self):
-                self.enabled = False
-
-            def initiative_hesitation_status(self):
-                return {"enabled": self.enabled, "config_path": "config/default.yaml"}
-
-            def set_initiative_hesitation_enabled(self, enabled, *, persist=True):
-                self.enabled = bool(enabled)
-                return {
-                    "enabled": self.enabled,
-                    "persist": persist,
-                    "config_path": "config/default.yaml",
-                }
+            pass
 
         service = RuntimeService()
         service.state.agent = cast(Any, FakeAgent())
 
         status = asyncio.run(service.handle("initiative_timer.hesitation"))
+        self.assertTrue(status["deprecated"])
         self.assertFalse(status["enabled"])
+        self.assertEqual(status["remove_after"], "3.0.0")
 
         updated = asyncio.run(service.handle("initiative_timer.hesitation.set", {"enabled": True}))
-        self.assertTrue(updated["enabled"])
-        self.assertTrue(updated["persist"])
+        self.assertTrue(updated["deprecated"])
+        self.assertTrue(updated["ignored"])
+        self.assertFalse(updated["enabled"])
 
     def test_config_loader_returns_structured_diagnostics(self):
         diagnostics = ConfigLoader().validate_dict(

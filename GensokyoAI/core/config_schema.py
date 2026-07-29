@@ -135,23 +135,12 @@ class InitiativeTimerConfig(Struct):
     allow_frontend_edit_summary: bool = True
     replace_user_modified_timer: bool = True
     expose_pending_summary: bool = True
-    hesitation_enabled: bool = False
-    hesitation_max_rounds: int = 2
-    hesitation_delay_seconds: int | str = "auto"  # "auto" 或具体秒数
     max_initiative_times: int = 1  # 用户回复后最多连续主动发言次数；达到上限后暂停主动定时器
 
-    # 对话欲累积（§7.3）：开启后，短期思考在「对话欲/心情状态 + 四维动机评估」
-    # 上下文中做一次 LLM 智能调度（动机四维回灌累积器）；AI 决定不说就不说，
-    # 没有强制 fallback。累积过程为纯算术，状态随会话持久化。
-    drive_enabled: bool = False
-    drive_turn_increment: float = 0.12  # 每轮对话的基础增量
-    drive_motivation_boost: float = 0.2  # 四维动机 total_drive 增益系数
-    drive_emotion_boost: float = 0.25  # 情感尖峰增益（×话题效价绝对值，≥0.5 才计）
-    drive_scene_boost: float = 0.1  # 挂心话题与当前场景匹配时的增益
-    drive_silence_rate_per_minute: float = 0.01  # 沉默时长累积速率（刻意压低）
-    drive_vent_factor: float = 0.4  # 主动发言后表达欲泄压保留比例
-    mood_half_life_positive_minutes: float = 30.0  # 正面心情半衰期（享乐适应，衰减快）
-    mood_half_life_negative_minutes: float = 120.0  # 负面心情半衰期（衰减慢但仍衰减）
+    # 对话欲（§7.3，2026-07-30 用户定稿）：ThinkEngine 四维心情模型打分
+    # （一次短 JSON LLM），total_drive 超阈值即「想说」，否则沉默——
+    # 无累积器、无犹豫链、无强制 fallback，二元判断由阈值独立完成。
+    drive_threshold: float = 0.6  # total_drive（0~1 加权）超过该值即主动发言
 
 
 class WebSearchAPIConfig(Struct):

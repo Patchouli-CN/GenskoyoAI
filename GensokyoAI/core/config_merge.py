@@ -724,81 +724,17 @@ class ConfigMerger:
                 "expose_pending_summary",
                 override.expose_pending_summary,
             ),
-            hesitation_enabled=choose(
-                "hesitation_enabled",
-                override.hesitation_enabled,
-            ),
-            hesitation_max_rounds=choose(
-                "hesitation_max_rounds",
-                override.hesitation_max_rounds
-                if override.hesitation_max_rounds != defaults.hesitation_max_rounds
-                else base.hesitation_max_rounds,
-            ),
-            hesitation_delay_seconds=choose(
-                "hesitation_delay_seconds",
-                override.hesitation_delay_seconds
-                if override.hesitation_delay_seconds != defaults.hesitation_delay_seconds
-                else base.hesitation_delay_seconds,
-            ),
             max_initiative_times=choose(
                 "max_initiative_times",
                 override.max_initiative_times
                 if override.max_initiative_times != defaults.max_initiative_times
                 else base.max_initiative_times,
             ),
-            drive_enabled=choose(
-                "drive_enabled",
-                override.drive_enabled,
-            ),
-            drive_turn_increment=choose(
-                "drive_turn_increment",
-                override.drive_turn_increment
-                if override.drive_turn_increment != defaults.drive_turn_increment
-                else base.drive_turn_increment,
-            ),
-            drive_motivation_boost=choose(
-                "drive_motivation_boost",
-                override.drive_motivation_boost
-                if override.drive_motivation_boost != defaults.drive_motivation_boost
-                else base.drive_motivation_boost,
-            ),
-            drive_emotion_boost=choose(
-                "drive_emotion_boost",
-                override.drive_emotion_boost
-                if override.drive_emotion_boost != defaults.drive_emotion_boost
-                else base.drive_emotion_boost,
-            ),
-            drive_scene_boost=choose(
-                "drive_scene_boost",
-                override.drive_scene_boost
-                if override.drive_scene_boost != defaults.drive_scene_boost
-                else base.drive_scene_boost,
-            ),
-            drive_silence_rate_per_minute=choose(
-                "drive_silence_rate_per_minute",
-                override.drive_silence_rate_per_minute
-                if override.drive_silence_rate_per_minute != defaults.drive_silence_rate_per_minute
-                else base.drive_silence_rate_per_minute,
-            ),
-            drive_vent_factor=choose(
-                "drive_vent_factor",
-                override.drive_vent_factor
-                if override.drive_vent_factor != defaults.drive_vent_factor
-                else base.drive_vent_factor,
-            ),
-            mood_half_life_positive_minutes=choose(
-                "mood_half_life_positive_minutes",
-                override.mood_half_life_positive_minutes
-                if override.mood_half_life_positive_minutes
-                != defaults.mood_half_life_positive_minutes
-                else base.mood_half_life_positive_minutes,
-            ),
-            mood_half_life_negative_minutes=choose(
-                "mood_half_life_negative_minutes",
-                override.mood_half_life_negative_minutes
-                if override.mood_half_life_negative_minutes
-                != defaults.mood_half_life_negative_minutes
-                else base.mood_half_life_negative_minutes,
+            drive_threshold=choose(
+                "drive_threshold",
+                override.drive_threshold
+                if override.drive_threshold != defaults.drive_threshold
+                else base.drive_threshold,
             ),
         )
 

@@ -29,13 +29,27 @@ from .schema_versions import CONFIG_SCHEMA_VERSION
 
 DiagnosticSeverity = Literal["error", "warning"]
 
-# 已删除的 initiative_timer 强制 fallback 链配置键：
+# 已删除的 initiative_timer 配置键：
 # 旧配置仍被接受（不报未知字段错误），由 DEPRECATED_FIELDS 给出迁移警告。
 _REMOVED_INITIATIVE_FALLBACK_KEYS = {
+    # 强制 fallback 链（阶段 7 删除）
     "fallback_on_no_schedule",
     "fallback_delay_seconds",
     "fallback_summary",
     "fallback_reason",
+    # hesitation 犹豫链与对话欲累积器（2026-07-30 用户定稿删除）
+    "hesitation_enabled",
+    "hesitation_max_rounds",
+    "hesitation_delay_seconds",
+    "drive_enabled",
+    "drive_turn_increment",
+    "drive_motivation_boost",
+    "drive_emotion_boost",
+    "drive_scene_boost",
+    "drive_silence_rate_per_minute",
+    "drive_vent_factor",
+    "mood_half_life_positive_minutes",
+    "mood_half_life_negative_minutes",
 }
 
 
@@ -134,20 +148,68 @@ class ConfigValidator:
     KNOWN_PROVIDERS = {*PROVIDERS_REQUIRING_API_KEY, "ollama"}
     DEPRECATED_FIELDS: dict[str, tuple[str, str]] = {
         "initiative_timer.fallback_on_no_schedule": (
-            "initiative_timer.drive_enabled",
+            "initiative_timer.drive_threshold",
             "强制兜底链已删除：AI 决定不发言时不再强行安排。",
         ),
         "initiative_timer.fallback_delay_seconds": (
-            "initiative_timer.drive_enabled",
+            "initiative_timer.drive_threshold",
             "强制兜底链已删除：AI 决定不发言时不再强行安排。",
         ),
         "initiative_timer.fallback_summary": (
-            "initiative_timer.drive_enabled",
+            "initiative_timer.drive_threshold",
             "强制兜底链已删除：AI 决定不发言时不再强行安排。",
         ),
         "initiative_timer.fallback_reason": (
-            "initiative_timer.drive_enabled",
+            "initiative_timer.drive_threshold",
             "强制兜底链已删除：AI 决定不发言时不再强行安排。",
+        ),
+        "initiative_timer.hesitation_enabled": (
+            "initiative_timer.drive_threshold",
+            "犹豫链已删除：对话欲改为四维打分 + 阈值二元判断，AI 决定不说就是不说。",
+        ),
+        "initiative_timer.hesitation_max_rounds": (
+            "initiative_timer.drive_threshold",
+            "犹豫链已删除：对话欲改为四维打分 + 阈值二元判断。",
+        ),
+        "initiative_timer.hesitation_delay_seconds": (
+            "initiative_timer.drive_threshold",
+            "犹豫链已删除：对话欲改为四维打分 + 阈值二元判断。",
+        ),
+        "initiative_timer.drive_enabled": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断（唯一路径）。",
+        ),
+        "initiative_timer.drive_turn_increment": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.drive_motivation_boost": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.drive_emotion_boost": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.drive_scene_boost": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.drive_silence_rate_per_minute": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.drive_vent_factor": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.mood_half_life_positive_minutes": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
+        ),
+        "initiative_timer.mood_half_life_negative_minutes": (
+            "initiative_timer.drive_threshold",
+            "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
         ),
     }
     PROVIDER_FIELD_MATRIX: dict[str, dict[str, set[str]]] = {

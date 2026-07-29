@@ -1,7 +1,5 @@
 import asyncio
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from GensokyoAI.core.agent.initiative_timer import InitiativeTimerManager
 from GensokyoAI.core.agent.think_engine import ThinkEngine
@@ -98,7 +96,9 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     working_memory=WorkingMemoryManager(max_turns=10),
                 )
 
-                payload = await manager.schedule_after_response("刚才的回复")
+                payload = await manager.schedule_intent(
+                    summary="稍后补充刚才话题的一个想法", delay_seconds=60
+                )
                 self.assertIsNotNone(payload)
                 assert payload is not None
                 self.assertEqual(payload["status"], "scheduled")
@@ -142,283 +142,15 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     character_name="测试角色",
                     working_memory=WorkingMemoryManager(max_turns=10),
                 )
-                payload = await manager.schedule_after_response("刚才的回复")
+                payload = await manager.schedule_intent(
+                    summary="稍后补充刚才话题的一个想法", delay_seconds=60
+                )
                 self.assertIsNotNone(payload)
                 discarded = await manager.discard(reason="user_message_received", source="user")
                 self.assertIsNotNone(discarded)
                 assert discarded is not None
                 self.assertEqual(discarded["status"], "discarded")
                 self.assertIsNone(manager.current_payload())
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_invalid_decision_json_gives_up_without_forcing(self):
-        """解析失败且未开启犹豫：尊重失败，不创建任何定时器（强制 fallback 已删除）。"""
-
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": true, "delay_seconds": 60, "summary": "截断的摘要'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNone(payload)
-                self.assertIsNone(manager.current_payload())
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_invalid_decision_json_triggers_hesitation_when_enabled(self):
-        """显式开启犹豫时，解析失败的 JSON 进入犹豫链。"""
-
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(hesitation_enabled=True),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": true, "delay_seconds": 60, "summary": "截断的摘要'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["source"], "reconsider")
-                self.assertTrue(payload["hesitation_enabled"])
-                self.assertEqual(payload["hesitation_round"], 1)
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_no_schedule_decision_is_respected_without_forcing(self):
-        """AI 决定不发言：不创建任何定时器（不再违背意愿强行安排）。"""
-
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": false, "delay_seconds": 60, "summary": "", "reason": "暂时没话说"}'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNone(payload)
-                self.assertIsNone(manager.current_payload())
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_empty_summary_decision_gives_up_without_forcing(self):
-        """决定设置定时器但摘要为空：视为无有效意图，不创建定时器。"""
-
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": true, "delay_seconds": 60, "summary": "", "reason": "漏写摘要"}'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNone(payload)
-                self.assertIsNone(manager.current_payload())
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_hesitation_exhaustion_gives_up_without_forcing(self):
-        """犹豫轮次耗尽后仍不发言：尊重决定，不创建任何定时器。"""
-
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(
-                        hesitation_enabled=True,
-                        hesitation_max_rounds=1,
-                        hesitation_delay_seconds=1,
-                    ),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            '{"should_schedule": false, "delay_seconds": 60, "summary": "", "reason": "暂时没话说"}'
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["source"], "reconsider")
-
-                await asyncio.sleep(1.2)
-                self.assertIsNone(manager.current_payload())
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_markdown_wrapped_decision_json_still_schedules_timer(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        _FakeModelClient(
-                            "```json\n"
-                            '{"should_schedule": true, "delay_seconds": 60, "summary": "Markdown 里的摘要", "reason": "想补充"}'
-                            "\n```"
-                        ),
-                        event_bus,
-                    ),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                assert payload is not None
-                self.assertEqual(payload["pending_summary"], "Markdown 里的摘要")
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_decision_prompt_keeps_character_as_decision_owner_with_internal_json(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                model_client = _FakeModelClient()
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(
-                        model_client, event_bus, character_name="博丽灵梦"
-                    ),
-                    event_bus=event_bus,
-                    character_name="博丽灵梦",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("「赛钱箱在那边，随意投一点吧。」")
-                self.assertIsNotNone(payload)
-                self.assertIsNotNone(model_client.last_messages)
-                assert model_client.last_messages is not None
-                prompt = model_client.last_messages[0]["content"]
-                self.assertIn("你是 博丽灵梦", prompt)
-                self.assertIn("内部主动发言决定", prompt)
-                self.assertIn(
-                    "这个决定仍然必须由你以 博丽灵梦 的身份、性格、动机和当前上下文来完成", prompt
-                )
-                self.assertIn("不是用户可见台词", prompt)
-                self.assertIn("不设置定时器", prompt)
-                self.assertIn("用户再次输入前不再主动开口", prompt)
-                self.assertIn("优先设置一个短到中等延迟的定时器", prompt)
-                self.assertIn("只输出一个原始 JSON 对象", prompt)
-                self.assertIn("不要输出 Markdown 代码块、角色引号、解释文本或任何前后缀", prompt)
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_structured_output_options_are_sent_when_supported(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                model_client = _FakeModelClient(structured_output=True)
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(model_client, event_bus),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                self.assertIsNotNone(model_client.last_options)
-                assert model_client.last_options is not None
-                response_format = model_client.last_options.get("response_format")
-                self.assertEqual(response_format["type"], "json_schema")
-                self.assertEqual(
-                    response_format["json_schema"]["name"], "initiative_timer_decision"
-                )
-                self.assertTrue(response_format["json_schema"]["strict"])
-            finally:
-                await event_bus.stop()
-
-        asyncio.run(run())
-
-    def test_structured_output_options_are_not_sent_when_unsupported(self):
-        async def run():
-            event_bus = EventBus(enable_trace=False)
-            await event_bus.start()
-            try:
-                model_client = _FakeModelClient(structured_output=False)
-                manager = InitiativeTimerManager(
-                    config=InitiativeTimerConfig(),
-                    think_engine=_make_think_engine(model_client, event_bus),
-                    event_bus=event_bus,
-                    character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
-                )
-
-                payload = await manager.schedule_after_response("刚才的回复")
-                self.assertIsNotNone(payload)
-                self.assertIsNotNone(model_client.last_options)
-                assert model_client.last_options is not None
-                self.assertNotIn("response_format", model_client.last_options)
             finally:
                 await event_bus.stop()
 
@@ -444,7 +176,9 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                 )
                 manager._consecutive_initiative_count = 2
 
-                payload = await manager.schedule_after_response("刚才的回复")
+                payload = await manager.schedule_intent(
+                    summary="稍后补充刚才话题的一个想法", delay_seconds=60
+                )
                 self.assertIsNone(payload)
                 self.assertEqual(len(events), 0)
             finally:
@@ -498,7 +232,9 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     character_name="测试角色",
                     working_memory=WorkingMemoryManager(max_turns=10),
                 )
-                payload = await manager.schedule_after_response("刚才的回复")
+                payload = await manager.schedule_intent(
+                    summary="稍后补充刚才话题的一个想法", delay_seconds=60
+                )
                 self.assertIsNotNone(payload)
 
                 manager.increment_consecutive_initiative_count()
@@ -510,7 +246,7 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                 self.assertEqual(manager._consecutive_initiative_count, 2)
 
                 # 用户回复应重置
-                await manager.schedule_after_response("新的回复")
+                await manager.schedule_intent(summary="新的想法", delay_seconds=60)
                 manager.increment_consecutive_initiative_count()
                 await manager.discard(reason="user_message_received", source="user")
                 self.assertEqual(manager._consecutive_initiative_count, 0)
@@ -519,25 +255,99 @@ class InitiativeTimerManagerTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_config_loader_persists_hesitation_enabled_in_yaml(self):
-        from GensokyoAI.core.config import ConfigLoader
 
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "config.yaml"
-            path.write_text(
-                "initiative_timer:\n  enabled: true\n  hesitation_max_rounds: 2\n",
-                encoding="utf-8",
-            )
+class InitiativeCoordinatorDriveTests(unittest.TestCase):
+    """对话欲调度链（coordinator）：ThinkEngine 阈值判断 → schedule_intent / 沉默。"""
 
-            ConfigLoader.set_initiative_hesitation_enabled(path, True)
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("  hesitation_enabled: true\n", text)
-            self.assertLess(text.index("hesitation_enabled"), text.index("hesitation_max_rounds"))
+    def _make_agent(self, event_bus: EventBus, decision):
+        from types import SimpleNamespace
 
-            ConfigLoader.set_initiative_hesitation_enabled(path, False)
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("  hesitation_enabled: false\n", text)
-            self.assertEqual(text.count("hesitation_enabled"), 1)
+
+        class _FakeThinkEngine:
+            def __init__(self, drive_decision):
+                self._decision = drive_decision
+                self.calls = []
+
+            async def evaluate_speaking_drive(self, trigger_text, recent, **kwargs):
+                self.calls.append((trigger_text, kwargs))
+                return self._decision
+
+        return SimpleNamespace(
+            _think_engine=_FakeThinkEngine(decision),
+            working_memory=WorkingMemoryManager(max_turns=10),
+            config=SimpleNamespace(
+                initiative_timer=InitiativeTimerConfig(),
+                debug_silent_output=False,
+            ),
+            event_bus=event_bus,
+            character_name="测试角色",
+        )
+
+    def test_want_speak_schedules_timer_via_schedule_intent(self):
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+        from GensokyoAI.core.agent.think_engine import SpeakingDriveDecision
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                decision = SpeakingDriveDecision(
+                    want_speak=True,
+                    total_drive=0.81,
+                    message="赛钱箱该擦擦了",
+                    delay_seconds=120,
+                    enthusiasm=0.0,
+                    reason="有想法",
+                )
+                coordinator = InitiativeCoordinator(self._make_agent(event_bus, decision))
+                payload = await coordinator.schedule("刚才的回复")
+                self.assertIsNotNone(payload)
+                assert payload is not None
+                self.assertEqual(payload["status"], "scheduled")
+                self.assertEqual(payload["source"], "drive")
+                self.assertEqual(payload["pending_summary"], "赛钱箱该擦擦了")
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
+    def test_below_threshold_stays_silent(self):
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+        from GensokyoAI.core.agent.think_engine import SpeakingDriveDecision
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                decision = SpeakingDriveDecision(
+                    want_speak=False,
+                    total_drive=0.12,
+                    message="没什么想说的",
+                    reason="平淡",
+                )
+                coordinator = InitiativeCoordinator(self._make_agent(event_bus, decision))
+                payload = await coordinator.schedule("刚才的回复")
+                self.assertIsNone(payload)
+                self.assertIsNone(coordinator.current())
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
+    def test_evaluation_failure_stays_silent(self):
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                coordinator = InitiativeCoordinator(self._make_agent(event_bus, None))
+                payload = await coordinator.schedule("刚才的回复")
+                self.assertIsNone(payload)
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

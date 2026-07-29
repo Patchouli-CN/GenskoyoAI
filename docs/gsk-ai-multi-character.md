@@ -380,6 +380,8 @@ class DialogueLoop(Protocol):
 
 ### 7.3 对话欲累积替代强制调度（用户 2026-07-28 决策，随阶段 7 一并实施）
 
+> ⚠️ **2026-07-30 用户三次澄清后定稿重构（已实施）**：累积器方案整体废弃，改为——**ThinkEngine 四维心情模型打分（一次短 JSON LLM）→ `total_drive` 超 `drive_threshold`（默认 0.6）即主动发言，否则沉默**。LLM 只负责打分与候选内容（四维 + 候选发言 + 建议延迟 + 热情度），「说不说」由代码按阈值独立判定；无累积器（`DriveAccumulator` 已删）、无心情半衰期、无犹豫链（`hesitation_*` 与 RPC 已退役）、无强制 fallback；ThinkEngine 是决策区（`evaluate_speaking_drive()` 唯一入口），ActionPlanner 只执行 SPEAK/WAIT。以下为阶段 7 时的原始设计记录，其中「累积器」部分已被上述定稿取代。
+
 把「每轮结束问一次模型要不要安排」改为「驱动力累积到阈值才主动」，`drive` 累积器作为 `plan_callback` 实现，一次重构完成：
 
 - **废除强制**：`InitiativeTimerConfig.fallback_on_no_schedule` 的语义（模型不想说也强行安排 300s 后发言）与本模型冲突，上线后应默认关闭/移除——违背角色意愿是当前设计的核心问题。

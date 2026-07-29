@@ -1731,24 +1731,31 @@ class RuntimeService:
         return await agent.trigger_initiative_timer(timer_id=timer_id)
 
     async def initiative_timer_hesitation(self) -> dict[str, Any]:
-        agent = self._require_agent()
-        status = getattr(agent, "initiative_hesitation_status", None)
-        if not callable(status):
-            raise RuntimeError("Current agent does not support initiative hesitation status")
-        payload = status()
-        return payload if isinstance(payload, dict) else {}
+        """Deprecated：犹豫链已随对话欲阈值模型退役（remove_after 3.0.0）。"""
+
+        self._require_agent()
+        return {
+            "enabled": False,
+            "deprecated": True,
+            "remove_after": "3.0.0",
+            "message": "犹豫链已退役：主动发言改由 ThinkEngine 四维心情打分 + drive_threshold 阈值判断。",
+        }
 
     async def initiative_timer_hesitation_set(
         self,
         enabled: bool,
         persist: bool = True,
     ) -> dict[str, Any]:
-        agent = self._require_agent()
-        setter = getattr(agent, "set_initiative_hesitation_enabled", None)
-        if not callable(setter):
-            raise RuntimeError("Current agent does not support initiative hesitation control")
-        payload = setter(bool(enabled), persist=persist)
-        return payload if isinstance(payload, dict) else {}
+        """Deprecated：犹豫链已退役，调用被忽略并返回提示。"""
+
+        self._require_agent()
+        return {
+            "enabled": False,
+            "deprecated": True,
+            "ignored": True,
+            "remove_after": "3.0.0",
+            "message": "犹豫链已退役，本次设置未生效：主动发言改由 drive_threshold 阈值判断。",
+        }
 
     # ==================== World 多角色编排 ====================
 

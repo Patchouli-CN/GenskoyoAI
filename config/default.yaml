@@ -197,21 +197,10 @@ initiative_timer:
   allow_frontend_edit_summary: true
   replace_user_modified_timer: true
   expose_pending_summary: true
-  hesitation_enabled: false
-  hesitation_max_rounds: 2
-  hesitation_delay_seconds: auto
-  # 对话欲累积（§7.3）：开启后短期思考在「对话欲/心情 + 四维动机」上下文中
-  # 做一次 LLM 智能调度；AI 决定不说就不说，没有强制兜底。
-  # 旧的 fallback_on_no_schedule 强制兜底链已删除（旧配置键仅警告迁移）。
-  drive_enabled: false
-  drive_turn_increment: 0.12        # 每轮对话的基础增量
-  drive_motivation_boost: 0.2       # 四维动机 total_drive 增益系数
-  drive_emotion_boost: 0.25         # 情感尖峰增益（×话题效价绝对值，≥0.5 才计）
-  drive_scene_boost: 0.1            # 挂心话题与当前场景匹配时的增益
-  drive_silence_rate_per_minute: 0.01  # 沉默时长累积速率（刻意压低）
-  drive_vent_factor: 0.4            # 主动发言后表达欲泄压保留比例
-  mood_half_life_positive_minutes: 30    # 正面心情半衰期（享乐适应，衰减快）
-  mood_half_life_negative_minutes: 120   # 负面心情半衰期（衰减慢但仍衰减）
+  # 对话欲（§7.3）：ThinkEngine 四维心情模型打分（一次短 JSON LLM），
+  # total_drive 超阈值即主动发言，否则沉默——无累积器、无犹豫链、无强制兜底。
+  # 旧的 fallback_* 强制兜底链、hesitation_* 犹豫链与 drive_* 累积键已删除（旧键仅警告迁移）。
+  drive_threshold: 0.6              # total_drive（0~1 加权）超过该值即主动发言
 
 # 工具配置
 tool:

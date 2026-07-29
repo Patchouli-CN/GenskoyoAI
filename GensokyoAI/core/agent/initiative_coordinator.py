@@ -11,10 +11,8 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from ...utils.logger import logger
-from ..config import ConfigLoader
 from ..events import Event, SystemEvent
 from ..exceptions import AgentError
-from .drive_accumulator import DriveAccumulator
 from .initiative_timer import InitiativeTimerManager
 
 if TYPE_CHECKING:
@@ -28,7 +26,6 @@ class InitiativeCoordinator:
         self._agent = agent
         self._manager: InitiativeTimerManager | None = None
         self._last_payload: dict | None = None
-        self._drive_accumulator: DriveAccumulator | None = None
 
     async def schedule_bg(self, full_response: str) -> None:
         """后台调度主动定时器，不阻塞主流程。"""
@@ -57,89 +54,38 @@ class InitiativeCoordinator:
         config = self._agent.config.initiative_timer
         if not config.enabled:
             return None
-        if config.drive_enabled:
-            # 对话欲路径（§7.3）：纯算术累积，跨阈值才调一次 LLM 生成意图摘要
-            return await self._schedule_drive(assistant_response)
-        return await self._ensure_manager().schedule_after_response(assistant_response)
+        # 对话欲路径（§7.3，2026-07-30 用户定稿）：ThinkEngine 四维心情打分，
+        # total_drive 超阈值即排定时器，否则沉默——无累积器、无犹豫链、无强制
+        return await self._schedule_by_drive(assistant_response)
 
     # ==================== 对话欲调度（§7.3） ====================
 
-    def _ensure_drive_accumulator(self) -> DriveAccumulator:
-        """取当前会话的对话欲累积器（从 session.metadata 恢复）。"""
-        if self._drive_accumulator is None:
-            session = self._agent.session_manager.get_current_session()
-            data = session.metadata.get("initiative_drive") if session is not None else None
-            self._drive_accumulator = DriveAccumulator.from_dict(
-                self._agent.config.initiative_timer, data
-            )
-        return self._drive_accumulator
+    async def _schedule_by_drive(self, assistant_response: str) -> dict | None:
+        """对话欲调度：ThinkEngine 四维评估，超阈值排主动定时器。
 
-    def reset_drive_state(self) -> None:
-        """会话切换后丢弃对话欲缓存（下次访问时从新会话 metadata 恢复）。"""
-        self._drive_accumulator = None
-
-    def _persist_drive(self, accumulator: DriveAccumulator) -> None:
-        """把对话欲状态写进会话 metadata（随后会话落盘时一并持久化）。"""
-        session = self._agent.session_manager.get_current_session()
-        if session is not None:
-            session.metadata["initiative_drive"] = accumulator.to_dict()
-
-    def drive_status(self) -> dict:
-        """对话欲当前状态（测试与调试可见）。"""
-        config = self._agent.config.initiative_timer
-        status: dict = {"enabled": config.drive_enabled}
-        if config.drive_enabled:
-            accumulator = self._ensure_drive_accumulator()
-            status["drive"] = accumulator.current_drive()
-            status["mood"] = accumulator.mood
-        return status
-
-    async def _schedule_drive(self, assistant_response: str) -> dict | None:
-        """对话欲路径：短期思考接入四维动机，一次 LLM 智能调度，动机四维回灌累积器。
-
-        AI 决定不发言即不发言——没有强制 fallback、没有犹豫链。
+        AI 不想说即不说——没有强制 fallback、没有犹豫链、没有累积器。
         """
         agent = self._agent
         config = agent.config.initiative_timer
         if agent._think_engine is None:
             return None
-        accumulator = self._ensure_drive_accumulator()
-        # 先惰性结算时间效应（沉默低权重累积 + 心情非对称衰减），
-        # 再把状态交给短期思考做智能调度
-        accumulator.current_drive()
 
         recent = agent.working_memory.get_recent(6)
-        decision = await agent._think_engine.decide_drive_initiative(
+        decision = await agent._think_engine.evaluate_speaking_drive(
             assistant_response,
             recent,
-            drive=accumulator.drive,
-            mood=accumulator.mood,
             min_delay_seconds=config.min_delay_seconds,
             max_delay_seconds=config.max_delay_seconds,
             decision_max_tokens=config.decision_max_tokens,
             decision_temperature=config.decision_temperature,
         )
         if decision is None:
-            return None  # 解析失败：本次不安排（无强制）
+            return None  # 评估失败：本次不安排（无强制）
 
-        valence = 0.0
-        if agent._semantic_memory is not None:
-            valence = agent._semantic_memory.recent_average_valence()
-        scene_match = await self._check_scene_topic_match()
-        drive = accumulator.record_turn(
-            emotional_valence=valence,
-            motivation=decision.motivation,
-            scene_match=scene_match,
-        )
-        self._persist_drive(accumulator)
-        logger.debug(
-            f"[Agent] 对话欲累积: {drive:.2f} (mood {accumulator.mood:+.2f}, "
-            f"{decision.motivation.to_prompt_context()})"
-        )
-
-        if not decision.should_schedule or not decision.summary:
+        if not decision.want_speak:
             logger.debug(
-                f"[Agent] 对话欲决策不主动发言，尊重决定（无强制 fallback）: {decision.reason}"
+                f"[Agent] 对话欲不足（{decision.total_drive:.2f} 未达阈值），"
+                f"尊重决定保持沉默: {decision.reason}"
             )
             return None
 
@@ -147,29 +93,11 @@ class InitiativeCoordinator:
             decision.delay_seconds, decision.enthusiasm
         )
         return await self._ensure_manager().schedule_intent(
-            summary=decision.summary,
+            summary=decision.message,
             delay_seconds=delay,
             reason=decision.reason or "对话欲路径主动调度",
             source="drive",
         )
-
-    async def _check_scene_topic_match(self) -> bool:
-        """挂心话题与当前场景匹配检查（纯查表，零 LLM）。"""
-        agent = self._agent
-        try:
-            if agent._semantic_memory is None or not agent.scene_manager.enabled:
-                return False
-            scene = await agent.scene_manager.get_current_scene()
-            if scene is None:
-                return False
-            scene_text = f"{scene.name} {scene.description}".lower()
-            return any(
-                topic.name.lower() in scene_text
-                for topic in agent._semantic_memory._store.recent_topics(5)
-            )
-        except Exception as error:
-            logger.debug(f"[Agent] 场景话题匹配检查失败（按不匹配处理）: {error}")
-            return False
 
     async def _handle_trigger(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """定时器到点后：委托 ThinkEngine 说话前思考，再生成真正主动消息。
@@ -333,14 +261,6 @@ class InitiativeCoordinator:
             f"内容: {message[:80]}..."
         )
 
-        # 主动发言成功：对话欲泄压（说完话，表达欲部分释放）
-        if (
-            self._agent.config.initiative_timer.drive_enabled
-            and self._drive_accumulator is not None
-        ):
-            self._drive_accumulator.vent()
-            self._persist_drive(self._drive_accumulator)
-
         # 主动发言成功：递增计数，并在未达上限时继续调度下一轮主动定时器
         self._ensure_manager().increment_consecutive_initiative_count()
         if self._manager is not None and not self._manager._has_reached_initiative_limit():
@@ -367,27 +287,6 @@ class InitiativeCoordinator:
         if self._manager is None:
             return None
         return self._manager.current_payload()
-
-    def hesitation_status(self) -> dict:
-        config = self._agent.config.initiative_timer
-        return {
-            "enabled": config.hesitation_enabled,
-            "max_rounds": config.hesitation_max_rounds,
-            "delay_seconds": config.hesitation_delay_seconds,
-        }
-
-    def set_hesitation_enabled(self, enabled: bool, *, persist: bool = True) -> dict:
-        self._agent.config.initiative_timer.hesitation_enabled = bool(enabled)
-        config_path: str | None = None
-        if persist:
-            path = ConfigLoader.set_initiative_hesitation_enabled(
-                getattr(self._agent, "config_file", None),
-                bool(enabled),
-            )
-            config_path = str(path)
-        payload = self.hesitation_status()
-        payload["config_path"] = config_path
-        return payload
 
     async def update(
         self,

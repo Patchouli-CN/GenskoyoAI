@@ -184,13 +184,15 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             event_bus,
         )
 
-    def test_decide_initiative_parses_valid_json(self):
+    def test_evaluate_speaking_drive_parses_valid_json(self):
         async def run():
             model_client = _FakeModelClient(
-                '{"should_schedule": true, "delay_seconds": 120, "summary": "想补充一点", "reason": "有想法"}'
+                '{"message": "赛钱箱该擦擦了", "delay_seconds": 120, "reason": "有想法", '
+                '"enthusiasm": 0.8, "motivation": {"expression_drive": 0.9, '
+                '"emotional_charge": 0.8, "relational_need": 0.7, "situational_relevance": 0.8}}'
             )
             engine, _ = self._make_engine(model_client)
-            decision = await engine.decide_initiative(
+            decision = await engine.evaluate_speaking_drive(
                 "刚才的回复",
                 [],
                 min_delay_seconds=30,
@@ -198,34 +200,54 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             )
             self.assertIsNotNone(decision)
             assert decision is not None
-            self.assertTrue(decision["should_schedule"])
-            self.assertEqual(decision["delay_seconds"], 120)
-            self.assertEqual(decision["summary"], "想补充一点")
-            self.assertEqual(decision["reason"], "有想法")
+            # total = 0.9*0.3 + 0.8*0.35 + 0.7*0.2 + 0.8*0.15 = 0.81 >= 0.6
+            self.assertTrue(decision.want_speak)
+            self.assertAlmostEqual(decision.total_drive, 0.81, places=2)
+            self.assertEqual(decision.message, "赛钱箱该擦擦了")
+            self.assertEqual(decision.delay_seconds, 120)
+            self.assertEqual(decision.reason, "有想法")
             self.assertEqual(model_client.call_count, 1)
 
         asyncio.run(run())
 
-    def test_decide_initiative_returns_none_on_invalid_json(self):
+    def test_evaluate_speaking_drive_below_threshold_is_silent(self):
+        async def run():
+            model_client = _FakeModelClient(
+                '{"message": "没什么想说的", "delay_seconds": 300, "reason": "平淡", '
+                '"enthusiasm": 0.2, "motivation": {"expression_drive": 0.1, '
+                '"emotional_charge": 0.1, "relational_need": 0.2, "situational_relevance": 0.1}}'
+            )
+            engine, _ = self._make_engine(model_client)
+            decision = await engine.evaluate_speaking_drive("刚才的回复", [])
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            # total = 0.1*0.3 + 0.1*0.35 + 0.2*0.2 + 0.1*0.15 = 0.12 < 0.6
+            self.assertFalse(decision.want_speak)
+
+        asyncio.run(run())
+
+    def test_evaluate_speaking_drive_returns_none_on_invalid_json(self):
         async def run():
             model_client = _FakeModelClient("这不是 JSON")
             engine, _ = self._make_engine(model_client)
-            decision = await engine.decide_initiative("刚才的回复", [])
+            decision = await engine.evaluate_speaking_drive("刚才的回复", [])
             self.assertIsNone(decision)
 
         asyncio.run(run())
 
-    def test_decide_initiative_uses_structured_output_when_supported(self):
+    def test_evaluate_speaking_drive_uses_structured_output_when_supported(self):
         async def run():
             model_client = _FakeModelClient(
-                '{"should_schedule": true, "delay_seconds": 60, "summary": "结构化输出摘要", "reason": "想补充"}',
+                '{"message": "结构化摘要", "delay_seconds": 60, "reason": "想补充", '
+                '"enthusiasm": 0.5, "motivation": {"expression_drive": 0.9, '
+                '"emotional_charge": 0.9, "relational_need": 0.9, "situational_relevance": 0.9}}',
                 structured_output=True,
             )
             engine, _ = self._make_engine(model_client)
-            decision = await engine.decide_initiative("刚才的回复", [])
+            decision = await engine.evaluate_speaking_drive("刚才的回复", [])
             self.assertIsNotNone(decision)
             assert decision is not None
-            self.assertTrue(decision["should_schedule"])
+            self.assertTrue(decision.want_speak)
             self.assertIsNotNone(model_client.last_options)
             assert model_client.last_options is not None
             self.assertEqual(
@@ -234,11 +256,11 @@ class ThinkEngineDecisionTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_decide_initiative_prompt_contains_character_and_constraints(self):
+    def test_evaluate_speaking_drive_prompt_contains_character_and_constraints(self):
         async def run():
             model_client = _FakeModelClient()
             engine, _ = self._make_engine(model_client)
-            await engine.decide_initiative(
+            await engine.evaluate_speaking_drive(
                 "「赛钱箱在那边，随意投一点吧。」",
                 [{"role": "user", "content": "你好"}],
                 min_delay_seconds=30,
@@ -249,8 +271,7 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             system_prompt = model_client.last_messages[0]["content"]
             user_prompt = model_client.last_messages[1]["content"]
             self.assertIn("你是 博丽灵梦", system_prompt)
-            self.assertIn("内部主动发言决定", system_prompt)
-            self.assertIn("不是用户可见台词", system_prompt)
+            self.assertIn("内在状态评估", system_prompt)
             self.assertIn("只输出一个原始 JSON 对象", system_prompt)
             self.assertIn("「赛钱箱在那边，随意投一点吧。」", user_prompt)
             self.assertIn("User: 你好", user_prompt)

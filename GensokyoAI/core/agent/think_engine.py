@@ -37,39 +37,14 @@ _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 # 299 token 全被思考烧掉，正文挤成空串导致决策 JSON 永远解析失败）。
 _DECISION_MIN_MAX_TOKENS = DECISION_MIN_MAX_TOKENS
 
-_INITIATIVE_TIMER_DECISION_SCHEMA: dict[str, Any] = {
+# 对话欲评估（§7.3，2026-07-30 用户定稿）：ThinkEngine 用四维心情模型打分，
+# total_drive 超 drive_threshold 即「想说」，否则沉默。无累积器、无犹豫链、
+# 无强制 fallback；LLM 只负责打分与候选内容，二元判断由阈值独立完成。
+_SPEAKING_DRIVE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "should_schedule": {"type": "boolean"},
+        "message": {"type": "string"},
         "delay_seconds": {"type": "integer"},
-        "summary": {"type": "string"},
-        "reason": {"type": "string"},
-        "enthusiasm": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "description": "角色当前主动交流的热情度，0~1",
-        },
-    },
-    "required": ["should_schedule", "delay_seconds", "summary", "reason"],
-    "additionalProperties": False,
-}
-_INITIATIVE_TIMER_RESPONSE_FORMAT: dict[str, Any] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "initiative_timer_decision",
-        "strict": True,
-        "schema": _INITIATIVE_TIMER_DECISION_SCHEMA,
-    },
-}
-
-# 对话欲短期思考（§7.3）：四维动机 + 智能调度的结构化输出
-_DRIVE_INITIATIVE_DECISION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "should_schedule": {"type": "boolean"},
-        "delay_seconds": {"type": "integer"},
-        "summary": {"type": "string"},
         "reason": {"type": "string"},
         "enthusiasm": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "motivation": {
@@ -89,28 +64,36 @@ _DRIVE_INITIATIVE_DECISION_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
         },
     },
-    "required": ["should_schedule", "delay_seconds", "summary", "reason", "motivation"],
+    "required": ["message", "delay_seconds", "reason", "enthusiasm", "motivation"],
     "additionalProperties": False,
 }
-_DRIVE_INITIATIVE_RESPONSE_FORMAT: dict[str, Any] = {
+_SPEAKING_DRIVE_RESPONSE_FORMAT: dict[str, Any] = {
     "type": "json_schema",
     "json_schema": {
-        "name": "drive_initiative_decision",
+        "name": "speaking_drive_evaluation",
         "strict": True,
-        "schema": _DRIVE_INITIATIVE_DECISION_SCHEMA,
+        "schema": _SPEAKING_DRIVE_SCHEMA,
     },
 }
 
+# 对话欲阈值默认值（initiative_timer_config 缺失时的兜底）
+_SPEAKING_DRIVE_DEFAULT_THRESHOLD = 0.6
 
-class DriveDecision(Struct):
-    """对话欲路径的短期调度决策：四维动机画像 + 主动发言安排。"""
 
-    should_schedule: bool
-    delay_seconds: int
-    summary: str
-    reason: str = ""
-    enthusiasm: float = 0.5
+class SpeakingDriveDecision(Struct):
+    """四维心情打分后的主动发言决策（阈值二元判断，无累积器）。
+
+    LLM 只产出四维动机与候选内容；`want_speak` 由代码按
+    `total_drive >= drive_threshold` 独立判定，模型不参与「说不说」的决定。
+    """
+
+    want_speak: bool
+    total_drive: float
     motivation: MotivationProfile = field(default_factory=MotivationProfile)
+    message: str = ""  # 候选发言/意图摘要（超阈值时非空）
+    delay_seconds: int = 120  # 建议延迟（主动定时器路径使用）
+    enthusiasm: float = 0.5
+    reason: str = ""
 
 
 class ThinkEngine:
@@ -327,124 +310,6 @@ class ThinkEngine:
 
     # ==================== 短期思考（回复后主动决策）====================
 
-    async def decide_initiative(
-        self,
-        assistant_response: str,
-        recent_messages: list[dict[str, Any]],
-        *,
-        min_delay_seconds: int = 30,
-        max_delay_seconds: int = 1800,
-        decision_max_tokens: int = 300,
-        decision_temperature: float = 0.4,
-        hesitation_round: int = 0,
-        hesitation_max_rounds: int = 0,
-    ) -> dict[str, Any] | None:
-        """短期思考：AI 回复后，决定是否需要设置主动发言定时器。
-
-        返回决策字典或 None（解析失败时）。
-        """
-        context_text = self._format_context_for_decision(recent_messages, assistant_response)
-
-        hesitation_note = ""
-        if hesitation_round > 0:
-            remaining = hesitation_max_rounds - hesitation_round
-            hesitation_note = f"（注意：这已是第 {hesitation_round} 次请你重新考虑是否主动发言"
-            if remaining > 0:
-                hesitation_note += f"，你还有 {remaining} 次犹豫机会"
-            else:
-                hesitation_note += "，这是最后一次机会，若仍不需要则放弃"
-            hesitation_note += "。）\n"
-
-        system_prompt = f"""你是 {self.character_name}。
-
-现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内部主动发言决定。
-这个决定仍然必须由你以 {self.character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态。
-
-请判断你是否想在稍后主动补充一句话。要求：
-- 这是内部决策提交，不是用户可见台词；不要把结果写成角色发言、对白、旁白或解释。
-- 这里的"不设置定时器"表示你本轮明确放弃稍后主动补充；如果系统没有其他兜底，这会让你在用户再次输入前不再主动开口。
-- 为了更拟真地保留角色的主动性，除非当前上下文确实没有任何自然、必要、符合角色的补充，否则优先设置一个短到中等延迟的定时器。
-- 如果设置，只写"稍后主动发言意图的一句话摘要"，不要写完整可发送话术。
-- 摘要只描述到点后要围绕什么思考和表达，真正说出口的话会在触发时重新生成。
-- 延迟秒数必须在 {min_delay_seconds} 到 {max_delay_seconds} 之间。
-- 额外输出一个 0~1 的 enthusiasm（热情度）：越高表示你当前越想主动继续聊，系统会把等待时间按 `delay_seconds * (1 - enthusiasm)` 缩短；如果不确定可填 0.5。
-- 只输出一个原始 JSON 对象；不要输出 Markdown 代码块、角色引号、解释文本或任何前后缀。
-{hesitation_note}
-"""
-
-        user_prompt = f"""你刚刚回复了用户：
-{assistant_response}
-
-近期对话上下文：
-{context_text}
-
-请根据以上上下文提交决定。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
-
-{{
-  "should_schedule": true/false,
-  "delay_seconds": 120,
-  "summary": "稍后主动发言意图的一句话摘要",
-  "reason": "简短理由",
-  "enthusiasm": 0.5
-}}
-"""
-
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        logger.trace(
-            f"[ThinkEngine] 短期思考（主动决策）请求 messages:\n"
-            f"{json.dumps(messages, ensure_ascii=False, indent=2, default=str)}"
-        )
-
-        max_retries = 1
-        for attempt in range(max_retries + 1):
-            try:
-                max_tok = max(decision_max_tokens, _DECISION_MIN_MAX_TOKENS)
-                options: dict[str, Any] = {
-                    "temperature": decision_temperature,
-                    "num_predict": max_tok,
-                    "max_tokens": max_tok,
-                }
-                if self._supports_structured_output():
-                    options["response_format"] = _INITIATIVE_TIMER_RESPONSE_FORMAT
-
-                response = await self.model_client.chat(
-                    messages=messages,
-                    options=options,
-                )
-                content = response.message.content
-                text = content.strip() if isinstance(content, str) else ""
-                logger.trace(f"[ThinkEngine] 短期思考原始响应: {text!r}")
-                data = self._parse_decision_json(text)
-                if data is not None:
-                    logger.debug(f"[ThinkEngine] 短期思考决策解析成功: {data}")
-                    return data
-
-                # 解析失败，尝试一次重试
-                if attempt < max_retries:
-                    logger.warning("短期思考决策未返回合法 JSON，准备重试一次")
-                    messages.append({"role": "assistant", "content": text[:1000]})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "你上一条回复不是合法的 JSON。请严格按照要求只输出 JSON 对象，"
-                                "不要写成角色台词、对白或解释。请重试。"
-                            ),
-                        }
-                    )
-                    continue
-
-                return None
-            except Exception as error:
-                logger.error(f"短期思考（主动决策）失败: {error}")
-                return None
-
-        return None
-
     # ==================== 说话前思考（定时器到期前）====================
 
     async def pre_speak_thought(
@@ -497,61 +362,64 @@ class ThinkEngine:
 
     # ==================== 对话欲短期思考（§7.3：四维动机 + 智能调度）====================
 
-    async def decide_drive_initiative(
+    async def evaluate_speaking_drive(
         self,
-        assistant_response: str,
+        trigger_text: str,
         recent_messages: list[dict[str, Any]],
         *,
-        drive: float,
-        mood: float,
-        min_delay_seconds: int,
-        max_delay_seconds: int,
-        decision_max_tokens: int,
-        decision_temperature: float,
-    ) -> DriveDecision | None:
-        """对话欲路径的短期思考：四维动机评估 + 智能调度，一次 LLM 完成。
+        min_delay_seconds: int = 30,
+        max_delay_seconds: int = 1800,
+        decision_max_tokens: int = 300,
+        decision_temperature: float = 0.4,
+    ) -> SpeakingDriveDecision | None:
+        """对话欲统一评估：四维心情模型打分 + 阈值二元判断（ThinkEngine 决策区）。
 
-        与旧路径 `decide_initiative` 的区别：注入当前对话欲/心情状态，输出附带
-        四维动机画像（回灌累积器）；AI 决定不发言即不发言——没有兜底与强制。
+        LLM 一次短 JSON 调用：四维动机 + 候选发言 + 建议延迟 + 热情度。
+        「说不说」不由模型回答——代码按 `total_drive >= drive_threshold` 独立判定，
+        无累积器、无犹豫链、无强制 fallback。两个调用方：
+        ActionPlanner 主动说话（用 message 作发言内容）与主动定时器调度
+        （用 message 作意图摘要、delay_seconds 排定时器）。
         """
-        context_text = self._format_context_for_decision(recent_messages, assistant_response)
+        context_text = self._format_context_for_decision(recent_messages, trigger_text)
+        threshold = (
+            self.initiative_timer_config.drive_threshold
+            if self.initiative_timer_config is not None
+            else _SPEAKING_DRIVE_DEFAULT_THRESHOLD
+        )
 
         system_prompt = f"""你是 {self.character_name}。
 
-现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内部主动发言决定。
-这个决定仍然必须由你以 {self.character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态。
+现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内在状态评估。
+这个评估仍然必须由你以 {self.character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态，并根据四维总分独立判断你是否开口——你不需要（也不能）在结果里决定是否说话。
 
-你当前的内在状态（由对话欲模型随时间持续累积）：
-- 对话欲强度：{drive:.2f}（0=完全不想说，越高越想主动开口）
-- 心情效价：{mood:+.2f}（正=愉悦，负=低落）
+请完成两件事：
+1. 用四个维度量化你此刻的动机（各 0~1）：
+   expression_drive（表达欲：思考内容本身催生的表达冲动）、
+   emotional_charge（情感驱动力：情绪是否需要一个出口）、
+   relational_need（关系需求：是否想拉近/回应对方）、
+   situational_relevance（情景相关性：此刻开口是否合时宜）。
+2. 写一句「如果此刻主动开口，你最可能说的话」（message）——
+   就写自然的一句，不要旁白、不要解释、不要角色引号；
+   它会作为候选发言或稍后主动发言的意图摘要，真正的表达仍以它为准。
 
-请判断你是否想在稍后主动补充一句话。要求：
-- 这是内部决策提交，不是用户可见台词；不要把结果写成角色发言、对白、旁白或解释。
-- 没有强制安排：当前上下文确实没有自然、必要、符合角色的补充时，坦诚选择不设置定时器——系统尊重你的决定，不会替你强行安排。
-- 如果设置，只写"稍后主动发言意图的一句话摘要"，不要写完整可发送话术。
-- 摘要只描述到点后要围绕什么思考和表达，真正说出口的话会在触发时重新生成。
-- 延迟秒数必须在 {min_delay_seconds} 到 {max_delay_seconds} 之间。
-- 额外输出一个 0~1 的 enthusiasm（热情度）：越高表示你当前越想主动继续聊，系统会把等待时间按 `delay_seconds * (1 - enthusiasm)` 缩短；如果不确定可填 0.5。
-- 同时用四个维度量化你此刻的动机（各 0~1）：
-  expression_drive（表达欲：思考内容本身催生的表达冲动）、
-  emotional_charge（情感驱动力：情绪是否需要一个出口）、
-  relational_need（关系需求：是否想拉近/回应对方）、
-  situational_relevance（情景相关性：此刻开口是否合时宜）。
+另外输出：
+- delay_seconds：建议系统多久后（秒，{min_delay_seconds}~{max_delay_seconds}）安排这次主动开口。
+- enthusiasm（0~1 热情度）：越高表示你越想尽快说，系统会把等待时间按比例缩短；不确定可填 0.5。
+- reason：一句话说明这份动机来自哪里。
 - 只输出一个原始 JSON 对象；不要输出 Markdown 代码块、角色引号、解释文本或任何前后缀。
 """
 
-        user_prompt = f"""你刚刚回复了用户：
-{assistant_response}
+        user_prompt = f"""当前触发内容：
+{trigger_text}
 
 近期对话上下文：
 {context_text}
 
-请根据以上上下文提交决定。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
+请根据以上上下文提交评估。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
 
 {{
-  "should_schedule": true/false,
+  "message": "如果此刻主动开口你最可能说的一句话",
   "delay_seconds": 120,
-  "summary": "稍后主动发言意图的一句话摘要",
   "reason": "简短理由",
   "enthusiasm": 0.5,
   "motivation": {{
@@ -569,7 +437,7 @@ class ThinkEngine:
         ]
 
         logger.trace(
-            f"[ThinkEngine] 对话欲短期思考请求 messages:\n"
+            f"[ThinkEngine] 对话欲评估请求 messages:\n"
             f"{json.dumps(messages, ensure_ascii=False, indent=2, default=str)}"
         )
 
@@ -583,7 +451,7 @@ class ThinkEngine:
                     "max_tokens": max_tok,
                 }
                 if self._supports_structured_output():
-                    options["response_format"] = _DRIVE_INITIATIVE_RESPONSE_FORMAT
+                    options["response_format"] = _SPEAKING_DRIVE_RESPONSE_FORMAT
 
                 response = await self.model_client.chat(
                     messages=messages,
@@ -591,17 +459,18 @@ class ThinkEngine:
                 )
                 content = response.message.content
                 text = content.strip() if isinstance(content, str) else ""
-                logger.trace(f"[ThinkEngine] 对话欲短期思考原始响应: {text!r}")
-                decision = self._parse_drive_decision(text)
+                logger.trace(f"[ThinkEngine] 对话欲评估原始响应: {text!r}")
+                decision = self._parse_speaking_drive(text, threshold=threshold)
                 if decision is not None:
                     logger.debug(
-                        f"[ThinkEngine] 对话欲决策: schedule={decision.should_schedule}, "
+                        f"[ThinkEngine] 对话欲评估: total={decision.total_drive:.2f} "
+                        f"(阈值 {threshold:.2f}) want_speak={decision.want_speak}, "
                         f"motivation={decision.motivation.to_prompt_context()}"
                     )
                     return decision
 
                 if attempt < max_retries:
-                    logger.warning("对话欲短期思考未返回合法 JSON，准备重试一次")
+                    logger.warning("对话欲评估未返回合法 JSON，准备重试一次")
                     messages.append({"role": "assistant", "content": text[:1000]})
                     messages.append(
                         {
@@ -616,26 +485,23 @@ class ThinkEngine:
 
                 return None
             except Exception as error:
-                logger.error(f"对话欲短期思考失败: {error}")
+                logger.error(f"对话欲评估失败: {error}")
                 return None
 
         return None
 
     @staticmethod
-    def _parse_drive_decision(text: str) -> DriveDecision | None:
-        """解析对话欲决策 JSON；motivation 缺失/畸形时按零动机处理。"""
+    def _parse_speaking_drive(text: str, *, threshold: float) -> SpeakingDriveDecision | None:
+        """解析对话欲评估 JSON 并按阈值给出二元判断；motivation 缺失/畸形按零动机。"""
         match = _JSON_OBJECT_PATTERN.search(text)
         raw = match.group(0) if match else text
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as error:
             preview = raw.replace("\r", "\\r").replace("\n", "\\n")[:300]
-            logger.error(f"对话欲决策 JSON 解析失败: {error}; raw={preview!r}")
+            logger.error(f"对话欲评估 JSON 解析失败: {error}; raw={preview!r}")
             return None
         if not isinstance(data, dict):
-            return None
-        if "should_schedule" not in data:
-            logger.error(f"对话欲决策缺少 should_schedule: {data!r}")
             return None
 
         def _clamp01(value: Any) -> float:
@@ -653,17 +519,18 @@ class ThinkEngine:
                 situational_relevance=_clamp01(raw_motivation.get("situational_relevance")),
             )
 
+        total_drive = motivation.total_drive
+        message = str(data.get("message") or "").strip()
         delay = data.get("delay_seconds")
         enthusiasm = data.get("enthusiasm")
-        return DriveDecision(
-            should_schedule=bool(data.get("should_schedule")),
-            delay_seconds=delay if isinstance(delay, int) and delay > 0 else 300,
-            summary=str(data.get("summary") or "").strip(),
-            reason=str(data.get("reason") or "").strip(),
-            enthusiasm=max(0.0, min(1.0, float(enthusiasm)))
-            if isinstance(enthusiasm, int | float) and not isinstance(enthusiasm, bool)
-            else 0.5,
+        return SpeakingDriveDecision(
+            want_speak=total_drive >= threshold and bool(message),
+            total_drive=total_drive,
             motivation=motivation,
+            message=message,
+            delay_seconds=delay if isinstance(delay, int) and delay > 0 else 300,
+            enthusiasm=_clamp01(enthusiasm) if isinstance(enthusiasm, int | float) else 0.5,
+            reason=str(data.get("reason") or "").strip(),
         )
 
     # ==================== 辅助方法 ====================
@@ -698,15 +565,3 @@ class ThinkEngine:
             except Exception as error:
                 logger.warning(f"结构化输出能力判断失败: {error}")
         return False
-
-    @staticmethod
-    def _parse_decision_json(text: str) -> dict[str, Any] | None:
-        match = _JSON_OBJECT_PATTERN.search(text)
-        raw = match.group(0) if match else text
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            preview = raw.replace("\r", "\\r").replace("\n", "\\n")[:300]
-            logger.error(f"决策 JSON 解析失败: {error}; raw={preview!r}")
-            return None
-        return data if isinstance(data, dict) else None

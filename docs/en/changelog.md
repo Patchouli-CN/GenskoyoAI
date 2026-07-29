@@ -40,6 +40,7 @@ Each change entry should ideally include:
 - The file backend targets single-node remote multi-user service. Multi-node production still requires PostgreSQL and shared object storage.
 - Runtime Protocol `2.1.0` adds the `world.*` multi-character orchestration methods (14) and the `world.orchestration` capability; World sessions use an independent `world session schema v1`; `world.send_*` reuses the message idempotency ledger. Protocol major stays `2` — no client migration needed.
 - The forced initiative fallback chain (`fallback_on_no_schedule` and 3 related keys) is removed; legacy keys only warn on validation. Runtime event redaction is unified to the `[REDACTED]` placeholder.
+- Speaking drive reworked per the 2026-07-30 final design: proactive speech is now decided by the ThinkEngine's four-dimension mood scoring plus the `initiative_timer.drive_threshold` (default 0.6) — no accumulator; `hesitation_*` and `drive_*` config keys are retired (warning-only migration); `initiative_timer.hesitation` / `initiative_timer.hesitation.set` become legacy/deprecated (`remove_after: "3.0.0"`, still discoverable via `legacy_methods`, returning a retirement payload); timer event payloads drop the `hesitation_*` fields.
 
 ---
 

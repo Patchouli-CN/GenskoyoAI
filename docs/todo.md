@@ -5,11 +5,11 @@
 
 ## 0. 一句话现状
 
-多角色 `GensokyoWorld` **全部 10 个阶段已完成**：阶段 1a / 1b / 2.1 / 2.2 / 2.3 / 3 / 4 / 5 / 6 / 7 / 8 / 9 已提交（最新 `54e9f34`，已 push 至阶段 8）；**阶段 10（文档与完整验收）已完成、已验证全绿、尚未提交**。多角色功能整体交付完毕，后续只剩用户决定的正式发布与 §5.6「待用户定夺」的设计级事项。
+多角色 `GensokyoWorld` **全部 10 个阶段已完成**，`v2026.7.30.0` 已正式发布并 push（`cd6d9a8`）。发布后完成两轮实机修正：①thinking 模型链路修复（`think: false` 显式禁用 kimi 思考、决策调用 max_tokens 下限 1024，`b2be0cd` 已 push）；②**对话欲按用户 2026-07-30 定稿重构**（ThinkEngine 四维打分 + `drive_threshold` 阈值二元判断，删除累积器/犹豫链/旧决策路径，本次未提交）。全量 `591 passed, 3 subtests passed` 全绿。
 
-- 基线：上一轮事件总线解耦 `4f2b0a2`；本次交接在其上新增数个 commit，用 `git log --oneline` 查看最新 HEAD。
-- 当前测试：`609 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`，来自 runtime 重构提交），其余全部 format 干净。
-- 所有新代码都是**纯增量**：单角色模式行为零变化，旧测试全绿。
+- 基线：上一轮事件总线解耦 `4f2b0a2`；用 `git log --oneline` 查看最新 HEAD。
+- 当前测试：`591 passed, 3 subtests passed`，ruff check / pyright 全过。注意：`ruff format --check .` 有 2 个历史遗留未格式化文件（`GensokyoAI/runtime/media_store.py`、`tests/test_session_message_restore.py`），其余全部 format 干净。
+- **对话欲最终形态见 §5.5「对话欲最终定稿」**（用户三次澄清的记录，改动前先读，别再理解错）。
 
 ---
 
@@ -119,6 +119,13 @@
 - `floor`（权重下限）的价值绑在修正器上——没有能压低权重的东西就无物可守，砍修正器时一起砍。
 - **永久权重漂移（角色弧光）暂缓**：写回角色卡等于程序偷改用户 YAML，不可做；存 session/world 状态则意味着同角色不同存档性格不同（这点反而与阶段 2.3 世界隔离自洽）。且漂移会破坏可复现性、长期容易把权重糊成均值。真要做需限定：仅明确剧情节点触发、幅度极小、有上限、当前值可在存档中查看。放到最后或作为 v2 实验特性。
 
+**对话欲最终定稿（用户 2026-07-30 三次澄清，已实施，别再理解错）**
+- 流程：**ThinkEngine 四维心情模型打分（一次短 JSON LLM）→ 算 `total_drive` → 超 `drive_threshold`（默认 0.6）即「想说」→ ActionPlanner 发 SPEAK / 定时器路径 schedule_intent；不超过 → WAIT（沉默）**。
+- **无累积器**（`DriveAccumulator` 已删）：不做时间累积、无心情半衰期、无泄压，每轮独立计算总分判断。
+- **LLM 只负责打分与候选内容**（四维 + 候选发言 + 建议延迟 + 热情度）；「说不说」由代码按阈值独立判定，模型不参与二元决定。
+- **ThinkEngine 是决策区（模块化）**：`evaluate_speaking_drive()` 是唯一评估入口；ActionPlanner 只执行 SPEAK/WAIT（冲突检测保留为性格层），不再有 `_llm_decide` 二次判断与 0.7 强制降级。
+- 已删除：`decide_initiative`（旧每轮二元决策）、`decide_drive_initiative`（累积器版）、`DriveAccumulator`、`drive_enabled` 开关（唯一路径无需开关）、hesitation 犹豫链全部（`hesitation_*` 配置键、`initiative_timer.hesitation[.set]` RPC 已 legacy/deprecated `remove_after="3.0.0"`，调用返回退役载荷）。
+
 ---
 
 ## 5.6 深度审查归档（2026-07-29 全项目审查，阶段 5 开工前执行）
@@ -186,11 +193,12 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（截至阶段 10 完成）
+## 8. 未提交改动清单（对话欲定稿重构，2026-07-30）
 
-阶段 10 已改（M）：`pyproject.toml`（2026.7.30.0）、`GensokyoAI/runtime/rpc.py`（协议 2.1.0）、`README.md`、`README_en.md`、`QUICKSTART.md`、`docs/runtime_api.md`（World API 章节 + 2.1.0）、`docs/en/runtime_api.md`（英文同步）、`docs/changelog.md`、`docs/en/changelog.md`、`docs/multi_character_design.md`（草案状态）、`docs/{todo,gsk-ai-multi-character}.md`、`tests/test_runtime_dependencies.py`（版本断言同步）
-阶段 10 新增（??）：`docs/changelog/v2026.7.30.0.md`、`docs/en/changelog/v2026.7.30.0.md`
+已改（M）：`GensokyoAI/core/agent/{think_engine,action_planner,initiative_coordinator,initiative_timer,motivation_evaluator,_impl}.py`、`GensokyoAI/core/{config_loader,config_merge,config_schema,config_validator}.py`、`GensokyoAI/runtime/{rpc,service}.py`、`GensokyoAI/backends/console/commands.py`、`config/default.yaml`、`docs/{runtime_api,user_guide,todo}.md`、`docs/en/{runtime_api,user_guide}.md`、`tests/{test_think_engine,test_initiative_timer,test_runtime_dependencies,test_console_cli_commands}.py`
+已删（D）：`GensokyoAI/core/agent/drive_accumulator.py`、`tests/test_drive_accumulator.py`
+另（不入库，.gitignore）：`config/local.yaml`、`config/local_world.yaml` 的 hesitation 死键已清
 
-建议 commit message（供用户参考，AI 不要自己提交）：
-`docs(world): 多角色文档与版本收尾（阶段 10）`
+建议 commit message（用户已授权改完直接提交并 push）：
+`refactor(initiative): 对话欲改为 ThinkEngine 四维打分 + 阈值二元判断，删除累积器与犹豫链`
 

@@ -80,58 +80,6 @@ class ConfigLoader(ConfigMerger):
             data = yaml.safe_load(f) or {}
         return self._dict_to_config(data)
 
-    @staticmethod
-    def set_initiative_hesitation_enabled(config_file: Path | None, enabled: bool) -> Path:
-        """持久化 initiative_timer.hesitation_enabled，同时尽量保留 YAML 注释与顺序。"""
-        path = config_file or ConfigLoader.default_config_path()
-        if not path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {path}")
-
-        raw_text = path.read_text(encoding="utf-8")
-        lines = raw_text.splitlines(keepends=True)
-        timer_index = None
-        timer_indent = 0
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped == "initiative_timer:":
-                timer_index = index
-                timer_indent = len(line) - len(line.lstrip(" "))
-                break
-        if timer_index is None:
-            suffix = "" if raw_text.endswith(("\n", "\r")) or not raw_text else "\n"
-            raw_text += f"{suffix}initiative_timer:\n  hesitation_enabled: {str(enabled).lower()}\n"
-            path.write_text(raw_text, encoding="utf-8")
-            return path
-
-        newline = "\r\n" if "\r\n" in raw_text else "\n"
-        child_indent = " " * (timer_indent + 2)
-        field_line = f"{child_indent}hesitation_enabled: {str(enabled).lower()}{newline}"
-        block_end = len(lines)
-        insert_index = timer_index + 1
-        for index in range(timer_index + 1, len(lines)):
-            line = lines[index]
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            indent = len(line) - len(line.lstrip(" "))
-            if indent <= timer_indent:
-                block_end = index
-                break
-            if stripped.startswith("hesitation_enabled:"):
-                lines[index] = field_line
-                path.write_text("".join(lines), encoding="utf-8")
-                return path
-            if stripped.startswith("hesitation_max_rounds:"):
-                insert_index = index
-                break
-            insert_index = index + 1
-
-        if insert_index > block_end:
-            insert_index = block_end
-        lines.insert(insert_index, field_line)
-        path.write_text("".join(lines), encoding="utf-8")
-        return path
-
     def validate_dict(self, data: dict[str, Any]) -> list[ConfigDiagnostic]:
         """返回配置字典的结构化诊断列表。"""
         return self._validator.validate_config_dict(self._normalize_config_aliases(data))
@@ -214,13 +162,28 @@ class ConfigLoader(ConfigMerger):
 
         if "initiative_timer" in data:
             initiative_timer_data = dict(data["initiative_timer"] or {})
-            # 已删除的强制 fallback 链配置键：读取时丢弃（校验层另有迁移警告），
+            # 已删除的配置键：读取时丢弃（校验层另有迁移警告），
             # 避免旧配置在 Struct 构造时报未知参数
             for removed_key in (
+                # 强制 fallback 链（阶段 7 删除）
                 "fallback_on_no_schedule",
                 "fallback_delay_seconds",
                 "fallback_summary",
                 "fallback_reason",
+                # hesitation 犹豫链与对话欲累积器（2026-07-30 用户定稿删除：
+                # 对话欲改为 ThinkEngine 四维打分 + 阈值二元判断，无累积无犹豫）
+                "hesitation_enabled",
+                "hesitation_max_rounds",
+                "hesitation_delay_seconds",
+                "drive_enabled",
+                "drive_turn_increment",
+                "drive_motivation_boost",
+                "drive_emotion_boost",
+                "drive_scene_boost",
+                "drive_silence_rate_per_minute",
+                "drive_vent_factor",
+                "mood_half_life_positive_minutes",
+                "mood_half_life_negative_minutes",
             ):
                 initiative_timer_data.pop(removed_key, None)
             config.initiative_timer = InitiativeTimerConfig(**initiative_timer_data)

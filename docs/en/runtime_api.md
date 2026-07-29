@@ -41,8 +41,8 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
   "protocol_version": "2.1.0",
   "protocol_major_version": 2,
   "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
-  "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
+  "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
     {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "2.0.0"}
@@ -138,7 +138,7 @@ Non-legacy methods grouped by current namespace:
 - `session.create`, `session.list`, `session.current`, `session.resume`, `session.delete`, `session.export`, `session.rename`, `session.messages`, `session.replace_messages`, `session.regenerate_from`, `session.rollback`
 - `dependency.status`, `dependency.install`
 - `external_tool.status`
-- `initiative_timer.current`, `initiative_timer.update`, `initiative_timer.cancel`, `initiative_timer.trigger`, `initiative_timer.hesitation`, `initiative_timer.hesitation.set`
+- `initiative_timer.current`, `initiative_timer.update`, `initiative_timer.cancel`, `initiative_timer.trigger` (`initiative_timer.hesitation` / `initiative_timer.hesitation.set` are deprecated legacy)
 - `memory.list`, `memory.search`, `memory.get`, `memory.update`, `memory.delete`, `memory.graph`
 - `media.list`, `media.delete`
 - `scene.current`, `scene.list`, `scene.get`, `scene.switch`, `scene.graph`
@@ -415,11 +415,11 @@ World runtime events (`world.started`, `world.shutdown`, `world.actor.started` /
 
 The initiative timer allows the AI to decide after each reply whether to store a brief summary of something it wants to say later and set a trigger time. If the user sends a new message before the trigger, or the frontend cancels the timer, the Runtime directly discards the old stored summary; when the time is reached, it does not re-judge whether to speak, but regenerates the actual proactive message to the user based on the still-valid `pending_summary`, current context, and pre-speech internal thinking.
 
-The hesitation mechanism is a delayed re-judgment chain used after the AI decides not to speak: when enabled, if the AI first judges that it does not need to proactively speak, it waits for a while and re-judges, up to `initiative_timer.hesitation_max_rounds` rounds. This mechanism is disabled by default to avoid unexpected silent retries; frontend and CLI can manually turn it on/off, and by default write it back to the config file.
+Whether to speak up is decided by the speaking-drive threshold model (since 2026-07-30): the ThinkEngine scores four mood dimensions (expression drive / emotional charge / relational need / situational relevance) and produces a candidate intent; when `total_drive` exceeds `initiative_timer.drive_threshold` (default `0.6`), a proactive message is scheduled, otherwise the character stays silent—no accumulator, no hesitation re-judgment chain, no forced fallback; when the AI does not want to speak, it does not speak.
 
-When the AI decides not to speak, the system respects that decision—the old `initiative_timer.fallback_on_no_schedule` forced fallback chain has been removed (legacy config keys only produce a migration warning and no longer take effect). More lifelike proactivity is provided by the drive model: with `initiative_timer.drive_enabled` enabled, the character's drive and mood accumulate with conversation and silence, and short-term thinking makes one intelligent scheduling decision within the context of its "internal state + four-dimension motivation evaluation"; if the AI decides not to speak, it stays silent—no forcing.
+The old `initiative_timer.fallback_on_no_schedule` forced fallback chain, the `hesitation_*` re-judgment chain, and the `drive_*` accumulator settings have all been removed (legacy config keys only produce a migration warning and no longer take effect).
 
-Both `agent.send_message` return results and `agent.send_message_stream` `finish` events include an `initiative_timer` field; when there is no current timer, they return an object containing hesitation status, e.g. `{ "timer": null, "hesitation": { "enabled": false } }`.
+Both `agent.send_message` return results and `agent.send_message_stream` `finish` events include an `initiative_timer` field; when there is no current timer, they return `null`.
 
 `initiative_timer.current` gets the current timer:
 
@@ -459,26 +459,9 @@ Field rules:
 {"method": "initiative_timer.trigger", "params": {"timer_id": "abcd1234"}}
 ```
 
-`initiative_timer.hesitation` gets the current hesitation mechanism status:
+`initiative_timer.hesitation` / `initiative_timer.hesitation.set` are deprecated (`legacy`, `remove_after: "3.0.0"`): the hesitation chain is retired with the speaking-drive threshold model. Both methods remain callable for compatibility but return a fixed retirement payload (`{"enabled": false, "deprecated": true, "remove_after": "3.0.0", ...}`); set calls are ignored (`ignored: true`) and no longer touch Agent state or config files.
 
-```json
-{"method": "initiative_timer.hesitation", "params": {}}
-```
-
-`initiative_timer.hesitation.set` enables or disables the hesitation mechanism; `persist` defaults to `true`, writing back to the configuration file used by the current Agent so it persists on next startup:
-
-```json
-{"method": "initiative_timer.hesitation.set", "params": {"enabled": true, "persist": true}}
-```
-
-Return fields include:
-
-- `enabled`: whether hesitation is currently enabled.
-- `max_rounds`: maximum hesitation re-judgment rounds.
-- `delay_seconds`: hesitation re-judgment delay, either integer seconds or `auto`.
-- `config_path`: path of the configuration file written back; returned only when the setting interface is persisted.
-
-Subscribable events include: `initiative_timer.created`, `initiative_timer.updated`, `initiative_timer.cancelled`, `initiative_timer.triggered`, `initiative_timer.discarded`. Event payloads contain `timer_id`, `generation`, `status`, `source`, `due_at`, `delay_seconds`, `reason`, `hesitation_enabled`, `hesitation_round`, `hesitation_max`, and optional `pending_summary`. `source: "ai"` means the model actively set it, `source: "reconsider"` means a hesitation reconsideration timer, and `source: "drive"` means scheduled via the drive model. `initiative_timer.triggered` only means the timer was effectively triggered; the actual proactive message sent is still exposed through `message.sent` / proactive message events with `content`.
+Subscribable events include: `initiative_timer.created`, `initiative_timer.updated`, `initiative_timer.cancelled`, `initiative_timer.triggered`, `initiative_timer.discarded`. Event payloads contain `timer_id`, `generation`, `status`, `source`, `due_at`, `delay_seconds`, `reason`, and optional `pending_summary`. `source: "ai"` means the model actively set it, and `source: "drive"` means scheduled via the drive model. `initiative_timer.triggered` only means the timer was effectively triggered; the actual proactive message sent is still exposed through `message.sent` / proactive message events with `content`.
 
 Related configuration section:
 
@@ -493,13 +476,10 @@ initiative_timer:
   allow_frontend_edit_summary: true
   replace_user_modified_timer: true
   expose_pending_summary: true
-  hesitation_enabled: false
-  hesitation_max_rounds: 2
-  hesitation_delay_seconds: auto
-  drive_enabled: false  # drive model (§7.3); see default.yaml for drive_* and mood_half_life_* parameters
+  drive_threshold: 0.6  # speaking-drive threshold (§7.3): speak when total_drive exceeds it
 ```
 
-`allow_frontend_edit_summary` is the currently recommended field name; the old config `allow_frontend_edit_message` is still read as a compatibility alias, but clients and config files are recommended to gradually migrate to the new field name. The old `fallback_*` forced fallback config keys have been removed; legacy keys in existing configs only receive a migration warning and no longer take effect.
+`allow_frontend_edit_summary` is the currently recommended field name; the old config `allow_frontend_edit_message` is still read as a compatibility alias, but clients and config files are recommended to gradually migrate to the new field name. The old `fallback_*` forced fallback, `hesitation_*` hesitation-chain, and `drive_*` accumulator config keys have been removed; legacy keys in existing configs only receive a migration warning and no longer take effect.
 
 The built-in console CLI also provides corresponding interactive entry points:
 
@@ -510,9 +490,6 @@ The built-in console CLI also provides corresponding interactive entry points:
 /timer summary Remind the user to continue the previous topic later
 /timer cancel
 /timer trigger
-/timer hesitation status
-/timer hesitation on
-/timer hesitation off
 ```
 
 Equivalent tag command form:

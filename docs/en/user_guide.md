@@ -449,9 +449,7 @@ Command-line arguments:
 
 When the initiative timer is enabled, after each normal AI reply, the AI can save only a `pending_summary` of its later proactive speaking intent and a trigger time. If the user sends a new message before the trigger, the old timer becomes invalid; when the time is reached or manually triggered, the system regenerates the actual proactive message to the user based on the summary, current context, and pre-speech thinking.
 
-The initiative timer hesitation mechanism is disabled by default. When enabled, if the AI judges "don't proactively reply for now," it will re-judge after the configured delay, up to a maximum number of rounds; when disabled, no hesitation re-judgment is scheduled.
-
-"AI does not set a timer" only means the model did not proactively save a follow-up intent this round, and the system respects that decision—it will not speak proactively before the user inputs again (the old `initiative_timer.fallback_on_no_schedule` forced fallback chain has been removed; legacy config keys only produce a migration warning and no longer take effect). For more lifelike proactivity, use the drive model (`initiative_timer.drive_enabled`): the character's drive and mood accumulate with conversation and silence, and short-term thinking makes one intelligent scheduling decision within the context of its "internal state + four-dimension motivation evaluation"; if the AI decides not to speak, it stays silent—no forcing.
+Whether to speak up is decided by the speaking-drive threshold model: the ThinkEngine scores four mood dimensions (expression drive / emotional charge / relational need / situational relevance), and when `total_drive` exceeds `initiative_timer.drive_threshold` (default `0.6`), a proactive message is scheduled, otherwise the character stays silent. When the AI does not want to speak, it does not speak—no accumulator, no hesitation re-judgment chain, no forced fallback (the old `fallback_*` forced fallback chain, the `hesitation_*` hesitation chain, and the `drive_*` accumulator settings have all been removed; legacy config keys only receive a migration warning).
 
 In the console, slash commands can be used:
 
@@ -462,9 +460,6 @@ In the console, slash commands can be used:
 /timer summary Remind the user to continue the previous topic later
 /timer cancel
 /timer trigger
-/timer hesitation status
-/timer hesitation on
-/timer hesitation off
 ```
 
 Equivalent tag commands can also be used:
@@ -474,7 +469,7 @@ Equivalent tag commands can also be used:
 <timer>trigger</timer>
 ```
 
-In configuration, it is recommended to use `initiative_timer.allow_frontend_edit_summary` to control whether the frontend can edit `pending_summary`; the old field `initiative_timer.allow_frontend_edit_message` is still read as a compatibility alias, but new configurations should migrate to `allow_frontend_edit_summary`. `initiative_timer.hesitation_enabled` controls the hesitation mechanism switch, default `false`; `initiative_timer.hesitation_max_rounds` and `initiative_timer.hesitation_delay_seconds` only take effect after it is enabled. The old `fallback_on_no_schedule` / `fallback_delay_seconds` / `fallback_summary` / `fallback_reason` forced fallback settings have been removed (legacy keys only receive a migration warning). The drive model is enabled via `initiative_timer.drive_enabled`; see the `drive_*` and `mood_half_life_*` comments in `config/default.yaml` for its increment/boost/vent/half-life parameters.
+In configuration, it is recommended to use `initiative_timer.allow_frontend_edit_summary` to control whether the frontend can edit `pending_summary`; the old field `initiative_timer.allow_frontend_edit_message` is still read as a compatibility alias, but new configurations should migrate to `allow_frontend_edit_summary`. `initiative_timer.drive_threshold` controls the speaking-drive threshold (0-1, default `0.6`)—raise it for a more reserved character, lower it for a more talkative one.
 
 Proactive reply master switch: to completely disable AI proactive replies, set both `initiative_timer.enabled` and `think_engine.enabled` to `false`. `initiative_timer.enabled` controls the initiative timer, and `think_engine.enabled` controls the silent thinking engine; when both are off, the AI will not speak proactively based on time or idle state.
 
@@ -486,9 +481,6 @@ Common uses:
 - `/timer summary <summary>`: edit `pending_summary`.
 - `/timer cancel [reason]`: cancel the current initiative timer.
 - `/timer trigger`: immediately trigger the current initiative timer and generate the real proactive message.
-- `/timer hesitation status`: view whether the hesitation mechanism is enabled.
-- `/timer hesitation on`: enable the hesitation mechanism and write it back to the current config file.
-- `/timer hesitation off`: disable the hesitation mechanism and write it back to the current config file.
 
 ### 11.4 History Message Editing Commands
 

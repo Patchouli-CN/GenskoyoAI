@@ -49,8 +49,8 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
   "protocol_version": "2.1.0",
   "protocol_major_version": 2,
   "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "initiative_timer.hesitation", "initiative_timer.hesitation.set", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
-  "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
+  "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
     {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "2.0.0"}
@@ -146,7 +146,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
 - `session.create`、`session.list`、`session.current`、`session.resume`、`session.delete`、`session.export`、`session.rename`、`session.messages`、`session.replace_messages`、`session.regenerate_from`、`session.rollback`
 - `dependency.status`、`dependency.install`
 - `external_tool.status`
-- `initiative_timer.current`、`initiative_timer.update`、`initiative_timer.cancel`、`initiative_timer.trigger`、`initiative_timer.hesitation`、`initiative_timer.hesitation.set`
+- `initiative_timer.current`、`initiative_timer.update`、`initiative_timer.cancel`、`initiative_timer.trigger`（`initiative_timer.hesitation` / `initiative_timer.hesitation.set` 已废弃为 legacy）
 - `memory.list`、`memory.search`、`memory.get`、`memory.update`、`memory.delete`、`memory.graph`
 - `media.list`、`media.delete`
 - `scene.current`、`scene.list`、`scene.get`、`scene.switch`、`scene.graph`
@@ -423,11 +423,11 @@ World 运行时事件（`world.started`、`world.shutdown`、`world.actor.starte
 
 主动定时器让 AI 在每次回答完成后决定是否积存一条稍后主动发言意图摘要，并设置触发时间。若用户在触发前发送新消息，或前端取消定时器，Runtime 会直接丢弃旧积存摘要；到点时不再二次判断是否要说话，而是基于仍有效的 `pending_summary`、当前上下文和说话前内部思考重新生成真正发给用户的主动消息。
 
-犹豫机制用于“AI 决定不发言”后的延迟复判链：开启后，AI 首次判断不需要主动说话时会等待一段时间再重新判断，最多重试 `initiative_timer.hesitation_max_rounds` 轮。该机制默认关闭，避免用户预期外的静默重试；前端和 CLI 可以手动开启/关闭，并默认写回配置文件。
+「要不要主动开口」由对话欲阈值模型决定（2026-07-30 起）：ThinkEngine 用四维心情模型（表达欲/情感驱动力/关系需求/情景相关性）打分并给出候选意图，`total_drive` 超过 `initiative_timer.drive_threshold`（默认 `0.6`）即安排主动发言，否则保持沉默——无累积器、无犹豫复判链、无强制兜底；AI 不想说就是不说。
 
-AI 决定不发言时系统尊重该决定——旧的 `initiative_timer.fallback_on_no_schedule` 强制兜底链已删除（旧配置键会被读取为迁移警告，不再生效）。更拟真的主动性由对话欲模型提供：开启 `initiative_timer.drive_enabled` 后，角色的对话欲与心情随对话和沉默持续累积，短期思考在「内在状态 + 四维动机评估」上下文中做一次智能调度；AI 决定不说就不说，没有强制安排。
+AI 决定不发言时系统尊重该决定——旧的 `initiative_timer.fallback_on_no_schedule` 强制兜底链、`hesitation_*` 犹豫复判链与 `drive_*` 累积器配置均已删除（旧配置键只会收到迁移警告，不再生效）。
 
-`agent.send_message` 的返回结果和 `agent.send_message_stream` 的 `finish` 事件都会新增 `initiative_timer` 字段；无当前定时器时会返回包含犹豫状态的对象，例如 `{ "timer": null, "hesitation": { "enabled": false } }`。
+`agent.send_message` 的返回结果和 `agent.send_message_stream` 的 `finish` 事件都会新增 `initiative_timer` 字段；无当前定时器时返回 `null`。
 
 `initiative_timer.current` 获取当前定时器：
 
@@ -467,26 +467,9 @@ AI 决定不发言时系统尊重该决定——旧的 `initiative_timer.fallbac
 {"method": "initiative_timer.trigger", "params": {"timer_id": "abcd1234"}}
 ```
 
-`initiative_timer.hesitation` 获取当前犹豫机制状态：
+`initiative_timer.hesitation` / `initiative_timer.hesitation.set` 已废弃（`legacy`，`remove_after: "3.0.0"`）：犹豫复判链随对话欲阈值模型退役。两个方法仍可用于兼容，但只返回固定的退役提示载荷（`{"enabled": false, "deprecated": true, "remove_after": "3.0.0", ...}`），设置调用被忽略（`ignored: true`），不再读写 Agent 状态或配置文件。
 
-```json
-{"method": "initiative_timer.hesitation", "params": {}}
-```
-
-`initiative_timer.hesitation.set` 开启或关闭犹豫机制；`persist` 默认 `true`，会写回当前 Agent 使用的配置文件，下次启动继续生效：
-
-```json
-{"method": "initiative_timer.hesitation.set", "params": {"enabled": true, "persist": true}}
-```
-
-返回字段包括：
-
-- `enabled`：当前是否开启犹豫机制。
-- `max_rounds`：最多犹豫复判轮数。
-- `delay_seconds`：犹豫复判延迟，可能是整数秒或 `auto`。
-- `config_path`：写回配置文件路径；仅设置接口持久化时返回。
-
-可订阅的事件包括：`initiative_timer.created`、`initiative_timer.updated`、`initiative_timer.cancelled`、`initiative_timer.triggered`、`initiative_timer.discarded`。事件 payload 包含 `timer_id`、`generation`、`status`、`source`、`due_at`、`delay_seconds`、`reason`、`hesitation_enabled`、`hesitation_round`、`hesitation_max` 和可选 `pending_summary`。其中 `source: "ai"` 表示模型主动设置，`source: "reconsider"` 表示犹豫复判定时器，`source: "drive"` 表示对话欲路径调度。`initiative_timer.triggered` 只表示定时器有效触发，真正发出的主动消息仍通过 `message.sent` / 主动消息事件暴露 `content`。
+可订阅的事件包括：`initiative_timer.created`、`initiative_timer.updated`、`initiative_timer.cancelled`、`initiative_timer.triggered`、`initiative_timer.discarded`。事件 payload 包含 `timer_id`、`generation`、`status`、`source`、`due_at`、`delay_seconds`、`reason` 和可选 `pending_summary`。其中 `source: "ai"` 表示模型主动设置，`source: "drive"` 表示对话欲路径调度。`initiative_timer.triggered` 只表示定时器有效触发，真正发出的主动消息仍通过 `message.sent` / 主动消息事件暴露 `content`。
 
 相关配置段：
 
@@ -501,13 +484,10 @@ initiative_timer:
   allow_frontend_edit_summary: true
   replace_user_modified_timer: true
   expose_pending_summary: true
-  hesitation_enabled: false
-  hesitation_max_rounds: 2
-  hesitation_delay_seconds: auto
-  drive_enabled: false  # 对话欲模型（§7.3）；drive_* 与 mood_half_life_* 参数见 default.yaml
+  drive_threshold: 0.6  # 对话欲阈值（§7.3）：total_drive 超过该值即主动发言
 ```
 
-`allow_frontend_edit_summary` 是当前推荐字段名；旧配置中的 `allow_frontend_edit_message` 会作为兼容别名映射到它，建议客户端和配置文件逐步迁移到新字段名。旧的 `fallback_*` 强制兜底配置键已删除，旧配置中的这些键只会收到迁移警告，不再生效。
+`allow_frontend_edit_summary` 是当前推荐字段名；旧配置中的 `allow_frontend_edit_message` 会作为兼容别名映射到它，建议客户端和配置文件逐步迁移到新字段名。旧的 `fallback_*` 强制兜底、`hesitation_*` 犹豫链与 `drive_*` 累积器配置键已删除，旧配置中的这些键只会收到迁移警告，不再生效。
 
 自带控制台 CLI 也提供对应交互入口：
 
@@ -518,9 +498,6 @@ initiative_timer:
 /timer summary 稍后提醒用户继续刚才的话题
 /timer cancel
 /timer trigger
-/timer hesitation status
-/timer hesitation on
-/timer hesitation off
 ```
 
 标签命令形式等价：

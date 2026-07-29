@@ -32,7 +32,6 @@ class InitiativeTimerState:
     pending_summary: str
     reason: str = ""
     user_modified: bool = False
-    hesitation_round: int = 0  # 0=正常定时器, >0=第N轮犹豫重试
 
 
 class InitiativeTimerManager:
@@ -69,8 +68,6 @@ class InitiativeTimerManager:
         # 已触发但未完成的回调 id：用于回合互斥后的时效校验——等待期间用户
         # 发言/新计划会让本次触发失效，回调凭此放弃而不是补一条过期主动消息。
         self._active_trigger_id: str | None = None
-        self._last_assistant_response: str | None = None  # 犹豫重试时复用
-        self._pace_stamps: list[datetime] = []  # 最近几次回复完成时间，用于 auto 延迟
         self._consecutive_initiative_count = 0  # 用户未回复期间已连续主动发言次数
 
     def current_payload(self) -> dict[str, Any] | None:
@@ -78,79 +75,6 @@ class InitiativeTimerManager:
         if self._state is None or self._state.status != "scheduled":
             return None
         return self._payload(self._state)
-
-    async def schedule_after_response(self, assistant_response: str) -> dict[str, Any] | None:
-        """AI 回复完成后：委托 ThinkEngine 短期思考，然后设置定时器。"""
-        if not self.config.enabled or not assistant_response.strip():
-            logger.trace("[InitiativeTimer] schedule_after_response 被禁用或回复为空，跳过")
-            return None
-
-        if self._has_reached_initiative_limit():
-            logger.debug(
-                f"[InitiativeTimer] 已连续主动发言 {self._consecutive_initiative_count} 次，"
-                f"达到上限 {self.config.max_initiative_times}，暂停新的主动定时器"
-            )
-            return None
-
-        self._last_assistant_response = assistant_response
-        self._pace_stamps.append(utc_now())
-        if len(self._pace_stamps) > 5:
-            self._pace_stamps = self._pace_stamps[-5:]
-
-        # 委托 ThinkEngine 进行短期思考（回复后决策）
-        logger.debug(f"[InitiativeTimer] 开始为 {self.character_name} 决策下一轮主动发言")
-        recent_messages = self.working_memory.get_recent(6)
-        decision = await self.think_engine.decide_initiative(
-            assistant_response,
-            recent_messages,
-            min_delay_seconds=self.config.min_delay_seconds,
-            max_delay_seconds=self.config.max_delay_seconds,
-            decision_max_tokens=self.config.decision_max_tokens,
-            decision_temperature=self.config.decision_temperature,
-            hesitation_round=0,
-            hesitation_max_rounds=self.config.hesitation_max_rounds,
-        )
-        if not decision:
-            logger.debug("[InitiativeTimer] 决策解析失败，进入不发言处理流程")
-            return await self._handle_no_schedule(reason="decision_parse_failed")
-
-        should_schedule = bool(decision.get("should_schedule"))
-        summary = str(decision.get("summary") or "").strip()
-        if not should_schedule or not summary:
-            reason = str(decision.get("reason") or "no_schedule_or_empty_summary").strip()
-            logger.debug(f"[InitiativeTimer] AI 决定不主动发言或摘要为空，原因: {reason}")
-            return await self._handle_no_schedule(reason=reason)
-
-        summary = self._trim_summary(summary)
-        delay_seconds = self._clamp_delay(decision.get("delay_seconds"))
-        enthusiasm = decision.get("enthusiasm")
-        delay_seconds = self._apply_enthusiasm(delay_seconds, enthusiasm)
-        reason = str(decision.get("reason") or "").strip()
-
-        logger.debug(
-            f"[InitiativeTimer] AI 决定主动发言，摘要: {summary[:40]}..., "
-            f"原始延迟: {self._clamp_delay(decision.get('delay_seconds'))}s, "
-            f"热情度: {enthusiasm}, 调整后延迟: {delay_seconds}s"
-        )
-
-        async with self._lock:
-            await self._discard_locked(reason="replaced_by_new_ai_plan", source="ai")
-            state = self._create_state(
-                delay_seconds=delay_seconds,
-                pending_summary=summary,
-                reason=reason,
-                source="ai",
-                user_modified=False,
-                hesitation_round=0,
-            )
-            self._state = state
-            self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
-            self._publish(SystemEvent.INITIATIVE_TIMER_CREATED, state)
-            logger.info(
-                f"[InitiativeTimer] 已创建主动定时器 {state.timer_id}, "
-                f"触发时间: {state.due_at.isoformat()}"
-            )
-            return self._payload(state)
 
     # ------------------------------------------------------------------
     # 对话欲直接调度（§7.3：跳过 LLM 决策/犹豫/兜底）
@@ -184,7 +108,6 @@ class InitiativeTimerManager:
                 reason=reason,
                 source=source,
                 user_modified=False,
-                hesitation_round=0,
             )
             self._state = state
             self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
@@ -194,151 +117,6 @@ class InitiativeTimerManager:
                 f"延迟: {state.delay_seconds}s, 摘要: {summary[:40]}..."
             )
             return self._payload(state)
-
-    # ------------------------------------------------------------------
-    # 犹豫重试
-    # ------------------------------------------------------------------
-
-    async def _handle_no_schedule(
-        self, *, reason: str, round_num: int = 1
-    ) -> dict[str, Any] | None:
-        """AI 未设置定时器：尊重决定，仅在开启犹豫时进入犹豫重试链。
-
-        没有兜底强制安排——AI 决定不发言就是不发言（强制 fallback 链已删除）。
-        """
-        logger.debug(f"[InitiativeTimer] 处理不发言情况，原因: {reason}, 犹豫轮次: {round_num}")
-        return await self._try_hesitate(round_num)
-
-    async def _try_hesitate(self, round_num: int) -> dict[str, Any] | None:
-        """AI 决定不发言时，按开关决定是否进入犹豫重试链。"""
-        if not self.config.hesitation_enabled:
-            logger.trace("[InitiativeTimer] 犹豫功能已关闭")
-            return None
-        max_rounds = self.config.hesitation_max_rounds
-        if max_rounds <= 0 or round_num > max_rounds:
-            logger.debug(
-                f"[InitiativeTimer] 犹豫轮次 {round_num} 超过最大值 {max_rounds}，停止犹豫"
-            )
-            return None
-        async with self._lock:
-            payload = self._schedule_reconsider_timer(round_num)
-            logger.info(
-                f"[InitiativeTimer] 进入第 {round_num} 轮犹豫，"
-                f"{self.config.hesitation_delay_seconds} 秒后重新决策"
-            )
-            return payload
-
-    def _resolve_hesitation_delay(self) -> int:
-        """解析犹豫延迟：若为 'auto' 则根据对话节奏动态计算，否则用配置值。"""
-        raw = self.config.hesitation_delay_seconds
-        if isinstance(raw, str) and raw.strip().lower() == "auto":
-            return self._compute_auto_delay()
-        try:
-            seconds = int(raw)
-        except TypeError, ValueError:
-            return 180
-        return max(1, seconds)
-
-    def _compute_auto_delay(self) -> int:
-        """根据最近几次回复间隔动态计算犹豫等待时间。
-
-        节奏快 → 等待短；节奏慢 → 等待长。夹在 30~600 秒之间。
-        """
-        stamps = self._pace_stamps
-        if len(stamps) < 2:
-            logger.trace("[InitiativeTimer] 回复节奏样本不足，使用默认犹豫延迟 180s")
-            return 180
-        intervals: list[float] = []
-        for i in range(1, len(stamps)):
-            delta = (stamps[i] - stamps[i - 1]).total_seconds()
-            if delta > 0:
-                intervals.append(delta)
-        if not intervals:
-            logger.trace("[InitiativeTimer] 无有效回复间隔，使用默认犹豫延迟 180s")
-            return 180
-        avg_interval = sum(intervals) / len(intervals)
-        delay = int(avg_interval * 0.8)
-        result = max(30, min(600, delay))
-        logger.debug(f"[InitiativeTimer] 自动犹豫延迟: 平均间隔 {avg_interval:.1f}s -> {result}s")
-        return result
-
-    def _schedule_reconsider_timer(self, round_num: int) -> dict[str, Any] | None:
-        """调度一轮犹豫重试定时器（调用方必须持锁）。"""
-        state = self._create_state(
-            delay_seconds=self._resolve_hesitation_delay(),
-            pending_summary="",
-            reason=f"hesitation_round_{round_num}",
-            source="reconsider",
-            user_modified=False,
-            hesitation_round=round_num,
-        )
-        self._state = state
-        self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
-        logger.debug(f"[InitiativeTimer] 犹豫重试定时器 {state.timer_id} 已调度，第 {round_num} 轮")
-        return self._payload(state)
-
-    async def _handle_reconsider(self, round_num: int) -> None:
-        """犹豫定时器到期：重新让 ThinkEngine 决策是否发言。"""
-        assistant_response = self._last_assistant_response or ""
-        if not assistant_response:
-            logger.debug("[InitiativeTimer] 犹豫重试时没有缓存的上一次回复，放弃")
-            return
-
-        logger.debug(f"[InitiativeTimer] 第 {round_num} 轮犹豫到期，重新决策")
-        recent_messages = self.working_memory.get_recent(6)
-        decision = await self.think_engine.decide_initiative(
-            assistant_response,
-            recent_messages,
-            min_delay_seconds=self.config.min_delay_seconds,
-            max_delay_seconds=self.config.max_delay_seconds,
-            decision_max_tokens=self.config.decision_max_tokens,
-            decision_temperature=self.config.decision_temperature,
-            hesitation_round=round_num,
-            hesitation_max_rounds=self.config.hesitation_max_rounds,
-        )
-        if not decision:
-            await self._handle_no_schedule(
-                reason="reconsider_parse_failed", round_num=round_num + 1
-            )
-            return
-
-        should_schedule = bool(decision.get("should_schedule"))
-        summary = str(decision.get("summary") or "").strip()
-        if not should_schedule or not summary:
-            reason = str(decision.get("reason") or "reconsider_no_schedule").strip()
-            logger.debug(f"[InitiativeTimer] 犹豫重试后仍决定不发言，原因: {reason}")
-            await self._handle_no_schedule(reason=reason, round_num=round_num + 1)
-            return
-
-        # AI 终于决定发言了！
-        summary = self._trim_summary(summary)
-        delay_seconds = self._clamp_delay(decision.get("delay_seconds"))
-        enthusiasm = decision.get("enthusiasm")
-        delay_seconds = self._apply_enthusiasm(delay_seconds, enthusiasm)
-        reason = str(decision.get("reason") or "").strip()
-
-        logger.debug(
-            f"[InitiativeTimer] 犹豫重试后决定主动发言，摘要: {summary[:40]}..., "
-            f"调整后延迟: {delay_seconds}s"
-        )
-
-        async with self._lock:
-            await self._discard_locked(reason="replaced_by_reconsider", source="ai")
-            state = self._create_state(
-                delay_seconds=delay_seconds,
-                pending_summary=summary,
-                reason=reason,
-                source="ai",
-                user_modified=False,
-                hesitation_round=0,
-            )
-            self._state = state
-            self._task = asyncio.create_task(self._run_timer(state.timer_id, state.generation))
-            self._publish(SystemEvent.INITIATIVE_TIMER_CREATED, state)
-            logger.info(
-                f"[InitiativeTimer] 犹豫后创建主动定时器 {state.timer_id}, "
-                f"触发时间: {state.due_at.isoformat()}"
-            )
 
     def reset_consecutive_initiative_count(self) -> None:
         """用户回复后重置连续主动发言计数器。"""
@@ -483,7 +261,6 @@ class InitiativeTimerManager:
         reason: str,
         source: str,
         user_modified: bool,
-        hesitation_round: int = 0,
     ) -> InitiativeTimerState:
         now = utc_now()
         self._generation += 1
@@ -499,7 +276,6 @@ class InitiativeTimerManager:
             pending_summary=pending_summary,
             reason=reason,
             user_modified=user_modified,
-            hesitation_round=hesitation_round,
         )
         logger.trace(
             f"[InitiativeTimer] 创建状态 #{self._generation} {state.timer_id}: "
@@ -526,8 +302,6 @@ class InitiativeTimerManager:
         try:
             while True:
                 trigger_args: dict[str, Any] | None = None
-                should_reconsider = False
-                reconsider_round = 0
                 async with self._lock:
                     state = self._state
                     if not state or state.timer_id != timer_id or state.generation != generation:
@@ -537,25 +311,10 @@ class InitiativeTimerManager:
                         return
                     remaining = (state.due_at - utc_now()).total_seconds()
                     if remaining <= 0:
-                        if state.source == "reconsider":
-                            should_reconsider = True
-                            reconsider_round = state.hesitation_round
-                            self._state = None
-                            self._cancel_task()
-                            logger.debug(
-                                f"[InitiativeTimer] 犹豫定时器 {timer_id} 到期，"
-                                f"进入第 {reconsider_round} 轮重新决策"
-                            )
-                        else:
-                            trigger_args = self._prepare_trigger_locked(state, source="timer")
-                            logger.info(
-                                f"[InitiativeTimer] 定时器 {timer_id} 到期，准备触发主动消息"
-                            )
+                        trigger_args = self._prepare_trigger_locked(state, source="timer")
+                        logger.info(f"[InitiativeTimer] 定时器 {timer_id} 到期，准备触发主动消息")
                     else:
                         trigger_args = None
-                if should_reconsider:
-                    await self._handle_reconsider(reconsider_round)
-                    return
                 if trigger_args is not None:
                     await self._execute_trigger_handler(trigger_args)
                     return
@@ -672,9 +431,6 @@ class InitiativeTimerManager:
             "remaining_seconds": remaining,
             "reason": state.reason,
             "user_modified": state.user_modified,
-            "hesitation_enabled": self.config.hesitation_enabled,
-            "hesitation_round": state.hesitation_round,
-            "hesitation_max": self.config.hesitation_max_rounds,
             "editable_fields": ["due_at", "delay_seconds", "pending_summary"]
             if self.config.allow_frontend_edit_summary
             else ["due_at", "delay_seconds"],

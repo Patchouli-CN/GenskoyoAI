@@ -640,8 +640,6 @@ class Agent:
             self._action_planner.update_memory_context(self.working_memory, self.semantic_memory)
         if self._think_engine is not None:
             self._think_engine.update_semantic_memory(self.semantic_memory)
-        # 对话欲状态按会话隔离：丢弃缓存，下次从新会话 metadata 恢复
-        self._initiative_coordinator.reset_drive_state()
 
     def create_session(self) -> SessionContext:
         session = self.session_manager.create_session()
@@ -702,6 +700,7 @@ class Agent:
                 working_memory=self.working_memory,
                 semantic_memory=self.semantic_memory,
                 event_bus=self.event_bus,
+                think_engine=self._think_engine,
                 debug_silent_output=self.config.debug_silent_output,
             )
             self._lazy_components.action_planner = self._action_planner
@@ -889,12 +888,6 @@ class Agent:
 
     def current_initiative_timer(self) -> dict | None:
         return self._initiative_coordinator.current()
-
-    def initiative_hesitation_status(self) -> dict:
-        return self._initiative_coordinator.hesitation_status()
-
-    def set_initiative_hesitation_enabled(self, enabled: bool, *, persist: bool = True) -> dict:
-        return self._initiative_coordinator.set_hesitation_enabled(enabled, persist=persist)
 
     async def update_initiative_timer(
         self,

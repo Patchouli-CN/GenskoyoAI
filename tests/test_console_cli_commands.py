@@ -147,14 +147,6 @@ def test_timer_command_supports_prefix_and_tag_forms():
     asyncio.run(_execute("/timer trigger", agent, backend))
     assert backend.panels[-1][0] == "trigger"
 
-    results, _ = asyncio.run(_execute("/timer hesitation on", agent, backend))
-    assert results[0].status.name == "SUCCESS"
-    assert agent.hesitation_enabled is True
-
-    results, _ = asyncio.run(_execute("/timer hesitation off", agent, backend))
-    assert results[0].status.name == "SUCCESS"
-    assert agent.hesitation_enabled is False
-
 
 def test_history_command_can_show_edit_import_and_regenerate(tmp_path):
     agent = _FakeAgent()
