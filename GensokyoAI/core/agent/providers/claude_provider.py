@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+import aiohttp
+
 from ....utils.logger import logger
 from ....utils.request_utils import merge_headers
 from ..types import (
@@ -77,6 +79,39 @@ class ClaudeProvider(BaseProvider):
             kwargs["default_headers"] = merge_headers(self.config.extra_headers)
 
         return AsyncAnthropic(**kwargs)
+
+    def _balance_url(self) -> str | None:
+        """推导 Moonshot 余额接口地址；非 Moonshot 端点或无 api_key 返回 None。
+
+        anthropic 端点形如 https://api.moonshot.cn/anthropic；
+        余额接口在 OpenAI 侧 /v1/users/me/balance。
+        """
+        base_url = (self.config.base_url or "").rstrip("/")
+        if "moonshot" not in base_url or not self.config.api_key:
+            return None
+        root = base_url
+        for suffix in ("/anthropic", "/v1"):
+            if root.endswith(suffix):
+                root = root[: -len(suffix)]
+        return f"{root}/v1/users/me/balance"
+
+    async def get_quota(self) -> dict[str, Any] | None:
+        """查询账户额度：Moonshot 端点走官方余额接口，其余端点返回 None。"""
+        url = self._balance_url()
+        if url is None:
+            return None
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.get(url, headers={"Authorization": f"Bearer {self.config.api_key}"})
+            as response,
+        ):
+            if response.status != 200:
+                logger.warning(f"[ClaudeProvider] 额度查询失败: HTTP {response.status}")
+                return None
+            payload = await response.json(content_type=None)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, dict) else None
 
     @staticmethod
     def _response_format_to_output_config(response_format: dict) -> dict:

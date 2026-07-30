@@ -39,6 +39,7 @@ class Nb2Config:
     data_dir: Path = Path("nb2_data")
     root_dir: Path | None = None  # GensokyoAI 项目根（characters/config 解析基准）；None=cwd
     group_whitelist: frozenset[int] = frozenset()  # 空 = 响应所有群
+    owner_qq: frozenset[int] = frozenset()  # 指令白名单（额度查询等）；空 = 全部禁用
     initiative: bool = True  # 角色主动发言（事件订阅队列进程内投递到群/私聊）
     extra_prompt: str = DEFAULT_EXTRA_PROMPT  # 随每条回复注入 system_contexts 的附加要求
     split_reply: bool = True  # 回复按行拆成多条短消息发送（配合 extra_prompt 的按行风格）
@@ -56,11 +57,18 @@ class Nb2Config:
             if part.isdigit()
         )
         root_raw = (get("GSK_NB2_ROOT_DIR") or "").strip()
+        owner_raw = (get("GSK_NB2_OWNER_QQ") or "").replace("，", ",")
+        owner_qq = frozenset(
+            int(part)
+            for part in (piece.strip() for piece in owner_raw.split(","))
+            if part.isdigit()
+        )
         return cls(
             character=(get("GSK_NB2_CHARACTER") or cls.character),
             data_dir=Path((get("GSK_NB2_DATA_DIR") or "").strip() or cls.data_dir),
             root_dir=Path(root_raw) if root_raw else None,
             group_whitelist=whitelist,
+            owner_qq=owner_qq,
             initiative=_parse_bool(get("GSK_NB2_INITIATIVE"), cls.initiative),
             extra_prompt=((get("GSK_NB2_EXTRA_PROMPT") or "").strip() or DEFAULT_EXTRA_PROMPT),
             split_reply=_parse_bool(get("GSK_NB2_SPLIT_REPLY"), cls.split_reply),

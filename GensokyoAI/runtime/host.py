@@ -203,16 +203,30 @@ class RuntimeHost:
             if agent is not None:
                 agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
 
+    def _tenant_agent(self, agent_id: str) -> Any:
+        """取租户当前装配的 Agent（runtime 包内契约），未装配返回 None。"""
+        service = self._service._tenant_services.get((self._principal.user_id, agent_id))
+        return service.state.agent if service is not None else None
+
     def _apply_adapter_tools(self, agent_id: str) -> None:
         """把已登记的适配器工具注入刚初始化的租户 Agent。"""
-        if not self._adapter_tools:
-            return
-        service = self._service._tenant_services.get((self._principal.user_id, agent_id))
-        agent = service.state.agent if service is not None else None
+        agent = self._tenant_agent(agent_id)
         if agent is None:
             return
         for func, name, parallel_safe in self._adapter_tools:
             agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
+
+    async def get_quota(self, character: str) -> dict[str, Any] | None:
+        """查询 Provider 账户额度（账户级；借元租户的模型客户端，不支持返回 None）。"""
+        agent_id = "nb2-meta"
+        if self._meta_session_id is None:
+            session_id, _ = await self.ensure_agent(agent_id, character, disable_initiative=True)
+            self._meta_session_id = session_id
+        agent = self._tenant_agent(agent_id)
+        client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
+        if client is None:
+            return None
+        return await client.get_quota()
 
     # ==================== 主动消息事件（进程内队列推送） ====================
 

@@ -7,6 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from aiohttp import web
+from aiohttp.test_utils import AioHTTPTestCase
+
 from GensokyoAI.backends.nb2.config import DEFAULT_EXTRA_PROMPT, Nb2Config
 from GensokyoAI.backends.nb2.store import MemberStore, SessionStore
 from GensokyoAI.core.events import Event, EventBus, SystemEvent
@@ -150,6 +153,12 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertFalse(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "off"}.get).initiative)
         self.assertTrue(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "yes"}.get).initiative)
         self.assertTrue(Nb2Config.from_env({"GSK_NB2_INITIATIVE": " "}.get).initiative)
+
+    def test_owner_qq_parsing(self):
+        config = Nb2Config.from_env({"GSK_NB2_OWNER_QQ": "123, 456，abc,"}.get)
+        self.assertEqual(config.owner_qq, frozenset({123, 456}))
+        # 默认空名单：指令全部禁用（fail-closed）
+        self.assertEqual(Nb2Config.from_env({}.get).owner_qq, frozenset())
 
 
 class SplitReplySegmentsTests(unittest.TestCase):
@@ -351,6 +360,38 @@ class RuntimeHostWrapperTests(unittest.TestCase):
             calls.clear()
             await host.generate_meta_text("KirisameMarisa", "再写一段")
             self.assertEqual([m for m, _ in calls], ["session.messages", "agent.send_message"])
+
+        asyncio.run(run())
+
+    def test_get_quota_via_meta_tenant_client(self):
+        """额度查询借元租户模型客户端；客户端缺失时返回 None。"""
+
+        async def run():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                service = RuntimeService(root)
+                child = RuntimeService(
+                    root,
+                    tenant_key=("nb2", "nb2-meta"),
+                    storage_root=service._tenant_storage_root("nb2", "nb2-meta"),
+                )
+                service._tenant_services[("nb2", "nb2-meta")] = child
+
+                class _FakeClient:
+                    async def get_quota(self):
+                        return {"available_balance": 1.5}
+
+                child.state.agent = SimpleNamespace(
+                    runtime_context=SimpleNamespace(model_client=_FakeClient())
+                )
+                host = RuntimeHost(user_id="nb2", service=service)
+                host._meta_session_id = "s-meta"  # 跳过 ensure_agent
+                self.assertEqual(
+                    await host.get_quota("KirisameMarisa"), {"available_balance": 1.5}
+                )
+
+                child.state.agent = SimpleNamespace(runtime_context=SimpleNamespace())
+                self.assertIsNone(await host.get_quota("KirisameMarisa"))
 
         asyncio.run(run())
 
@@ -560,6 +601,66 @@ class RuntimeHostEventTests(unittest.TestCase):
                 await event_bus.stop()
 
         asyncio.run(run())
+
+
+class ClaudeProviderQuotaTests(AioHTTPTestCase):
+    """claude_provider.get_quota：Moonshot 端点走官方余额接口，其余返回 None。"""
+
+    async def get_application(self):
+        self.balance_calls: list = []
+
+        async def balance(request: web.Request) -> web.Response:
+            self.balance_calls.append(request.headers.get("Authorization"))
+            return web.json_response(
+                {
+                    "code": 0,
+                    "data": {
+                        "available_balance": 49.59,
+                        "voucher_balance": 46.59,
+                        "cash_balance": 3.0,
+                    },
+                    "status": True,
+                }
+            )
+
+        app = web.Application()
+        app.router.add_get("/v1/users/me/balance", balance)
+        return app
+
+    def _provider(self, base_url: str, api_key: str = "sk-test"):
+        from GensokyoAI.core.agent.providers.claude_provider import ClaudeProvider
+        from GensokyoAI.core.config import ModelConfig
+
+        return ClaudeProvider(
+            ModelConfig(provider="claude", name="kimi-k2.5", base_url=base_url, api_key=api_key)
+        )
+
+    async def test_moonshot_quota_query(self):
+        provider = self._provider("https://api.moonshot.cn/anthropic")
+        # 用桩端点替换推导出的余额地址（保留真实的 Moonshot 判定逻辑）
+        provider._balance_url = (
+            lambda: f"http://127.0.0.1:{self.server.port}/v1/users/me/balance"
+        )
+        data = await provider.get_quota()
+        self.assertEqual(data["available_balance"], 49.59)
+        self.assertEqual(self.balance_calls[0], "Bearer sk-test")
+
+    async def test_balance_url_derivation(self):
+        provider = self._provider("https://api.moonshot.cn/anthropic")
+        self.assertEqual(
+            provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance"
+        )
+        provider = self._provider("https://api.moonshot.cn")
+        self.assertEqual(
+            provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance"
+        )
+
+    async def test_non_moonshot_returns_none(self):
+        self.assertIsNone(await self._provider("https://api.anthropic.com").get_quota())
+
+    async def test_no_api_key_returns_none(self):
+        provider = self._provider("https://api.moonshot.cn/anthropic", api_key="")
+        self.assertIsNone(await provider.get_quota())
 
 
 if __name__ == "__main__":

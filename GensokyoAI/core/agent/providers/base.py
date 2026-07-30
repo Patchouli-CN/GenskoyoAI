@@ -67,6 +67,14 @@ class BaseProvider(ABC):
         """列出 Provider 可用模型；默认无远程模型列表。"""
         return []
 
+    async def get_quota(self) -> dict[str, Any] | None:
+        """查询账户额度（可选能力）。
+
+        不支持的 Provider 返回 None；返回结构由具体 Provider 定义
+        （如 Moonshot 的 available_balance / voucher_balance / cash_balance）。
+        """
+        return None
+
     async def prepare_auth(self, *, force_refresh: bool = False) -> None:
         """准备认证信息；默认支持 OAuth/Bearer token refresh。"""
         if self._token_manager:

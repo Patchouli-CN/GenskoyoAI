@@ -235,6 +235,18 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.9 额度查询与 nb2 指令系统（2026-07-30，未提交）
+
+- Provider 额度接口（可选能力）：`BaseProvider.get_quota()` 默认 None；
+  `claude_provider` 实现 Moonshot 余额端点（`_balance_url()` 从 base_url 推导
+  `/v1/users/me/balance`，anthropic/v1 后缀自适应；非 Moonshot/无 key 返回 None）；
+  `ModelClient.get_quota()` 透传；`RuntimeHost.get_quota(character)` 借元租户查询。
+- nb2 指令系统（v1 仅额度查询）：`/quota` 或 `/额度`，**白名单鉴权**
+  `GSK_NB2_OWNER_QQ`（空名单 = 全部静默拒绝，fail-closed）；指令不进会话、
+  不触发租户初始化。回复形态：「当前额度：¥x（现金 ¥a，代金券 ¥b）」。
+- 测试：claude 端额度桩测（URL 推导 + 鉴权头 + None 分支）、host 透传、owner 解析。
+  基线：653 passed, 3 subtests passed。
+
 ## 8.8 Provider 校验元数据化（2026-07-30，用户提出「校验硬编码不优雅」）
 
 - 新 `core/agent/providers/specs.py`：`ProviderSpec`（requires_api_key /

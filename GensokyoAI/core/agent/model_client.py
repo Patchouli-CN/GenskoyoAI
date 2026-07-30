@@ -106,6 +106,10 @@ class ModelClient:
             ),
         )
 
+    async def get_quota(self) -> dict[str, Any] | None:
+        """查询 Provider 账户额度（可选能力，不支持返回 None）。"""
+        return await self._provider.get_quota()
+
     def _get_embedding_provider(self) -> tuple[BaseProvider, ModelConfig]:
         """获取或创建独立 Embedding Provider。"""
         embedding_model_config = self._build_embedding_config()

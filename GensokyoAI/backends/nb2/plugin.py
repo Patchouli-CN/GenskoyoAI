@@ -246,6 +246,46 @@ async def _handle_private(event: PrivateMessageEvent) -> None:
     )
 
 
+def _parse_command(text: str) -> str | None:
+    """解析 bot 指令名（含中文别名）；不认识的指令返回 None。"""
+    name = text[1:].strip().split(maxsplit=1)[0].lower()
+    return {"quota": "quota", "额度": "quota"}.get(name)
+
+
+def _format_quota(data: dict[str, Any] | None) -> str:
+    """格式化额度信息为单行文本（Moonshot 形态优先，其余原样展示）。"""
+    if data is None:
+        return "当前 Provider 不支持额度查询。"
+    available = data.get("available_balance")
+    if available is not None:
+        details = []
+        for label, key in (("现金", "cash_balance"), ("代金券", "voucher_balance")):
+            value = data.get(key)
+            if isinstance(value, int | float):
+                details.append(f"{label} ¥{value:.2f}")
+        suffix = f"（{'，'.join(details)}）" if details else ""
+        shown = f"¥{available:.2f}" if isinstance(available, int | float) else str(available)
+        return f"当前额度：{shown}{suffix}"
+    return f"额度信息：{data}"
+
+
+async def _handle_command(text: str, matcher: type[Matcher], member_qq: int | None) -> None:
+    """处理 bot 指令。v1 只开放额度查询，且仅限白名单（GSK_NB2_OWNER_QQ，空名单=全拒）。"""
+    command = _parse_command(text)
+    if command != "quota":
+        return
+    if member_qq not in _config.owner_qq:
+        logger.warning(f"[nb2] 非白名单用户 {member_qq} 尝试 /quota，已静默拒绝")
+        return
+    try:
+        data = await _require_host().get_quota(_config.character)
+    except Exception as error:
+        logger.error(f"[nb2] 额度查询失败: {error}")
+        await matcher.send(MessageSegment.text("额度查询失败了……稍后再试吧。"))
+        return
+    await matcher.send(MessageSegment.text(_format_quota(data)))
+
+
 def _lock_for(key: str) -> asyncio.Lock:
     lock = _locks.get(key)
     if lock is None:
@@ -294,8 +334,11 @@ async def _chat(
     message_id: int,
 ) -> None:
     text = text.strip()
-    if not text or text.startswith("/"):
-        return  # 忽略纯表情/图片消息与保留的 "/" 命令前缀
+    if not text:
+        return  # 忽略纯表情/图片消息
+    if text.startswith("/"):
+        await _handle_command(text, matcher, member_qq)
+        return  # 指令消息不进会话（v1 仅 /quota，白名单鉴权）
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
