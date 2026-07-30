@@ -37,6 +37,7 @@ deepseek = ["openai>=1.0.0"]
 openai_responses = ["openai>=1.0.0"]
 claude = ["anthropic>=0.20.0"]
 gemini = ["google-genai>=1.0.0"]
+nb2 = ["nonebot2[fastapi]>=2.4", "nonebot-adapter-onebot>=2.4"]
 default = ["ollama"]
 all = ["ollama", "openai>=1.0.0", "anthropic>=0.20.0", "google-genai>=1.0.0"]
 

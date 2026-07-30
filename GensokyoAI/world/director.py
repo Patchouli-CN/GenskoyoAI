@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from ..core.agent.model_client import ModelClient
+from ..core.agent.prompts import build_director_decision_prompts
 from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 from ..core.config import WorldDirectorConfig
 from ..core.events import Event, EventBus, SystemEvent
@@ -223,19 +224,6 @@ class Director:
 
     def _build_messages(self, context: DirectorContext) -> list[dict[str, str]]:
         """组装导演决策 prompt：只含公开信息，且明确告知当前被禁止的动作。"""
-        system_prompt = """你是 GensokyoWorld 多角色舞台的导演，负责决定「下一轮谁开口」。
-
-你的唯一职责是根据剧情节奏、在场角色与戏剧时机做调度，而不是替任何角色写台词。
-可选动作：
-- "continue"：让当前发言角色继续说（仅当有当前角色且其仍在场、未达连发上限时合法）。
-- "switch"：切换到候选角色中的另一位开口（next_character 必须是候选列表内的 id）。
-- "wait_user"：把话筒交还给用户（剧情该等用户回应、或没有合适角色开口时）。
-
-规则：
-- 只输出一个原始 JSON 对象；不要 Markdown 代码块、解释或任何前后缀。
-- 不要轮流点名——同一角色可以连续说，某个角色也可以一直被跳过，一切由剧情决定。
-- 你只看到公开信息；不要假设角色的私有想法。"""
-
         candidate_lines = [
             f"- {brief.actor_id}（{brief.display_name}）"
             + (f"：{brief.summary}" if brief.summary else "")
@@ -259,31 +247,15 @@ class Director:
 
         phase_instruction = self._phase_instruction(context)
 
-        user_prompt = f"""【当前场景】{context.scene_id}
-{context.scene_description}
-
-【候选角色】（switch 只能选择列表内的 id）
-{candidates_text}
-
-【当前发言角色】{current_name}
-
-【共享剧本（当前场景最近记录）】
-{context.transcript_text or "（暂无）"}
-
-【调度状态】
-{status_text}
-
-{phase_instruction}
-
-输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
-
-{{
-  "action": "continue|switch|wait_user",
-  "next_character": "候选角色 id 或 null",
-  "reason": "简短调度理由（仅调试可见，不会展示给用户）",
-  "confidence": 0.0
-}}
-"""
+        system_prompt, user_prompt = build_director_decision_prompts(
+            scene_id=context.scene_id,
+            scene_description=context.scene_description,
+            candidates_text=candidates_text,
+            current_name=current_name,
+            transcript_text=context.transcript_text,
+            status_text=status_text,
+            phase_instruction=phase_instruction,
+        )
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

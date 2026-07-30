@@ -5,6 +5,7 @@
 import asyncio
 
 from ..core.agent.model_client import ModelClient
+from ..core.agent.prompts import build_episodic_summary_prompt
 from ..core.config import MemoryConfig
 from ..core.exceptions import MemorySystemError
 from ..utils.helpers import utc_now
@@ -91,11 +92,7 @@ class EpisodicMemoryManager:
 
         text = "\n".join(conversation)
 
-        prompt = f"""请将以下对话内容压缩为一个简短的摘要，保留关键信息和重要事件：
-
-{text}
-
-摘要："""
+        prompt = build_episodic_summary_prompt(text)
 
         try:
             if not self._model_client:

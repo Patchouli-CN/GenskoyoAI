@@ -1709,6 +1709,7 @@ class RuntimeService:
         delay_seconds: int | float | None = None,
         due_at: str | None = None,
         pending_summary: str | None = None,
+        enabled: bool | None = None,
     ) -> dict[str, Any]:
         agent = self._require_agent()
         return await agent.update_initiative_timer(
@@ -1716,6 +1717,7 @@ class RuntimeService:
             delay_seconds=delay_seconds,
             due_at=due_at,
             pending_summary=pending_summary,
+            enabled=enabled,
         )
 
     async def initiative_timer_cancel(

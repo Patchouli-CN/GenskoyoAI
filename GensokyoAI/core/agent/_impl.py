@@ -896,12 +896,14 @@ class Agent:
         delay_seconds: int | float | None = None,
         due_at: str | None = None,
         pending_summary: str | None = None,
+        enabled: bool | None = None,
     ) -> dict:
         return await self._initiative_coordinator.update(
             timer_id=timer_id,
             delay_seconds=delay_seconds,
             due_at=due_at,
             pending_summary=pending_summary,
+            enabled=enabled,
         )
 
     async def cancel_initiative_timer(

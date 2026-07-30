@@ -27,6 +27,11 @@ from ..config import InitiativeTimerConfig, ThinkEngineConfig
 from ..events import Event, EventBus, SystemEvent
 from .model_client import ModelClient
 from .motivation_evaluator import MotivationProfile
+from .prompts import (
+    build_long_term_think_prompt,
+    build_pre_speak_thought_prompt,
+    build_speaking_drive_prompts,
+)
 from .types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 
 # 决策 JSON 解析相关（从原 InitiativeTimer 迁移）
@@ -235,19 +240,7 @@ class ThinkEngine:
             f"- {t.name}: {t.summary} (情感: {t.emotional_valence:.2f})" for t in walk
         )
 
-        prompt = f"""
-你现在处于静默状态，正在回顾与用户的过往。
-
-你联想到了以下话题：
-{walk_desc}
-
-请在内心思考以下问题（不要输出给用户）：
-1. 这些话题之间有什么联系？
-2. 它们唤起了你怎样的情感？
-3. 你是否有什么想主动对用户说的话或做的事？
-
-只思考，不行动。记住你是{self.character_name}。
-"""
+        prompt = build_long_term_think_prompt(self.character_name, walk_desc)
 
         logger.debug(
             f"🧠 [ThinkEngine] {self.character_name} 正在长期思考，游走话题: {[t.name for t in walk]}"
@@ -324,21 +317,9 @@ class ThinkEngine:
 
         返回思考文本（可能为空字符串）。
         """
-        thought_prompt = f"""你是 {self.character_name}。
-
-主动定时器到点了，这表示你已经决定稍后要主动开口。
-
-【待表达意图摘要】
-{pending_summary}
-
-【最近对话】
-{recent_context or "无"}
-
-请先进行说话前的内部思考：
-- 根据当前上下文重新组织这次主动发言的重点。
-- 不要判断要不要说；到点即代表要说。
-- 不要写最终要发送给用户的完整话术。
-- 只输出简短内部思考。"""
+        thought_prompt = build_pre_speak_thought_prompt(
+            self.character_name, pending_summary, recent_context
+        )
 
         logger.trace(f"[ThinkEngine] 说话前思考 prompt:\n{thought_prompt}")
 
@@ -387,49 +368,13 @@ class ThinkEngine:
             else _SPEAKING_DRIVE_DEFAULT_THRESHOLD
         )
 
-        system_prompt = f"""你是 {self.character_name}。
-
-现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内在状态评估。
-这个评估仍然必须由你以 {self.character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态，并根据四维总分独立判断你是否开口——你不需要（也不能）在结果里决定是否说话。
-
-请完成两件事：
-1. 用四个维度量化你此刻的动机（各 0~1）：
-   expression_drive（表达欲：思考内容本身催生的表达冲动）、
-   emotional_charge（情感驱动力：情绪是否需要一个出口）、
-   relational_need（关系需求：是否想拉近/回应对方）、
-   situational_relevance（情景相关性：此刻开口是否合时宜）。
-2. 写一句「如果此刻主动开口，你最可能说的话」（message）——
-   就写自然的一句，不要旁白、不要解释、不要角色引号；
-   它会作为候选发言或稍后主动发言的意图摘要，真正的表达仍以它为准。
-
-另外输出：
-- delay_seconds：建议系统多久后（秒，{min_delay_seconds}~{max_delay_seconds}）安排这次主动开口。
-- enthusiasm（0~1 热情度）：越高表示你越想尽快说，系统会把等待时间按比例缩短；不确定可填 0.5。
-- reason：一句话说明这份动机来自哪里。
-- 只输出一个原始 JSON 对象；不要输出 Markdown 代码块、角色引号、解释文本或任何前后缀。
-"""
-
-        user_prompt = f"""当前触发内容：
-{trigger_text}
-
-近期对话上下文：
-{context_text}
-
-请根据以上上下文提交评估。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
-
-{{
-  "message": "如果此刻主动开口你最可能说的一句话",
-  "delay_seconds": 120,
-  "reason": "简短理由",
-  "enthusiasm": 0.5,
-  "motivation": {{
-    "expression_drive": 0.0,
-    "emotional_charge": 0.0,
-    "relational_need": 0.0,
-    "situational_relevance": 0.0
-  }}
-}}
-"""
+        system_prompt, user_prompt = build_speaking_drive_prompts(
+            self.character_name,
+            trigger_text,
+            context_text,
+            min_delay_seconds,
+            max_delay_seconds,
+        )
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},

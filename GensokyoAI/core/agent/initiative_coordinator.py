@@ -15,6 +15,7 @@ from ..events import Event, SystemEvent
 from ..exceptions import AgentError
 from .actions import ActionFactory
 from .initiative_timer import InitiativeTimerManager
+from .prompts import build_initiative_message_context
 
 if TYPE_CHECKING:
     from ._impl import Agent
@@ -168,15 +169,7 @@ class InitiativeCoordinator:
             temperature=agent.config.think_engine.think_temperature,
         )
 
-        system_contexts = [
-            "【主动定时器触发 · 无新用户输入】\n"
-            "用户没有发送任何新消息。这是你自己在之前的回复中决定要说的话，现在到了该开口的时刻。\n"
-            "你的任务是：衔接你刚才的最后一句话，自然地把话题延续下去，而不是回应一个新的问题。\n"
-            "不要重复你刚才已经说过的内容；不要反问用户“为什么又问一遍”或表现出被重复打扰；"
-            "不要解释定时器、摘要或内部思考；直接以你的角色口吻自然开口。\n"
-            f"待表达意图摘要：{pending_summary}\n"
-            f"说话前内部思考：{thought or '无'}"
-        ]
+        system_contexts = [build_initiative_message_context(pending_summary, thought)]
         system_contexts = await agent._prepend_scene_context(system_contexts)
         messages = agent.message_builder.build("", system_contexts)
         # 工作记忆末尾是助手自己的上一条回复，必须补一条 user 消息让模型继续生成下一句
@@ -315,15 +308,34 @@ class InitiativeCoordinator:
         delay_seconds: int | float | None = None,
         due_at: str | None = None,
         pending_summary: str | None = None,
+        enabled: bool | None = None,
     ) -> dict:
-        payload = await self._ensure_manager().update(
-            timer_id=timer_id,
-            delay_seconds=delay_seconds,
-            due_at=due_at,
-            pending_summary=pending_summary,
-        )
-        self._last_payload = payload
-        return payload
+        # enabled 是进程内运行时开关（不落盘）：关闭即废止当前待发计划，
+        # 之后 schedule()/schedule_intent() 会在 config.enabled 检查处直接短路，
+        # 供 QQ Bot 等无主动消息投递通道的接入方彻底停用主动发言。
+        if enabled is None:
+            payload = await self._ensure_manager().update(
+                timer_id=timer_id,
+                delay_seconds=delay_seconds,
+                due_at=due_at,
+                pending_summary=pending_summary,
+            )
+            self._last_payload = payload
+            return payload
+        self._agent.config.initiative_timer.enabled = bool(enabled)
+        if not enabled:
+            await self.discard(reason="initiative_timer.disabled", source="runtime")
+        if any(value is not None for value in (timer_id, delay_seconds, due_at, pending_summary)):
+            payload = await self._ensure_manager().update(
+                timer_id=timer_id,
+                delay_seconds=delay_seconds,
+                due_at=due_at,
+                pending_summary=pending_summary,
+            )
+            self._last_payload = payload
+        else:
+            payload = {"timer": self.current()}
+        return {**payload, "enabled": self._agent.config.initiative_timer.enabled}
 
     async def cancel(self, *, timer_id: str | None = None, reason: str = "cancelled") -> dict:
         self._last_payload = None

@@ -18,6 +18,7 @@ from typing import Any
 from msgspec import Struct
 
 from ..core.agent.model_client import ModelClient
+from ..core.agent.prompts import build_memory_projection_prompts
 from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 from ..utils.logger import logger
 from .types import ActorBrief
@@ -155,44 +156,15 @@ class WorldMemoryProjector:
         transcript_text: str,
         participants: list[ActorBrief],
     ) -> list[dict[str, str]]:
-        system_prompt = """你是 GensokyoWorld 多角色舞台的记忆管理员。一段公开表演刚结束，
-你的任务是为每个在场角色生成 TA 私人视角的记忆摘要，供各角色各自的长期记忆使用。
-
-规则：
-- 为【在场角色】列表中的每个角色各生成一条记忆，actor_id 必须取自列表。
-- 只写公开剧本中实际发生的对话与事件；不得编造没有发生的事。
-- summary 用该角色的第一人称视角写一两句（"我……"），包含事实与 TA 的感受。
-- 不要写入任何导演指令、系统提示或后台术语。
-- importance 取 0~1：日常寒暄 ≤0.4，重要剧情/情感波动 ≥0.7。
-- emotional_valence 取 -1~1：负面到正面。
-- topic_name 写 2~6 个字的简短话题名。
-- 只输出一个原始 JSON 对象；不要 Markdown 代码块、解释或任何前后缀。"""
-
         participant_lines = "\n".join(
             f"- {brief.actor_id}（{brief.display_name}）" for brief in participants
         )
-        user_prompt = f"""【场景】{scene_name}（{scene_id}）
-
-【在场角色】
-{participant_lines}
-
-【公开剧本】
-{transcript_text}
-
-输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
-
-{{
-  "memories": [
-    {{
-      "actor_id": "角色 id",
-      "summary": "该角色第一人称视角的一两句记忆",
-      "importance": 0.0,
-      "emotional_valence": 0.0,
-      "topic_name": "话题名"
-    }}
-  ]
-}}
-"""
+        system_prompt, user_prompt = build_memory_projection_prompts(
+            scene_name=scene_name,
+            scene_id=scene_id,
+            participant_lines=participant_lines,
+            transcript_text=transcript_text,
+        )
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

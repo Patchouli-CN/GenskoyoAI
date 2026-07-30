@@ -27,6 +27,7 @@ import ayafileio
 import msgspec
 
 from ..core.agent.model_client import ModelClient
+from ..core.agent.prompts import build_topic_relevance_prompt
 from ..core.config import TopicGenerationConfig
 from ..core.migrations import (
     make_memory_store_payload,
@@ -387,15 +388,7 @@ class TopicAwareStore:
             f"{i + 1}. 【{t.name}】{t.summary[:80]}" for i, t in enumerate(candidates)
         )
 
-        prompt = f"""判断以下对话内容与各话题的相关性，给每个话题打 0-10 分。
-
-内容：
-{content}
-
-话题列表：
-{topics_desc}
-
-只返回 JSON，格式：{{"1": 9, "2": 3}}"""
+        prompt = build_topic_relevance_prompt(content, topics_desc)
 
         try:
             response = await model_client.chat(

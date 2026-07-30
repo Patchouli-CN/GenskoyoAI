@@ -199,12 +199,51 @@ uv run pyright <改动的产品文件>        # 类型检查
 - 新增 world 相关代码放 `GensokyoAI/world/`；测试放 `tests/test_world_*.py`。
 - 引用文件用真实存在的角色卡（`characters/zh_cn/` 下，注意没有 PatchouliKnowledge，用 RemiliaScarlet 等）。
 
-## 8. 未提交改动清单（对话欲定稿重构，2026-07-30）
+## 8. 未提交改动清单（NoneBot2 QQ 适配器，2026-07-30）
 
-已改（M）：`GensokyoAI/core/agent/{think_engine,action_planner,initiative_coordinator,initiative_timer,motivation_evaluator,_impl}.py`、`GensokyoAI/core/{config_loader,config_merge,config_schema,config_validator}.py`、`GensokyoAI/runtime/{rpc,service}.py`、`GensokyoAI/backends/console/commands.py`、`config/default.yaml`、`docs/{runtime_api,user_guide,todo}.md`、`docs/en/{runtime_api,user_guide}.md`、`tests/{test_think_engine,test_initiative_timer,test_runtime_dependencies,test_console_cli_commands}.py`
-已删（D）：`GensokyoAI/core/agent/drive_accumulator.py`、`tests/test_drive_accumulator.py`
-另（不入库，.gitignore）：`config/local.yaml`、`config/local_world.yaml` 的 hesitation 死键已清
+**功能**：新增 NoneBot2 QQ 适配器（OneBot 11 反向 WS 收消息）。**架构关键决策（用户拍板）**：
+适配器与 Runtime 同进程，经 `RuntimeHost`（backends/nb2/runtime_host.py）以网络主体
+上下文进程内驱动 `RuntimeService` 多租户路径（驱动方式同 tests/test_runtime_multi_user.py
+的 `set_current_principal`），不走 HTTP/WS——租户隔离、资源闸、幂等、revision 全保留，
+零 socket 零鉴权配置。群/私聊映射 `agent_id = qq-group-<群号>` / `qq-user-<QQ号>`；
+幂等键 `nb2:<botQQ>:<message_id>`。主动消息：`create_event_subscription` 返回的
+asyncio.Queue 进程内推送（每租户一队列，免路由）；`GSK_NB2_INITIATIVE=false` 时改用
+`initiative_timer.update {enabled:false}` 停用租户主动定时器。
 
-建议 commit message（用户已授权改完直接提交并 push）：
-`refactor(initiative): 对话欲改为 ThinkEngine 四维打分 + 阈值二元判断，删除累积器与犹豫链`
+**runtime 加法改动**（协议主版本内合法加法，params_schema 签名驱动自动生效）：
+`initiative_timer.update` 新增 `enabled` 进程内开关（不落盘；false 废止待发计划并短路
+后续调度；service.py / _impl.py / initiative_coordinator.py 三处透传）。
+
+**提示词集中化（用户拍板）**：全部提示词收进 `core/agent/prompts.py` 的 `build_*_prompt`
+纯函数（文本与逻辑分家；JSON 契约在 docstring 注明解析方）。同时完成反自说自话提示词
+修复（生成上下文 + 说话前思考 + 对话欲评估三处：用户未回应时不得虚构用户回应、不得
+独自推进话题，message 必须是新拍，situational_relevance 打低）。`message_builder` 与
+provider 转换属组装逻辑，不搬。
+
+新增（A）：`GensokyoAI/backends/nb2/{__init__,runtime_host,store,config,plugin,__main__}.py`、
+`tests/test_nb2_adapter.py`、`docs/nb2_adapter.md`、`tmp/nb2.env.example`
+已改（M）：`GensokyoAI/runtime/service.py`、`GensokyoAI/core/agent/{_impl,initiative_coordinator,think_engine,prompts}.py`、
+`GensokyoAI/world/{director,initiative,memory_projector}.py`、`GensokyoAI/memory/{topic_store,episodic}.py`、
+`tests/test_initiative_timer.py`、`docs/runtime_api.md`、`docs/en/runtime_api.md`、
+`pyproject.toml`（nb2 extra）、`.gitignore`（.env / .env.* / nb2_data）、`docs/todo.md`（本节）
+已删（D）：`GensokyoAI/backends/nb2/client.py`（HTTP/WS 版客户端，被进程内方案取代，未曾入库）
+
+验证基线：610 passed, 3 subtests passed；ruff / pyright 全绿；
+`python -m GensokyoAI.backends.nb2` 冒烟通过（插件加载、OneBot V11 注册、uvicorn 8080）。
+未做：NapCat 真连 QQ 端到端（需真实 QQ 号）。
+
+建议 commit message（待用户授权后提交）：
+`feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
+
+## 8.5 外部审计待办（2026-07-30 用户转述，后置处理）
+
+1. **World 自定义配置权限可绕过**（待修）：`_init_tenant_world`（runtime/service.py:281）
+   只对非 admin 拦截 `config_path`，而 `_init_tenant_agent`（:238）拦
+   `config_path/character_path/model_overrides/embedding_overrides` 四项。
+   修复时需核对 world.init 参数全集与下游装配链路，补齐同类闸门。
+2. **agent_id 契约不一致**（待修）：`_init_tenant_agent`(:249) 与 `_init_tenant_world`(:289)
+   在 agent_id 缺失时静默 `str(uuid4())` 生成；而 `_NETWORK_AGENT_ID_EXEMPT_METHODS`
+   （runtime/rpc.py:360）只豁免 `agent.init/agent.list/init`——`world.init` 在 schema
+   里 agent_id 是 required，行为上却自动生成，文档、schema、行为三方不一致。
+   修复方向二选一：world.init 加入豁免集（保持自动生成并同步文档）或落实 required 校验。
 

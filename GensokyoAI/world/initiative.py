@@ -14,6 +14,7 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+from ..core.agent.prompts import build_world_initiative_prompts
 from ..core.agent.types import ProviderCapability
 from ..core.dialogue_loop import InitiativePlan
 from ..core.initiative_scheduler import InitiativeScheduler
@@ -128,34 +129,11 @@ class WorldInitiativeLoop:
             user_scene, limit=world._world_config.transcript.context_entries
         )
 
-        system_prompt = """你是 GensokyoWorld 多角色舞台的节奏导演。一段表演刚结束，
-你要决定这个世界是否、以及何时应该再次主动推动剧情。
-
-判断原则：
-- 剧情有悬而未决的钩子、角色明显有话没说完、情感张力未释放 → 安排（should_schedule=true）。
-- 话题已自然结束、氛围适合安静 → 不安排（should_schedule=false）。
-- 即使安排，也不要锁定具体由谁开口——到点时场景和在场角色可能已经变化。
-- summary 只写世界级意图摘要（到点要围绕什么推动），不要写任何角色的具体台词。
-- delay_seconds 给 30~600 之间的整数：钩子越强等待越短。
-- enthusiasm 取 0~1：世界此刻多想继续剧情。
-- 只输出一个原始 JSON 对象；不要 Markdown 代码块、解释或任何前后缀。"""
-
-        user_prompt = f"""【当前场景】{user_scene}
-【在场角色】{"、".join(candidates) if candidates else "（无）"}
-
-【最近公开剧本】
-{transcript_text or "（暂无）"}
-
-输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
-
-{{
-  "should_schedule": true/false,
-  "delay_seconds": 120,
-  "summary": "世界级意图摘要（到点要围绕什么推动）",
-  "reason": "简短理由",
-  "enthusiasm": 0.5
-}}
-"""
+        system_prompt, user_prompt = build_world_initiative_prompts(
+            user_scene=user_scene,
+            candidates_text="、".join(candidates) if candidates else "（无）",
+            transcript_text=transcript_text,
+        )
         options: dict[str, Any] = {
             "temperature": self._temperature,
             "num_predict": self._max_tokens,

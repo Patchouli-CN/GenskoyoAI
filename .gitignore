@@ -43,3 +43,8 @@ htmlcov/
 *.bak
 .mypy_cache/
 runtime_data/
+
+# NoneBot2 适配器
+.env
+.env.*
+nb2_data/

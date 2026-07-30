@@ -446,6 +446,7 @@ Field rules:
 - `delay_seconds` and `due_at` are mutually exclusive.
 - `pending_summary` is editable only when `initiative_timer.allow_frontend_edit_summary` is `true`.
 - After editing, `user_modified` becomes `true` and `generation` is refreshed; old async tasks automatically become invalid.
+- `enabled` is an in-process runtime switch independent of the timer fields (never persisted): `false` immediately discards any pending plan and fully disables initiative speaking for that Agent (subsequent scheduling short-circuits at the `config.enabled` check — no more drive-evaluation calls or initiative messages), `true` re-enables it; the response echoes the current `enabled` value. Typical use: integrations without a proactive-message delivery channel (e.g. a QQ bot) call `{"method": "initiative_timer.update", "params": {"enabled": false}}` once after `agent.init` (the network path also requires `agent_id` and `session_id`).
 
 `initiative_timer.cancel` cancels and discards the stored summary:
 

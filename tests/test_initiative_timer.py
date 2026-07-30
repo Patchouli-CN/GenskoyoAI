@@ -350,5 +350,105 @@ class InitiativeCoordinatorDriveTests(unittest.TestCase):
         asyncio.run(run())
 
 
+class InitiativeCoordinatorEnabledTests(unittest.TestCase):
+    """enabled 运行时开关：无主动消息投递通道的接入方（如 QQ Bot）彻底停用主动发言。"""
+
+    def _make_drive_agent(self, event_bus: EventBus, decision):
+        from types import SimpleNamespace
+
+        class _FakeThinkEngine:
+            def __init__(self, drive_decision):
+                self._decision = drive_decision
+
+            async def evaluate_speaking_drive(self, trigger_text, recent, **kwargs):
+                return self._decision
+
+        return SimpleNamespace(
+            _think_engine=_FakeThinkEngine(decision),
+            working_memory=WorkingMemoryManager(max_turns=10),
+            config=SimpleNamespace(
+                initiative_timer=InitiativeTimerConfig(),
+                debug_silent_output=False,
+            ),
+            event_bus=event_bus,
+            character_name="测试角色",
+        )
+
+    def test_update_enabled_toggles_runtime_switch_and_blocks_schedule(self):
+        from types import SimpleNamespace
+
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+
+        async def run():
+            agent = SimpleNamespace(
+                config=SimpleNamespace(initiative_timer=InitiativeTimerConfig())
+            )
+            coordinator = InitiativeCoordinator(agent)
+
+            result = await coordinator.update(enabled=False)
+            self.assertFalse(result["enabled"])
+            self.assertIsNone(result["timer"])
+            self.assertFalse(agent.config.initiative_timer.enabled)
+            # 关闭后 schedule() 在 config.enabled 检查处直接短路，不触及 ThinkEngine
+            self.assertIsNone(await coordinator.schedule("任意回复"))
+
+            result = await coordinator.update(enabled=True)
+            self.assertTrue(result["enabled"])
+            self.assertTrue(agent.config.initiative_timer.enabled)
+
+        asyncio.run(run())
+
+    def test_disabling_discards_pending_timer(self):
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+        from GensokyoAI.core.agent.think_engine import SpeakingDriveDecision
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                decision = SpeakingDriveDecision(
+                    want_speak=True,
+                    total_drive=0.9,
+                    message="待表达的意图",
+                    delay_seconds=120,
+                    enthusiasm=0.0,
+                    reason="测试",
+                )
+                coordinator = InitiativeCoordinator(self._make_drive_agent(event_bus, decision))
+                payload = await coordinator.schedule("刚才的回复")
+                self.assertIsNotNone(payload)
+
+                result = await coordinator.update(enabled=False)
+                self.assertFalse(result["enabled"])
+                self.assertIsNone(coordinator.current())  # 待发计划已废止
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
+    def test_disabled_config_blocks_schedule_intent_without_model_call(self):
+        """manager 层同样短路：enabled=False 时不创建定时器、不调用模型。"""
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                model_client = _FakeModelClient()
+                manager = InitiativeTimerManager(
+                    config=InitiativeTimerConfig(enabled=False),
+                    think_engine=_make_think_engine(model_client, event_bus),
+                    event_bus=event_bus,
+                    character_name="测试角色",
+                    working_memory=WorkingMemoryManager(max_turns=10),
+                )
+                payload = await manager.schedule_intent(summary="测试", delay_seconds=60)
+                self.assertIsNone(payload)
+                self.assertEqual(model_client.call_count, 0)
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
+
 if __name__ == "__main__":
     unittest.main()

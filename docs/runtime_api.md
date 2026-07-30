@@ -454,6 +454,7 @@ AI 决定不发言时系统尊重该决定——旧的 `initiative_timer.fallbac
 - `delay_seconds` 与 `due_at` 二选一，不可同时提供。
 - `pending_summary` 只有在配置 `initiative_timer.allow_frontend_edit_summary` 为 `true` 时可编辑。
 - 编辑后 `user_modified` 会变为 `true`，并刷新 `generation`，旧异步任务自动失效。
+- `enabled` 是独立于定时器字段的进程内运行时开关（不落盘）：传 `false` 立即废止当前待发计划并彻底停用该 Agent 的主动发言（之后调度在 `config.enabled` 检查处短路，不再产生对话欲评估调用与主动消息），传 `true` 恢复；响应回显 `enabled` 当前值。典型用途：QQ Bot 等没有主动消息投递通道的接入方在 `agent.init` 后调用一次 `{"method": "initiative_timer.update", "params": {"enabled": false}}`（网络路径需同传 `agent_id` 与 `session_id`）。
 
 `initiative_timer.cancel` 取消并丢弃积存摘要：
 
