@@ -66,9 +66,9 @@ cp tmp/nb2.env.example .env
 
 `.env` 与 `nb2_data/` 已加入 `.gitignore`，不会入库。
 模型与 API key 沿用项目根的 `config/local.yaml`（与 CLI 相同），无需重复配置。
-日志默认走 GensokyoAI 体系并显示到控制台——适配器进程会强制 `GENSOKYOAI_LOG_CONSOLE=true`
-（`local.yaml` 里为 CLI TUI 关闭的 `log_console: false` 不影响适配器）；日志级别沿用
-`local.yaml` 的 `log_level`，也可用 `GENSOKYOAI_LOG_LEVEL` 环境变量覆盖。
+日志走 GensokyoAI 体系（格式 + 第三方噪音过滤）；是否显示到控制台与级别沿用
+`local.yaml` 的 `log_console` / `log_level`（控制台盯梢时保持 `log_console: true` 即可），
+也可用 `GENSOKYOAI_LOG_CONSOLE` / `GENSOKYOAI_LOG_LEVEL` 环境变量临时覆盖。
 
 ## 启动
 
