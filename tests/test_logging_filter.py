@@ -3,10 +3,13 @@
 loguru 级别数值：TRACE=5, DEBUG=10, INFO=20, SUCCESS=25, WARNING=30, ERROR=40。
 """
 
+import logging as std_logging
 import unittest
 from types import SimpleNamespace
 
-from GensokyoAI.utils.logger import _third_party_noise_filter
+from loguru import logger
+
+from GensokyoAI.utils.logger import LoguruHandler, _third_party_noise_filter
 
 
 def _record(name: str | None, level_no: int):
@@ -37,6 +40,33 @@ class ThirdPartyNoiseFilterTests(unittest.TestCase):
 
     def test_missing_name_kept(self):
         self.assertTrue(_third_party_noise_filter(_record(None, 10)))
+
+
+class UvicornShutdownNoiseTests(unittest.TestCase):
+    """LoguruHandler 定点丢弃 uvicorn 的 Ctrl+C ASGI 堆栈（退出噪音）。"""
+
+    def _record_with_exc(self, name: str, exc_info) -> std_logging.LogRecord:
+        return std_logging.LogRecord(
+            name, std_logging.ERROR, __file__, 1, "Exception in ASGI application", (), exc_info
+        )
+
+    def test_keyboardinterrupt_asgi_noise_dropped(self):
+        received = []
+        handler_id = logger.add(lambda message: received.append(str(message)), level=0)
+        try:
+            handler = LoguruHandler()
+            handler.emit(
+                self._record_with_exc(
+                    "uvicorn.error", (KeyboardInterrupt, KeyboardInterrupt(), None)
+                )
+            )
+            self.assertEqual(received, [])
+
+            # 真实的 uvicorn 错误不受影响
+            handler.emit(self._record_with_exc("uvicorn.error", None))
+            self.assertEqual(len(received), 1)
+        finally:
+            logger.remove(handler_id)
 
 
 if __name__ == "__main__":

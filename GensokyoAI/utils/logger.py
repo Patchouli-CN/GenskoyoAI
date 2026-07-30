@@ -52,6 +52,16 @@ class LoguruHandler(std_logging.Handler):
         ):
             return
 
+        # Windows 下 Ctrl+C 经信号处理器抛 KeyboardInterrupt，uvicorn 会以
+        # 「Exception in ASGI application」刷整段堆栈——退出噪音，直接丢弃
+        exc_type = record.exc_info[0] if record.exc_info else None
+        if (
+            record.name == "uvicorn.error"
+            and exc_type is not None
+            and issubclass(exc_type, KeyboardInterrupt)
+        ):
+            return
+
         # 把其他库的 DEBUG 降级为我们的 TRACE，避免标准库 DEBUG 刷屏
         if record.levelno == std_logging.DEBUG:
             level = "TRACE"

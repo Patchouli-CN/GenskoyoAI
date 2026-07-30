@@ -47,6 +47,7 @@ cp tmp/nb2.env.example .env
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `DRIVER` / `HOST` / `PORT` | fastapi / 127.0.0.1 / 8080 | NoneBot 自身监听（反向 WS 服务） |
+| `LOG_LEVEL` | `WARNING` | nonebot 自身日志级别（它自己的 sink）；适配器日志走 GensokyoAI 体系 |
 | `GSK_NB2_CHARACTER` | `KirisameMarisa` | 所有群 / 私聊共用的角色 |
 | `GSK_NB2_DATA_DIR` | `nb2_data` | 适配器数据目录（群→会话映射表） |
 | `GSK_NB2_ROOT_DIR` | 当前工作目录 | GensokyoAI 项目根（characters/config 解析基准） |
