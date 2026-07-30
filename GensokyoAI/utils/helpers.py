@@ -115,6 +115,16 @@ def split_reply_segments(text: str, max_segments: int = 5) -> list[str]:
     return parts[: max_segments - 1] + ["\n".join(parts[max_segments - 1 :])]
 
 
+def sanitize_display_name(name: str, max_chars: int = 24) -> str:
+    """净化 QQ 昵称/群名片用于提示词注入：去换行与各类括号、限长。
+
+    群名片是用户可控文本，直接拼进提示词有注入风险（伪造指令/标记），
+    这里只保留纯展示字符。
+    """
+    cleaned = re.sub(r"[\r\n【\[\]】<>「」]+", " ", name).strip()
+    return cleaned[:max_chars]
+
+
 _RP_ACTION_PATTERN = re.compile(r"\*[^*\n]*\*")
 
 

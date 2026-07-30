@@ -53,6 +53,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_INITIATIVE` | `true` | 角色主动发言；`false` 则停用各租户主动定时器 |
 | `GSK_NB2_SPLIT_REPLY` | `true` | 回复按行拆成多条短消息发送（QQ 群聊风格） |
 | `GSK_NB2_STRIP_RP_STYLE` | `true` | 发送前清洗 RP 标记（`*动作*`、`「」`），确定性生效 |
+| `GSK_NB2_SENDER_LABEL` | `true` | 群聊消息注入 `【昵称】` 说话人标记（私聊不标） |
 | `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
 
@@ -84,6 +85,9 @@ python -m GensokyoAI.backends.nb2
 
 - **触发**：群聊需 @bot（或回复 bot 的消息）；私聊全部响应。纯表情 / 图片不回；
   `/` 前缀保留给将来的 bot 命令，当前忽略。
+- **说话人归属**：群聊多对单场景下，消息正文自动带 `【群名片/昵称】` 前缀
+  （注入前经 `sanitize_display_name` 净化：去换行/括号、限长 24，防群名片伪造指令），
+  角色因此能分清每轮是谁在说、并用昵称称呼对方；私聊不加标记。
 - **回复**：默认按 QQ 群聊风格——`GSK_NB2_EXTRA_PROMPT` 注入当轮要求
   （简短、口语、每句一行、不写动作、不用「」），发送前再经 `strip_rp_style`
   确定性清洗残留的 `*动作*` 与「」（提示词压不住角色卡的 RP 惯性时兜底），

@@ -26,6 +26,8 @@ DEFAULT_EXTRA_PROMPT = (
     "每句话单独占一行（系统会按行拆成多条消息依次发送）；"
     "不要用 *星号* 或括号描写动作、表情、心理活动；不要用「」等台词引号，直接写说的话；"
     "一次回复最多三句话。"
+    "群聊消息开头的【昵称】是说话人标记，让你分清谁在说话（私聊没有这个标记）；"
+    "你可以用昵称称呼对方，但自己的回复不要带【】标记。"
 )
 
 
@@ -41,6 +43,7 @@ class Nb2Config:
     extra_prompt: str = DEFAULT_EXTRA_PROMPT  # 随每条回复注入 system_contexts 的附加要求
     split_reply: bool = True  # 回复按行拆成多条短消息发送（配合 extra_prompt 的按行风格）
     strip_rp_style: bool = True  # 发送前清洗 RP 风格标记（*动作*、「」引号），不依赖模型配合
+    sender_label: bool = True  # 群聊消息注入【昵称】说话人标记（多对单会话的归属）
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -61,4 +64,5 @@ class Nb2Config:
             extra_prompt=((get("GSK_NB2_EXTRA_PROMPT") or "").strip() or DEFAULT_EXTRA_PROMPT),
             split_reply=_parse_bool(get("GSK_NB2_SPLIT_REPLY"), cls.split_reply),
             strip_rp_style=_parse_bool(get("GSK_NB2_STRIP_RP_STYLE"), cls.strip_rp_style),
+            sender_label=_parse_bool(get("GSK_NB2_SENDER_LABEL"), cls.sender_label),
         )

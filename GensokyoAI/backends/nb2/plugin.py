@@ -24,7 +24,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
-from ...utils.helpers import split_reply_segments, strip_rp_style
+from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
 from .config import Nb2Config
 from .runtime_host import RuntimeHost, RuntimeRpcError
@@ -99,6 +99,7 @@ async def _on_startup() -> None:
         f"主动发言={'开' if _config.initiative else '关'}, "
         f"群白名单={sorted(_config.group_whitelist) or '不限'}, "
         f"分段回复={'开' if _config.split_reply else '关'}, "
+        f"说话人标记={'开' if _config.sender_label else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -122,7 +123,17 @@ async def _handle_group(event: GroupMessageEvent) -> None:
         return
     agent_id = f"qq-group-{event.group_id}"
     _targets[agent_id] = ("group", event.group_id)
-    await _chat(event, group_chat, key=f"group:{event.group_id}", agent_id=agent_id)
+    sender_name = None
+    if _config.sender_label:
+        raw_name = event.sender.card or event.sender.nickname or str(event.user_id)
+        sender_name = sanitize_display_name(raw_name)
+    await _chat(
+        event,
+        group_chat,
+        key=f"group:{event.group_id}",
+        agent_id=agent_id,
+        sender_name=sender_name,
+    )
 
 
 @private_chat.handle()
@@ -166,10 +177,20 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
     return session_id, revision
 
 
-async def _chat(event: MessageEvent, matcher: type[Matcher], *, key: str, agent_id: str) -> None:
+async def _chat(
+    event: MessageEvent,
+    matcher: type[Matcher],
+    *,
+    key: str,
+    agent_id: str,
+    sender_name: str | None = None,
+) -> None:
     text = event.get_message().extract_plain_text().strip()
     if not text or text.startswith("/"):
         return  # 忽略纯表情/图片消息与保留的 "/" 命令前缀
+    if sender_name:
+        # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
+        text = f"【{sender_name}】{text}"
     reply = ""
     async with _lock_for(key):
         try:
