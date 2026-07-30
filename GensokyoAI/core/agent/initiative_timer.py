@@ -283,15 +283,19 @@ class InitiativeTimerManager:
         )
         return state
 
-    @staticmethod
-    def _apply_enthusiasm(base_delay: int, enthusiasm: float | None) -> int:
-        """根据热情度调整等待时间。"""
+    def _apply_enthusiasm(self, base_delay: int, enthusiasm: float | None) -> int:
+        """根据热情度调整等待时间，再按配置的 min/max_delay_seconds 收敛。
+
+        越想说越快说（delay × (1 - enthusiasm)）；上下限必须走配置而非
+        硬编码——硬编码 [30, 600] 会把高热情组合全部钳平成固定 30s，
+        也让配置的 max_delay_seconds 永远失效。
+        """
         if enthusiasm is None:
             logger.trace("[InitiativeTimer] 未提供热情度，不调整延迟")
             return base_delay
         enthusiasm = max(0.0, min(1.0, float(enthusiasm)))
         adjusted = int(base_delay * (1.0 - enthusiasm))
-        result = max(30, min(600, adjusted))
+        result = self._clamp_delay(adjusted)
         logger.trace(
             f"[InitiativeTimer] 热情度调整: base={base_delay}s, enthusiasm={enthusiasm:.2f}, "
             f"adjusted={adjusted}s, clamped={result}s"
