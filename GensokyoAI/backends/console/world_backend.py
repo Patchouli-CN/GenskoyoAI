@@ -43,6 +43,9 @@ def _event_dict(data: Any) -> dict[str, Any]:
 class WorldConsoleBackend(BaseBackend):
     """World 控制台后端 - 每个角色用自己的名字发言，世界主动推进实时显示"""
 
+    # /help 中隐藏的单角色专属命令（共享 help 实现读取此属性过滤）
+    hidden_command_names = frozenset(_AGENT_ONLY_COMMANDS)
+
     def __init__(self, world: GensokyoWorld):
         self.world = world
         self._stream_handler: Callable | None = None
@@ -140,11 +143,11 @@ class WorldConsoleBackend(BaseBackend):
     # ==================== 生命周期 ====================
 
     async def start(self) -> None:
-        """启动：World 开场并显示欢迎面板"""
+        """启动：先显示欢迎面板，再让 World 开场（面板不被开场台词顶上去）"""
+        self._show_welcome_panel()
         await self.world.start()
         self._running = True
         logger.info("World 控制台后端已启动")
-        self._show_welcome_panel()
 
     async def stop(self) -> None:
         """停止：保存存档并关停 World"""

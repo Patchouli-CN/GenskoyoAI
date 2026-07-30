@@ -142,6 +142,8 @@ async def cmd_help(ctx: CommandContext) -> CommandResult:
     backend: ConsoleBackend = ctx.backend_inst
 
     commands = backend.cmd_executor.list_commands()
+    # World 等模式可声明本模式不可用的命令，帮助里不再展示（避免误导）
+    hidden = frozenset(getattr(backend, "hidden_command_names", ()))
 
     help_text = """
 [bold cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/]
@@ -151,7 +153,7 @@ async def cmd_help(ctx: CommandContext) -> CommandResult:
 [bold yellow]系统命令:[/]
 """
     for cmd in commands:
-        if cmd.type == CommandType.SYSTEM:
+        if cmd.type == CommandType.SYSTEM and cmd.name not in hidden:
             aliases = f" ({', '.join(cmd.aliases)})" if cmd.aliases else ""
             help_text += f"  • <cmd>{cmd.name}</cmd>, /{cmd.name}{aliases} - {cmd.description}\n"
             help_text += f"    [dim]用法: {cmd.usage}[/]\n"

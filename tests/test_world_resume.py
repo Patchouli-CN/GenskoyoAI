@@ -166,6 +166,24 @@ class WorldResumeTests(unittest.IsolatedAsyncioTestCase):
             # 单角色目录不被创建
             self.assertFalse((Path(tmp) / "雾雨魔理沙").exists())
 
+    async def test_resumed_world_start_waits_for_user_without_opening(self):
+        """resume 恢复的世界 start() 不再主动开场：剧本零新增，直接等待用户。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_characters(tmp)
+            world_session, _ = await self._create_and_play(tmp)
+
+            _ResumeProvider.reset()
+            world2 = await GensokyoWorld.resume(_make_config(tmp), world_session)
+            self.addAsyncCleanup(world2.shutdown)
+
+            def total_entries() -> int:
+                return sum(world2.state_snapshot().transcript_counts.values())
+
+            before = total_entries()
+            await world2.start()
+            assert total_entries() == before
+            assert world2.waiting_for_user is True
+
     async def test_resume_restores_stage_transcript_and_actor_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
             _write_characters(tmp)

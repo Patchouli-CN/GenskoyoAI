@@ -117,6 +117,8 @@ class GensokyoWorld:
         self._current_actor_id: str | None = None
         self._started = False
         self._shutdown = False
+        # resume() 恢复的世界置 True：start() 时不再主动开场，尊重存档等待状态
+        self._resumed = False
         # resume() 恢复时的 roster/会话诊断（create 时为空）
         self.resume_diagnostics: list[WorldPersistenceDiagnostic] = []
 
@@ -380,6 +382,7 @@ class GensokyoWorld:
             record.current_actor_id if record.current_actor_id in actors else None
         )
         world._waiting_for_user = record.waiting_for_user
+        world._resumed = True
         # 已投影过的旧剧本不重复投影：游标直接放到各场景末尾
         world._projection_cursors = {
             scene_id: len(entries) for scene_id, entries in record.transcript.items()
@@ -520,13 +523,21 @@ class GensokyoWorld:
     # ==================== 生命周期 ====================
 
     async def start(self) -> None:
-        """开场：protagonist 是角色则主动开场并进入导演调度；是用户则等待。"""
+        """开场：protagonist 是角色则主动开场并进入导演调度；是用户则等待。
+
+        resume 恢复的世界不再主动开场——舞台与剧本已从存档还原，
+        尊重存档的等待状态，直接进入等待用户输入。
+        """
         if self._started or self._shutdown:
             return
         self._started = True
         protagonist = self._world_config.protagonist
         async with self._turn_lock:
-            if protagonist != USER_OCCUPANT_ID and protagonist in self._actors:
+            if (
+                not self._resumed
+                and protagonist != USER_OCCUPANT_ID
+                and protagonist in self._actors
+            ):
                 self._waiting_for_user = False
                 begin_action = self._begin_action_of(protagonist)
                 trigger = begin_action or _OPENING_CUE
@@ -541,7 +552,7 @@ class GensokyoWorld:
                 ):
                     pass
             else:
-                # protagonist 是用户：只布置舞台，不生成虚假欢迎词
+                # protagonist 是用户 / resume 恢复的世界：只布置舞台，不生成虚假欢迎词
                 self._waiting_for_user = True
                 await self._publish_waiting_user()
         self._publish(
