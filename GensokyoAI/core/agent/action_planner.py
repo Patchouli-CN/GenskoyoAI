@@ -223,6 +223,10 @@ class ActionPlanner:
         )
         logger.info(f"🧠 [ActionPlanner] 决策: {action.type.name} - {action.reason}")
 
+    def record_action(self, action: Action) -> None:
+        """把外部发起的动作记入行动历史（如主动定时器转发的 INITIATIVE_SPEAK）。"""
+        self._record_action(action)
+
     def _record_action(self, action: Action) -> None:
         self._last_action = action
         self._action_history.append(action)

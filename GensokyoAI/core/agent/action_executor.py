@@ -66,13 +66,16 @@ class ActionExecutor:
             case _:
                 logger.debug(f"⚡ [ActionExecutor] 未知行动: {action_type}")
 
-        self.event_bus.publish(
-            Event(
-                type=SystemEvent.ACTION_EXECUTED,
-                source="action_executor",
-                data={"action": action_data},
+        if action_type != "INITIATIVE_SPEAK":
+            # INITIATIVE_SPEAK 的 ACTION_EXECUTED 由 execute_initiative_speak 统一发布
+            # （定时器转发路径不过本事件链，避免双发）
+            self.event_bus.publish(
+                Event(
+                    type=SystemEvent.ACTION_EXECUTED,
+                    source="action_executor",
+                    data={"action": action_data},
+                )
             )
-        )
 
     # ==================== 执行方法 ====================
 
@@ -99,25 +102,48 @@ class ActionExecutor:
         )
 
     async def _execute_initiative_speak(self, event: Event) -> None:
-        """执行 INITIATIVE_SPEAK - 主动说话：意图摘要即时生成真正消息。
+        """执行 INITIATIVE_SPEAK（事件链入口）。"""
+        action_data = event.data.get("action", {})
+        await self.execute_initiative_speak(action_data)
+
+    async def execute_initiative_speak(
+        self, action: dict[str, Any], *, timer_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """主动说话统一出口：意图摘要即时生成真正消息并返回结果。
 
         action.content 的语义是「待表达意图摘要」（存意图不存话术）：
         统一走说话前思考 + 即时生成管线（与主动定时器触发同一条路径），
         杜绝评估时预写的话术被直接当作定稿发送。
+        ActionPlanner 主动说话（事件链）与主动定时器触发（coordinator 转发）
+        都经本方法发出；timer_id 用于定时器触发的时效校验。
         """
-        action_data = event.data.get("action", {})
-        intent = action_data.get("content", "").strip()
+        intent = str(action.get("content") or "").strip()
         if not intent:
-            return
+            return {"sent": False, "reason": "empty_intent"}
         agent = self.agent
         if agent._think_engine is None:
-            return
-        # 与进行中的回复互斥：说话冲动的即时生成不得插队写乱私历
+            return {"sent": False, "reason": "think_engine_unavailable"}
+        # 与进行中的回复互斥：主动生成不得插队写乱私历
         async with agent._request_semaphore:
-            await agent._initiative_coordinator.generate_initiative_message(
-                timer_id=f"thought-{uuid4().hex[:8]}",
+            if timer_id:
+                manager = agent._initiative_coordinator._ensure_manager()
+                if not manager.is_active_trigger(timer_id):
+                    logger.debug(
+                        f"⚡ [ActionExecutor] 主动触发 {timer_id} 已被新消息/新计划取代，放弃"
+                    )
+                    return {"sent": False, "timer_id": timer_id, "aborted": True}
+            result = await agent._initiative_coordinator.generate_initiative_message(
+                timer_id=timer_id or f"thought-{uuid4().hex[:8]}",
                 pending_summary=intent,
             )
+        self.event_bus.publish(
+            Event(
+                type=SystemEvent.ACTION_EXECUTED,
+                source="action_executor",
+                data={"action": action},
+            )
+        )
+        return result
 
     async def _execute_wait(self, event: Event) -> None:
         """执行 WAIT - 什么都不做"""

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from ...utils.logger import logger
 from ..events import Event, SystemEvent
 from ..exceptions import AgentError
+from .actions import ActionFactory
 from .initiative_timer import InitiativeTimerManager
 
 if TYPE_CHECKING:
@@ -105,6 +106,10 @@ class InitiativeCoordinator:
         整个生成过程持有 Agent 的回合信号量——定时器到点不得与进行中的
         回复并发生成（否则私历顺序错乱）；等待期间若用户发言/新计划取代
         了本次触发，则放弃而不是补一条过期主动消息。
+
+        主动说话统一经 ActionPlanner 的 INITIATIVE_SPEAK 动作出口（SPEAK 只
+        服务「回复用户」）：本方法只把触发翻译成动作，生成与发送由
+        ActionExecutor 统一执行。
         """
         agent = self._agent
         pending_summary = str(payload.get("pending_summary") or "").strip()
@@ -114,14 +119,24 @@ class InitiativeCoordinator:
             logger.debug("[Agent] 主动定时器触发时摘要为空，跳过生成")
             return None
 
-        async with agent._request_semaphore:
-            manager = self._ensure_manager()
-            if not manager.is_active_trigger(timer_id):
-                logger.debug(f"[Agent] 主动触发 {timer_id} 已被新消息/新计划取代，放弃本次生成")
-                return {"sent": False, "timer_id": timer_id, "aborted": True}
-            return await self.generate_initiative_message(
-                timer_id=timer_id, pending_summary=pending_summary
-            )
+        action = ActionFactory.initiative_speak(
+            content=pending_summary,
+            reason=str(payload.get("reason") or "主动定时器触发"),
+        )
+        if agent._action_planner is not None:
+            agent._action_planner.record_action(action)
+        if agent._action_executor is None:
+            # 防卫：执行器未就绪时退回本管线直接生成
+            async with agent._request_semaphore:
+                manager = self._ensure_manager()
+                if not manager.is_active_trigger(timer_id):
+                    return {"sent": False, "timer_id": timer_id, "aborted": True}
+                return await self.generate_initiative_message(
+                    timer_id=timer_id, pending_summary=pending_summary
+                )
+        return await agent._action_executor.execute_initiative_speak(
+            action.to_dict(), timer_id=timer_id
+        )
 
     async def generate_initiative_message(
         self, *, timer_id: str, pending_summary: str

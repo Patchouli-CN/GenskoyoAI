@@ -126,6 +126,7 @@
 - **ThinkEngine 是决策区（模块化）**：`evaluate_speaking_drive()` 是唯一评估入口；ActionPlanner 只执行 SPEAK/WAIT（冲突检测保留为性格层），不再有 `_llm_decide` 二次判断与 0.7 强制降级。
 - 已删除：`decide_initiative`（旧每轮二元决策）、`decide_drive_initiative`（累积器版）、`DriveAccumulator`、`drive_enabled` 开关（唯一路径无需开关）、hesitation 犹豫链全部（`hesitation_*` 配置键、`initiative_timer.hesitation[.set]` RPC 已 legacy/deprecated `remove_after="3.0.0"`，调用返回退役载荷）。
 - **INITIATIVE_SPEAK 的 content 语义 = 「待表达意图摘要」**（用户 2026-07-30 追加定稿）：评估时的候选发言**绝不直接当定稿发送**（存意图不存话术，与定时器路径一致）；`ActionExecutor._execute_initiative_speak` 统一走 `InitiativeCoordinator.generate_initiative_message()`（说话前思考 + 即时生成，持 `_request_semaphore` 与回复互斥）。别再改回「预写内容直接发 MESSAGE_SENT」。
+- **主动说话统一动作出口（用户 2026-07-30 定稿）**：一切主动开口（长期思考冲动、主动定时器触发）都以 ActionPlanner 的 `INITIATIVE_SPEAK` 动作发出；`SPEAK` 只服务「回复用户」的被动响应。`ActionExecutor.execute_initiative_speak()` 是唯一执行出口（事件链与定时器转发共用，`ACTION_EXECUTED` 统一在此发布）；coordinator 触发只负责把定时器翻译成动作并转发，不再自己生成发送。
 
 ---
 
