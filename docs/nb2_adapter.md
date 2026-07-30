@@ -54,6 +54,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_SPLIT_REPLY` | `true` | 回复按行拆成多条短消息发送（QQ 群聊风格） |
 | `GSK_NB2_STRIP_RP_STYLE` | `true` | 发送前清洗 RP 标记（`*动作*`、`「」`），确定性生效 |
 | `GSK_NB2_SENDER_LABEL` | `true` | 群聊消息注入 `【昵称】` 说话人标记（私聊不标） |
+| `GSK_NB2_MEMBER_MEMORY` | `true` | 群友印象：首轮交谈后生成第一印象，之后随消息注入 |
 | `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
 
@@ -91,6 +92,11 @@ python -m GensokyoAI.backends.nb2
   消息中 @ 其他人的段会转译为 `@昵称` 文本（@bot 自身的段丢弃、`@全体成员` 特判），
   昵称优先取缓存、未命中调 `get_group_member_info`，兜底为 QQ 号——
   角色能看懂「你认识 @某某 吗」这类指代。
+- **群友印象**（fake db）：与新群友的首轮交谈完成后，适配器用一个隔离的
+  `nb2-meta` 元租户让角色脱稿写一段第一人称「第一印象」，存入
+  `nb2_data/known_members.json`（key 为 `{昵称}_{QQ号}`，同名靠 QQ 号后缀区分、
+  改名自动迁移）；之后该群友再说话时，印象以 `【你对 某某 的印象】` 注入当轮
+  上下文，角色就能「认识」老熟人。生成是后台任务，不阻塞回复，失败自动跳过。
 - **回复**：默认按 QQ 群聊风格——`GSK_NB2_EXTRA_PROMPT` 注入当轮要求
   （简短、口语、每句一行、不写动作、不用「」），发送前再经 `strip_rp_style`
   确定性清洗残留的 `*动作*` 与「」（提示词压不住角色卡的 RP 惯性时兜底），

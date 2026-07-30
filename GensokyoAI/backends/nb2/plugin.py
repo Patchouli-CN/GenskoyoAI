@@ -3,8 +3,8 @@
 触发规则：群聊 @bot / 回复 bot（to_me），私聊全部响应。
 适配器与 Runtime 同进程：经 RuntimeHost 进程内驱动 RuntimeService 多租户路径，
 每个 QQ 群、每个私聊用户映射为独立租户（agent_id），会话、记忆与资源闸彼此隔离；
-主动消息经事件订阅队列进程内实时投递。依赖可选组件（pip extra: nb2），
-仅在 `python -m GensokyoAI.backends.nb2` 启动时加载。
+主动消息经事件订阅队列进程内实时投递；群友印象存 known_members.json fake db。
+依赖可选组件（pip extra: nb2），仅在 `python -m GensokyoAI.backends.nb2` 启动时加载。
 """
 
 from __future__ import annotations
@@ -25,19 +25,22 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
+from ...core.agent.prompts import build_member_impression_prompt
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
 from .config import Nb2Config
 from .runtime_host import RuntimeHost, RuntimeRpcError
-from .store import SessionStore
+from .store import MemberStore, SessionStore
 
 _config = Nb2Config.from_env()
 _host = RuntimeHost(root_dir=_config.root_dir)
 _store = SessionStore(_config.data_dir / "sessions.json")
+_members = MemberStore(_config.data_dir / "known_members.json")
 _locks: dict[str, asyncio.Lock] = {}
 _initialized: set[str] = set()  # 本进程内已成功 ensure_agent 的 agent_id
 _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ号)
 _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
+_impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（防并发重复生成）
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
@@ -93,6 +96,22 @@ async def _extract_group_text(bot: Bot, event: GroupMessageEvent) -> str:
     return "".join(parts).strip()
 
 
+async def _learn_impression(member_name: str, member_qq: int, exchange: str) -> None:
+    """首轮交谈后给新群友生成角色视角的第一印象（后台任务，不阻塞回复）。"""
+    try:
+        prompt = build_member_impression_prompt(_config.character, member_name, exchange)
+        raw = await _host.generate_meta_text(_config.character, prompt)
+        impression = strip_rp_style(raw).replace("【", "").replace("】", "")[:240].strip()
+        if not impression:
+            return
+        _members.put(member_name, member_qq, impression)
+        logger.info(f"[nb2] 已记下对 {member_name} 的第一印象（{len(impression)} 字）")
+    except Exception as error:
+        logger.warning(f"[nb2] 生成对 {member_name} 的印象失败: {error}")
+    finally:
+        _impression_inflight.discard(member_qq)
+
+
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
     """Runtime 主动消息事件 → QQ 投递（普通回复已由 RPC 响应投递，这里只发主动的）。"""
     if payload.get("type") != "message.sent":
@@ -135,6 +154,7 @@ async def _on_startup() -> None:
         f"群白名单={sorted(_config.group_whitelist) or '不限'}, "
         f"分段回复={'开' if _config.split_reply else '关'}, "
         f"说话人标记={'开' if _config.sender_label else '关'}, "
+        f"群友印象={'开' if _config.member_memory else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -170,6 +190,8 @@ async def _handle_group(event: GroupMessageEvent, bot: Bot) -> None:
         agent_id=agent_id,
         text=text,
         sender_name=sender_name,
+        member_name=sender_name,
+        member_qq=event.user_id,
         self_id=event.self_id,
         message_id=event.message_id,
     )
@@ -179,12 +201,15 @@ async def _handle_group(event: GroupMessageEvent, bot: Bot) -> None:
 async def _handle_private(event: PrivateMessageEvent) -> None:
     agent_id = f"qq-user-{event.user_id}"
     _targets[agent_id] = ("user", event.user_id)
+    member_name = sanitize_display_name(event.sender.nickname or str(event.user_id))
     await _chat(
         matcher=private_chat,
         key=f"user:{event.user_id}",
         agent_id=agent_id,
         text=event.get_message().extract_plain_text(),
         sender_name=None,
+        member_name=member_name,
+        member_qq=event.user_id,
         self_id=event.self_id,
         message_id=event.message_id,
     )
@@ -231,6 +256,8 @@ async def _chat(
     agent_id: str,
     text: str,
     sender_name: str | None,
+    member_name: str | None,
+    member_qq: int | None,
     self_id: int,
     message_id: int,
 ) -> None:
@@ -240,6 +267,11 @@ async def _chat(
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
+    contexts = list(_EXTRA_CONTEXTS)
+    if _config.member_memory and member_qq is not None and member_name:
+        impression = _members.get(member_qq)
+        if impression:
+            contexts.append(f"【你对 {member_name} 的印象】\n{impression}")
     reply = ""
     async with _lock_for(key):
         try:
@@ -258,7 +290,7 @@ async def _chat(
                     revision,
                     text,
                     idempotency_key=idempotency_key,
-                    system_contexts=_EXTRA_CONTEXTS,
+                    system_contexts=contexts,
                 )
             except RuntimeRpcError as error:
                 if error.code == "resource.limit_exceeded":
@@ -274,7 +306,7 @@ async def _chat(
                     revision,
                     text,
                     idempotency_key=idempotency_key,
-                    system_contexts=_EXTRA_CONTEXTS,
+                    system_contexts=contexts,
                 )
             _store.update_revision(key, new_revision)
         except RuntimeRpcError as error:
@@ -288,4 +320,14 @@ async def _chat(
     if not reply.strip():
         logger.warning(f"[nb2] {agent_id} 返回了空回复")
         reply = "……（好像一下子不知道说什么了，再说一次试试？）"
+    if (
+        _config.member_memory
+        and member_qq is not None
+        and member_name
+        and _members.get(member_qq) is None
+        and member_qq not in _impression_inflight
+    ):
+        # 新群友：首轮交谈完成后后台生成第一印象（不阻塞回复）
+        _impression_inflight.add(member_qq)
+        asyncio.create_task(_learn_impression(member_name, member_qq, f"{text}\n{reply}"))
     await _send_segmented(matcher.send, reply)

@@ -44,6 +44,7 @@ class Nb2Config:
     split_reply: bool = True  # 回复按行拆成多条短消息发送（配合 extra_prompt 的按行风格）
     strip_rp_style: bool = True  # 发送前清洗 RP 风格标记（*动作*、「」引号），不依赖模型配合
     sender_label: bool = True  # 群聊消息注入【昵称】说话人标记（多对单会话的归属）
+    member_memory: bool = True  # 群友印象：首轮交谈后生成第一印象，之后随消息注入
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -65,4 +66,5 @@ class Nb2Config:
             split_reply=_parse_bool(get("GSK_NB2_SPLIT_REPLY"), cls.split_reply),
             strip_rp_style=_parse_bool(get("GSK_NB2_STRIP_RP_STYLE"), cls.strip_rp_style),
             sender_label=_parse_bool(get("GSK_NB2_SENDER_LABEL"), cls.sender_label),
+            member_memory=_parse_bool(get("GSK_NB2_MEMBER_MEMORY"), cls.member_memory),
         )

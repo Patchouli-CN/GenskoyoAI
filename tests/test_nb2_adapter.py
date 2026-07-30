@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 from GensokyoAI.backends.nb2.config import DEFAULT_EXTRA_PROMPT, Nb2Config
 from GensokyoAI.backends.nb2.runtime_host import RuntimeHost, RuntimeRpcError
-from GensokyoAI.backends.nb2.store import SessionStore
+from GensokyoAI.backends.nb2.store import MemberStore, SessionStore
 from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.runtime.resource_control import ResourceLimitError
 from GensokyoAI.runtime.rpc import RpcError
@@ -58,6 +58,44 @@ class SessionStoreTests(unittest.TestCase):
         store.put("group:1", agent_id="a", session_id="s", revision=1)
         store.get("group:1")["revision"] = 999
         self.assertEqual(store.get("group:1")["revision"], 1)
+
+
+class MemberStoreTests(unittest.TestCase):
+    """群友印象 fake db：{qq_name}_{qq_id} 键、后缀匹配、改名清旧 key。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "known_members.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_put_get_by_qq_id(self):
+        store = MemberStore(self.path)
+        store.put("小明", 123, "爱问问题的孩子")
+        self.assertEqual(store.get(123), "爱问问题的孩子")
+        self.assertIsNone(store.get(999))
+
+    def test_same_name_distinguished_by_qq_id(self):
+        store = MemberStore(self.path)
+        store.put("小明", 123, "A")
+        store.put("小明", 456, "B")
+        self.assertEqual(store.get(123), "A")
+        self.assertEqual(store.get(456), "B")
+
+    def test_rename_replaces_old_key_but_keeps_impression(self):
+        store = MemberStore(self.path)
+        store.put("旧名字", 123, "印象")
+        store.put("新名字", 123, "印象")  # 改名后写入：同 qq_id 旧 key 清除
+        self.assertEqual(store.get(123), "印象")
+        self.assertIn("新名字_123", store._entries)
+        self.assertEqual(len(store._entries), 1)
+
+    def test_persistence_and_corruption_recovery(self):
+        MemberStore(self.path).put("小明", 123, "印象")
+        self.assertEqual(MemberStore(self.path).get(123), "印象")
+        self.path.write_text("{bad", encoding="utf-8")
+        self.assertIsNone(MemberStore(self.path).get(123))
 
 
 class Nb2ConfigTests(unittest.TestCase):
@@ -265,6 +303,40 @@ class RuntimeHostWrapperTests(unittest.TestCase):
             captured.clear()
             await host.send_message("qq-group-1", "s-1", 4, "再见", idempotency_key="k2")
             self.assertNotIn("system_contexts", captured[0])
+
+        asyncio.run(run())
+
+    def test_generate_meta_text_uses_isolated_meta_tenant(self):
+        """元租户脱稿生成：独立 agent_id、停用主动定时器、会话复用不重建。"""
+
+        async def run():
+            host = RuntimeHost()
+            calls = []
+
+            async def fake_call(method, params=None):
+                calls.append((method, dict(params or {})))
+                if method == "agent.init":
+                    return {"session": {"session_id": "meta-s1", "revision": 0}}
+                if method == "session.messages":
+                    return {"revision": 3}
+                if method == "agent.send_message":
+                    return {"content": "这孩子挺有意思的", "session": {"revision": 4}}
+                return {}
+
+            host._call = fake_call
+            text = await host.generate_meta_text("KirisameMarisa", "写印象")
+            self.assertEqual(text, "这孩子挺有意思的")
+            self.assertEqual(
+                [m for m, _ in calls],
+                ["agent.init", "initiative_timer.update", "session.messages", "agent.send_message"],
+            )
+            self.assertEqual(calls[0][1]["agent_id"], "nb2-meta")
+            self.assertEqual(calls[1][1]["enabled"], False)
+
+            # 第二次调用复用同一会话，不再走 init
+            calls.clear()
+            await host.generate_meta_text("KirisameMarisa", "再写一段")
+            self.assertEqual([m for m, _ in calls], ["session.messages", "agent.send_message"])
 
         asyncio.run(run())
 

@@ -14,6 +14,7 @@ import contextlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ...runtime.auth import RuntimePrincipal, reset_current_principal, set_current_principal
 from ...runtime.resource_control import ResourceLimitError
@@ -54,6 +55,7 @@ class RuntimeHost:
             auth_type="nb2-local",
         )
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
+        self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
 
     # ==================== 基础调用 ====================
 
@@ -156,6 +158,27 @@ class RuntimeHost:
         content = str((result or {}).get("content") or "")
         new_revision = int(((result or {}).get("session") or {}).get("revision") or revision)
         return content, new_revision
+
+    async def generate_meta_text(self, character: str, prompt: str) -> str:
+        """用元租户（agent_id="nb2-meta"）做一次性脱稿生成（群友印象等）。
+
+        元租户与用户会话完全隔离，生成内容不进任何用户的对话历史；
+        会话 id 进程内缓存，revision 每次现取，重复调用不重建 Agent。
+        """
+        agent_id = "nb2-meta"
+        if self._meta_session_id is None:
+            session_id, _ = await self.ensure_agent(agent_id, character, disable_initiative=True)
+            self._meta_session_id = session_id
+        session_id = self._meta_session_id
+        revision = await self.fetch_revision(agent_id, session_id)
+        content, _ = await self.send_message(
+            agent_id,
+            session_id,
+            revision,
+            prompt,
+            idempotency_key=f"nb2-meta:{uuid4().hex[:12]}",
+        )
+        return content
 
     # ==================== 主动消息事件（进程内队列推送） ====================
 

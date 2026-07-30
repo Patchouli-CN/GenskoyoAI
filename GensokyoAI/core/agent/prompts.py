@@ -329,3 +329,21 @@ def build_episodic_summary_prompt(text: str) -> str:
 {text}
 
 摘要："""
+
+
+# ==================== nb2 QQ 适配器 ====================
+
+
+def build_member_impression_prompt(
+    character_name: str, member_name: str, exchange_text: str
+) -> str:
+    """群友第一印象生成（解析方：无，自由文本；适配器元租户一次性脱稿调用）。"""
+    return f"""你是 {character_name}。
+
+下面是你和 QQ 群友「{member_name}」的第一次交谈片段：
+{exchange_text}
+
+请以 {character_name} 的第一人称，在心里给这位群友留一段第一印象备注（一两句话）：
+- 写下 TA 给你的感觉、你们聊到的事、你以后想怎么称呼或对待 TA；
+- 不要动作描写、不要引号、不要解释你在做什么；
+- 只输出这段备注本身。"""
