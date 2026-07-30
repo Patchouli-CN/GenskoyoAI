@@ -361,6 +361,68 @@ class RuntimeHostEventTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_subscribe_does_not_replay_historical_events(self):
+        """回归：订阅不回放历史主动消息（重启后补发历史只会刷屏）。"""
+
+        async def run():
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                service = RuntimeService(root)
+                child = RuntimeService(
+                    root,
+                    tenant_key=("nb2", "agent-1"),
+                    storage_root=service._tenant_storage_root("nb2", "agent-1"),
+                )
+                service._tenant_services[("nb2", "agent-1")] = child
+
+                async def _noop_shutdown():
+                    return None
+
+                event_bus = EventBus(enable_trace=False)
+                await event_bus.start()
+                child.state.agent = SimpleNamespace(
+                    event_bus=event_bus, shutdown=_noop_shutdown
+                )
+
+                # 先录制一条历史主动消息进事件存储（模拟上次运行留下的 events.jsonl）
+                child._start_event_recording(event_bus)
+                event_bus.publish(
+                    Event(
+                        type=SystemEvent.MESSAGE_SENT,
+                        source="initiative_timer",
+                        data={"content": "历史主动消息", "initiative": True},
+                    )
+                )
+                await asyncio.sleep(0.1)
+
+                host = RuntimeHost(user_id="nb2", service=service)
+                received = []
+                done = asyncio.Event()
+
+                async def on_event(agent_id, payload):
+                    received.append(payload["data"]["content"])
+                    done.set()
+
+                await host.subscribe_events("agent-1", on_event)
+                await asyncio.sleep(0.1)
+                self.assertEqual(received, [])  # 历史消息未被回放
+
+                # 订阅后的新事件正常投递
+                event_bus.publish(
+                    Event(
+                        type=SystemEvent.MESSAGE_SENT,
+                        source="initiative_timer",
+                        data={"content": "新的主动消息", "initiative": True},
+                    )
+                )
+                await asyncio.wait_for(done.wait(), timeout=5)
+                self.assertEqual(received, ["新的主动消息"])
+
+                await host.cancel_events("agent-1")
+                await event_bus.stop()
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

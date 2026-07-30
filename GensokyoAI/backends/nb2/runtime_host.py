@@ -33,6 +33,9 @@ class RuntimeRpcError(RuntimeError):
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+# 订阅事件时用于禁用历史回放的 after_sequence 哨兵（int64 最大值）
+_NO_EVENT_REPLAY = 2**63 - 1
+
 
 class RuntimeHost:
     """nb2 适配器的进程内 Runtime 宿主（每个 QQ 群/私聊 = 一个 agent_id 租户）。"""
@@ -172,6 +175,10 @@ class RuntimeHost:
             subscription = await self._service.create_event_subscription(
                 event_types=list(event_types or ["message.sent"]),
                 agent_id=agent_id,
+                # 关闭历史回放：after_sequence 给理论最大值，事件存储里没有任何
+                # 记录比它更新，等于不回放（replay_limit 不接受 0）。主动消息是
+                # 「当下想说」，重启后补发历史只会刷屏。
+                after_sequence=_NO_EVENT_REPLAY,
             )
         except (ResourceLimitError, RpcError) as error:
             raise self._translate(error) from error
