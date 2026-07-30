@@ -68,6 +68,29 @@ class UvicornShutdownNoiseTests(unittest.TestCase):
         finally:
             logger.remove(handler_id)
 
+    def test_shutdown_noise_dropped_across_uvicorn_loggers(self):
+        """run_asgi（KI 堆栈）与 send（CancelledError 堆栈）同属关闭噪音。"""
+        import asyncio
+
+        received = []
+        handler_id = logger.add(lambda message: received.append(str(message)), level=0)
+        try:
+            handler = LoguruHandler()
+            handler.emit(
+                self._record_with_exc(
+                    "uvicorn.run_asgi", (KeyboardInterrupt, KeyboardInterrupt(), None)
+                )
+            )
+            handler.emit(
+                self._record_with_exc(
+                    "uvicorn.send",
+                    (asyncio.CancelledError, asyncio.CancelledError(), None),
+                )
+            )
+            self.assertEqual(received, [])
+        finally:
+            logger.remove(handler_id)
+
 
 if __name__ == "__main__":
     unittest.main()

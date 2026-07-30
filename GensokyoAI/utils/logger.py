@@ -2,6 +2,7 @@
 
 # GensokyoAI\utils\logging.py
 
+import asyncio
 import inspect
 import logging as std_logging
 import os
@@ -52,13 +53,14 @@ class LoguruHandler(std_logging.Handler):
         ):
             return
 
-        # Windows 下 Ctrl+C 经信号处理器抛 KeyboardInterrupt，uvicorn 会以
-        # 「Exception in ASGI application」刷整段堆栈——退出噪音，直接丢弃
+        # 关闭噪音：Ctrl+C / 服务停机时，uvicorn 各 logger（run_asgi / send / error…）
+        # 会把 KeyboardInterrupt / CancelledError 以「Exception in ASGI application」
+        # 刷整段堆栈——这两个异常在 uvicorn 里只会是关闭信号与任务取消的下游，直接丢弃
         exc_type = record.exc_info[0] if record.exc_info else None
         if (
-            record.name == "uvicorn.error"
+            record.name.split(".")[0] == "uvicorn"
             and exc_type is not None
-            and issubclass(exc_type, KeyboardInterrupt)
+            and issubclass(exc_type, (KeyboardInterrupt, asyncio.CancelledError))
         ):
             return
 
