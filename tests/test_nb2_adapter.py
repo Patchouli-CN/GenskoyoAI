@@ -14,7 +14,7 @@ from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.runtime.resource_control import ResourceLimitError
 from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService
-from GensokyoAI.utils.helpers import split_reply_segments
+from GensokyoAI.utils.helpers import split_reply_segments, strip_rp_style
 
 
 class SessionStoreTests(unittest.TestCase):
@@ -70,6 +70,7 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertTrue(config.initiative)
         self.assertEqual(config.extra_prompt, DEFAULT_EXTRA_PROMPT)
         self.assertTrue(config.split_reply)
+        self.assertTrue(config.strip_rp_style)
 
     def test_parse_from_env(self):
         env = {
@@ -80,6 +81,7 @@ class Nb2ConfigTests(unittest.TestCase):
             "GSK_NB2_INITIATIVE": "false",
             "GSK_NB2_EXTRA_PROMPT": " 只说日语。 ",
             "GSK_NB2_SPLIT_REPLY": "0",
+            "GSK_NB2_STRIP_RP_STYLE": "false",
         }
         config = Nb2Config.from_env(env.get)
         self.assertEqual(config.character, "HakureiReimu")
@@ -89,6 +91,7 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertFalse(config.initiative)
         self.assertEqual(config.extra_prompt, "只说日语。")
         self.assertFalse(config.split_reply)
+        self.assertFalse(config.strip_rp_style)
 
     def test_initiative_bool_parsing(self):
         self.assertFalse(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "0"}.get).initiative)
@@ -123,6 +126,32 @@ class SplitReplySegmentsTests(unittest.TestCase):
 
     def test_empty_input_returns_single_blank(self):
         self.assertEqual(split_reply_segments("  \n\n "), [""])
+
+
+class StripRpStyleTests(unittest.TestCase):
+    """发送前 RP 风格清洗（utils.helpers.strip_rp_style）。"""
+
+    def test_action_only_line_removed(self):
+        text = "你好呀\n*轻笑出声*\n今天天气不错"
+        self.assertEqual(strip_rp_style(text), "你好呀\n今天天气不错")
+
+    def test_inline_action_removed(self):
+        self.assertEqual(strip_rp_style("看*挥舞扇子*这个"), "看这个")
+
+    def test_corner_quotes_stripped(self):
+        self.assertEqual(strip_rp_style("「呵呵，差不多吧」"), "呵呵，差不多吧")
+
+    def test_combined_rp_style(self):
+        text = "「那孩子反应总是很大呢～」\n*用扇子轻点下巴*\n「可爱得让人想再捉弄一次呢～」"
+        self.assertEqual(
+            strip_rp_style(text), "那孩子反应总是很大呢～\n可爱得让人想再捉弄一次呢～"
+        )
+
+    def test_empty_after_strip(self):
+        self.assertEqual(strip_rp_style("*微笑*"), "")
+
+    def test_plain_text_unchanged(self):
+        self.assertEqual(strip_rp_style("Master Spark 天下第一！"), "Master Spark 天下第一！")
 
 
 class RuntimeHostWrapperTests(unittest.TestCase):

@@ -24,7 +24,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
-from ...utils.helpers import split_reply_segments
+from ...utils.helpers import split_reply_segments, strip_rp_style
 from ...utils.logger import logger
 from .config import Nb2Config
 from .runtime_host import RuntimeHost, RuntimeRpcError
@@ -46,8 +46,12 @@ SendCallable = Callable[[Message], Awaitable[None]]
 
 
 async def _send_segmented(send: SendCallable, text: str) -> None:
-    """分段发送：QQ 聊天习惯是多条短消息，而非一大段墙。"""
-    segments = split_reply_segments(text) if _config.split_reply else [text]
+    """分段发送：清洗 RP 标记后按行拆成多条短消息（QQ 聊天习惯，而非一大段墙）。"""
+    cleaned = strip_rp_style(text) if _config.strip_rp_style else text
+    if not cleaned.strip():
+        logger.warning(f"[nb2] 清洗后无文本内容（原文 {len(text)} 字），跳过发送: {text[:60]!r}")
+        return
+    segments = split_reply_segments(cleaned) if _config.split_reply else [cleaned]
     for index, segment in enumerate(segments):
         if index:
             await asyncio.sleep(_REPLY_SEGMENT_DELAY_SECONDS)

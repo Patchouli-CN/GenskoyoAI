@@ -3,6 +3,7 @@
 # GensokyoAI\utils\helpers.py
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import wraps
@@ -112,6 +113,21 @@ def split_reply_segments(text: str, max_segments: int = 5) -> list[str]:
     if len(parts) <= max_segments:
         return parts
     return parts[: max_segments - 1] + ["\n".join(parts[max_segments - 1 :])]
+
+
+_RP_ACTION_PATTERN = re.compile(r"\*[^*\n]*\*")
+
+
+def strip_rp_style(text: str) -> str:
+    """去除角色扮演风格标记：星号动作描写（``*动作*``）与「」台词引号。
+
+    QQ 群聊要求纯对话文本；角色卡与框架提示词都偏向 RP 风格，模型难免漏出，
+    因此在发送前确定性地清洗，不依赖模型配合。清洗后留下的空行会被移除。
+    """
+    cleaned = _RP_ACTION_PATTERN.sub("", text)
+    cleaned = cleaned.replace("「", "").replace("」", "")
+    lines = [line.strip() for line in cleaned.splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def build_world_memory_root(base_path, world_id: str, character_name: str):

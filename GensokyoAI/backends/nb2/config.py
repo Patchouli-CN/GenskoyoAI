@@ -24,7 +24,8 @@ def _parse_bool(raw: str | None, default: bool) -> bool:
 DEFAULT_EXTRA_PROMPT = (
     "你在 QQ 群聊/私聊里聊天，不是在写角色扮演小说：回复要简短、口语化、像真人发消息；"
     "每句话单独占一行（系统会按行拆成多条消息依次发送）；"
-    "不要用 *星号* 或括号描写动作、表情、心理活动；一次回复最多三句话。"
+    "不要用 *星号* 或括号描写动作、表情、心理活动；不要用「」等台词引号，直接写说的话；"
+    "一次回复最多三句话。"
 )
 
 
@@ -39,6 +40,7 @@ class Nb2Config:
     initiative: bool = True  # 角色主动发言（事件订阅队列进程内投递到群/私聊）
     extra_prompt: str = DEFAULT_EXTRA_PROMPT  # 随每条回复注入 system_contexts 的附加要求
     split_reply: bool = True  # 回复按行拆成多条短消息发送（配合 extra_prompt 的按行风格）
+    strip_rp_style: bool = True  # 发送前清洗 RP 风格标记（*动作*、「」引号），不依赖模型配合
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -58,4 +60,5 @@ class Nb2Config:
             initiative=_parse_bool(get("GSK_NB2_INITIATIVE"), cls.initiative),
             extra_prompt=((get("GSK_NB2_EXTRA_PROMPT") or "").strip() or DEFAULT_EXTRA_PROMPT),
             split_reply=_parse_bool(get("GSK_NB2_SPLIT_REPLY"), cls.split_reply),
+            strip_rp_style=_parse_bool(get("GSK_NB2_STRIP_RP_STYLE"), cls.strip_rp_style),
         )
