@@ -74,6 +74,13 @@ from GensokyoAI.world.world import GensokyoWorld, WorldAssemblyError
 
 RUNTIME_EVENT_BACKPRESSURE_DROPPED = "runtime.backpressure.dropped"
 MAX_TENANT_AGENTS_PER_USER = 8
+# 非 admin 网络调用者禁止注入的自定义配置/路径参数；agent.init 与 world.init 同一道闸门
+_TENANT_ADMIN_ONLY_PARAMS = (
+    "config_path",
+    "character_path",
+    "model_overrides",
+    "embedding_overrides",
+)
 RUNTIME_DEPRECATED_FIELDS: tuple[dict[str, str | None], ...] = ()
 RUNTIME_COMPATIBILITY_NOTES: tuple[dict[str, str], ...] = (
     {
@@ -236,8 +243,7 @@ class RuntimeService:
     async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         principal = current_principal()
         if not principal.has_role("admin") and any(
-            params.get(name) is not None
-            for name in ("config_path", "character_path", "model_overrides", "embedding_overrides")
+            params.get(name) is not None for name in _TENANT_ADMIN_ONLY_PARAMS
         ):
             raise RpcError(
                 "Custom Agent paths and model overrides require the admin role",
@@ -278,9 +284,11 @@ class RuntimeService:
     async def _init_tenant_world(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """网络路径 world.init：World 状态按 (user_id, agent_id) 租户隔离。"""
         principal = current_principal()
-        if not principal.has_role("admin") and params.get("config_path") is not None:
+        if not principal.has_role("admin") and any(
+            params.get(name) is not None for name in _TENANT_ADMIN_ONLY_PARAMS
+        ):
             raise RpcError(
-                "Custom World config path requires the admin role",
+                "Custom World config requires the admin role",
                 code="authorization.forbidden",
                 user_message="普通聊天身份只能从服务端默认配置装配 World。",
                 recoverable=False,

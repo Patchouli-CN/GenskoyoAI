@@ -104,3 +104,68 @@ def test_runtime_drain_rejects_new_work_and_waits_for_active_operation() -> None
         assert draining.value.code == "runtime.draining"
 
     asyncio.run(run())
+
+
+async def _as_chat_user(service: RuntimeService, user_id: str, method: str, params: dict | None = None):
+    """以无 admin 角色的普通聊天身份调用（审计闸门测试专用）。"""
+    token = set_current_principal(
+        RuntimePrincipal(user_id=user_id, roles=frozenset({"read", "chat"}), auth_type="test")
+    )
+    try:
+        return await service.handle(method, params)
+    finally:
+        reset_current_principal(token)
+
+
+def test_world_init_rejects_custom_config_for_non_admin() -> None:
+    """审计修复：world.init 与 agent.init 同一道闸门——非 admin 禁止全部自定义配置参数。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            for forbidden_params in (
+                {"config_path": "custom.yaml"},
+                {"character_path": "char.yaml"},
+                {"model_overrides": {"model": "x"}},
+                {"embedding_overrides": {"model": "x"}},
+            ):
+                with pytest.raises(RpcError) as error:
+                    await _as_chat_user(
+                        service,
+                        "alice",
+                        "world.init",
+                        {"agent_id": "w1", **forbidden_params},
+                    )
+                assert error.value.code == "authorization.forbidden"
+
+    asyncio.run(run())
+
+
+def test_agent_init_rejects_custom_params_for_non_admin() -> None:
+    """审计修复回归：agent.init 闸门改用共享常量后行为不变。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            with pytest.raises(RpcError) as error:
+                await _as_chat_user(
+                    service,
+                    "alice",
+                    "agent.init",
+                    {"agent_id": "a1", "model_overrides": {"model": "x"}},
+                )
+            assert error.value.code == "authorization.forbidden"
+
+    asyncio.run(run())
+
+
+def test_world_init_agent_id_matches_agent_init_contract() -> None:
+    """审计修复：world.init 与 agent.init 一致——agent_id 可选，省略时由服务生成。"""
+
+    from GensokyoAI.runtime.rpc import network_rpc_requirements
+
+    assert "agent_id" not in network_rpc_requirements("world.init")
+    assert "agent_id" not in network_rpc_requirements("agent.init")
+    # 其余资源方法仍必须传 agent_id
+    assert "agent_id" in network_rpc_requirements("agent.send_message")
+    assert "agent_id" in network_rpc_requirements("world.send_message")

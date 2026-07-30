@@ -357,7 +357,7 @@ _NETWORK_RESOURCE_LEGACY_METHODS = frozenset(
         "rollback_session",
     }
 )
-_NETWORK_AGENT_ID_EXEMPT_METHODS = frozenset({"agent.init", "agent.list", "init"})
+_NETWORK_AGENT_ID_EXEMPT_METHODS = frozenset({"agent.init", "agent.list", "init", "world.init"})
 
 _MESSAGE_RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",

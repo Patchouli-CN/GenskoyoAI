@@ -15,7 +15,7 @@
 
 HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id` 资源层级。JWT 的 `sub` 是稳定 `user_id`；客户端不能提交或覆盖 `user_id`。同名 `agent_id` 和 `session_id` 在不同用户下完全隔离。
 
-- `agent.init` 可传 `agent_id`；省略时由服务生成。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。
+- `agent.init` 与 `world.init` 可传 `agent_id`；省略时由服务生成（结果中返回）。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。
 - 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
 - `world.*` 多角色编排方法同样按 `user_id -> agent_id` 租户隔离；`world.send_message` / `world.send_message_stream` 必须传 `idempotency_key`（与 Agent 消息共用 `operations.json` 操作账本，账本槽位为 World 存档 id）。World 没有 session revision 概念，写操作不要求 `expected_revision`（World 回合锁已串行化）。
 - 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。
@@ -394,7 +394,7 @@ HTTP/WebSocket 服务对非 loopback 监听强制要求 JWT secret 或共享 Run
 
 `world.*` 方法驱动 GensokyoWorld 多角色编排：单模型演一整台戏，由 Director 根据剧情与在场角色决定每轮谁发言、何时交还用户。单角色 Agent 与 World 在同一 RuntimeService 实例上互斥（`world.init` 与 `agent.init` 双向拒绝，错误码 `world.agent_mode_active` / `world.world_mode_active`）；网络多租户进程可同时按 `user_id -> agent_id` 托管 Agent 与 World。
 
-- `world.init`：装配（或恢复）World。参数 `config_path`（可选，网络侧仅 `admin`）、`session_id`（可选，提供时按存档恢复）、`start`（默认 `true`）。返回 `world.state` 同形快照，另附 `resume_diagnostics`（恢复时的 roster/会话差异诊断）。
+- `world.init`：装配（或恢复）World。参数 `agent_id`（可选，租户槽位，省略时由服务生成）、`config_path`（可选，网络侧仅 `admin`）、`session_id`（可选，提供时按存档恢复）、`start`（默认 `true`）。返回 `world.state` 同形快照，另附 `resume_diagnostics`（恢复时的 roster/会话差异诊断）。
 - `world.start`：开场（幂等）。
 - `world.send_message`：参数 `message`、`idempotency_key`；聚合返回 `{world_id, session_id, turns, waiting_for_user, generation_id, idempotent_replay}`，其中 `turns[]` 为 `{actor_id, actor_name, scene_id, content}`，即本段自动表演中各 Actor 的发言记录。
 - `world.send_message_stream`：聚合形态同 `world.send_message` 并附完整 `events`；WebSocket 使用增量帧（见下）。

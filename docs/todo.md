@@ -235,15 +235,18 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
-## 8.5 外部审计待办（2026-07-30 用户转述，后置处理）
+## 8.5 外部审计修复（2026-07-30，已修，未提交）
 
-1. **World 自定义配置权限可绕过**（待修）：`_init_tenant_world`（runtime/service.py:281）
-   只对非 admin 拦截 `config_path`，而 `_init_tenant_agent`（:238）拦
-   `config_path/character_path/model_overrides/embedding_overrides` 四项。
-   修复时需核对 world.init 参数全集与下游装配链路，补齐同类闸门。
-2. **agent_id 契约不一致**（待修）：`_init_tenant_agent`(:249) 与 `_init_tenant_world`(:289)
-   在 agent_id 缺失时静默 `str(uuid4())` 生成；而 `_NETWORK_AGENT_ID_EXEMPT_METHODS`
-   （runtime/rpc.py:360）只豁免 `agent.init/agent.list/init`——`world.init` 在 schema
-   里 agent_id 是 required，行为上却自动生成，文档、schema、行为三方不一致。
-   修复方向二选一：world.init 加入豁免集（保持自动生成并同步文档）或落实 required 校验。
+1. **World 自定义配置权限闸门缺项 → 已修**：核实 world.init 参数全集仅
+   `config_path/session_id/start`，但闸门只拦 `config_path`。现抽出共享常量
+   `_TENANT_ADMIN_ONLY_PARAMS`（service.py 顶部），`_init_tenant_agent` 与
+   `_init_tenant_world` 同一道四项闸门（config_path/character_path/model_overrides/
+   embedding_overrides）——纵深防御：world.init 将来新增同类参数不会静默绕过。
+2. **agent_id 契约不一致 → 已修（取豁免方向）**：`world.init` 加入
+   `_NETWORK_AGENT_ID_EXEMPT_METHODS`（rpc.py），schema 与行为统一为「可选、
+   省略自动生成（结果返回）」，与 agent.init 先例一致；文档中英同步
+   （资源模型 bullet + world.init 参数行）。
+测试：test_runtime_multi_user.py 新增 3 例（world 四项参数非 admin 全拒、agent 闸门
+回归、豁免集契约）。注意该文件 `_as_user` 帮手带 admin 角色，闸门测试须用新增的
+`_as_chat_user`（read+chat）。基线：613 passed, 3 subtests passed，ruff/pyright 全绿。
 

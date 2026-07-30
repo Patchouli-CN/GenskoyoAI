@@ -15,7 +15,7 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 
 HTTP, WebSocket, and SSE use `user_id -> agent_id -> session_id -> message_id`. The JWT `sub` claim is the stable `user_id`; clients cannot submit or override it. Equal Agent or session IDs owned by different users are fully isolated.
 
-- `agent.init` accepts an optional `agent_id`; the server generates one when omitted. `agent.list` only returns the caller's Agents, and `agent.delete` requires `admin`.
+- `agent.init` and `world.init` accept an optional `agent_id`; the server generates one when omitted (returned in the result). `agent.list` only returns the caller's Agents, and `agent.delete` requires `admin`.
 - Network Agent/session RPCs require `agent_id`. Conversation-context operations also require `session_id` and never rely on a process-global current session.
 - Session writes require the last observed `expected_revision`. Conflicts return `session.revision_conflict`.
 - Message sends also require a 1-128 character `idempotency_key`; retries must reuse it.
@@ -386,7 +386,7 @@ The generation token stream itself cannot resume across WebSocket connections. R
 
 The `world.*` methods drive GensokyoWorld multi-character orchestration: one model performs an entire play, and the Director decides who speaks each turn, when to switch, and when to hand the mic back to the user. A single-character Agent and a World are mutually exclusive within one RuntimeService instance (`world.init` and `agent.init` reject each other with `world.agent_mode_active` / `world.world_mode_active`); a multi-tenant process can host Agents and Worlds side by side per `user_id -> agent_id`.
 
-- `world.init`: assembles (or resumes) a World. Params: `config_path` (optional, `admin` only over the network), `session_id` (optional; resumes that archive when provided), `start` (default `true`). Returns the same snapshot as `world.state` plus `resume_diagnostics` (roster/session differences found during resume).
+- `world.init`: assembles (or resumes) a World. Params: `agent_id` (optional tenant slot; generated when omitted), `config_path` (optional, `admin` only over the network), `session_id` (optional; resumes that archive when provided), `start` (default `true`). Returns the same snapshot as `world.state` plus `resume_diagnostics` (roster/session differences found during resume).
 - `world.start`: opening beat (idempotent).
 - `world.send_message`: params `message`, `idempotency_key`; returns `{world_id, session_id, turns, waiting_for_user, generation_id, idempotent_replay}` where `turns[]` are `{actor_id, actor_name, scene_id, content}` — the speeches of this automatic performance segment.
 - `world.send_message_stream`: aggregate form identical to `world.send_message` plus the full `events` list; WebSocket uses incremental frames (see below).
