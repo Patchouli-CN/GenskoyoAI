@@ -26,6 +26,9 @@ def main() -> None:
     environment = os.environ.get("ENVIRONMENT")
     if environment:
         load_dotenv(f".env.{environment}", override=True)
+    # 适配器是终端盯梢场景：强制打开控制台日志（local.yaml 为 CLI 的 TUI 关了它，
+    # 否则首个租户初始化时会按配置把控制台 sink 撤掉）。env 已显式设置时尊重原值。
+    os.environ.setdefault("GENSOKYOAI_LOG_CONSOLE", "true")
     nonebot.init()
     # nonebot.init() 会重排 loguru（移除既有 sink），必须在此之后才挂项目自己的
     # 日志（含第三方噪音过滤），终端与文件看到的才是 GensokyoAI 的格式；
