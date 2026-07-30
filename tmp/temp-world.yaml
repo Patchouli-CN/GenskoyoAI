@@ -1,11 +1,13 @@
-# GensokyoWorld 多角色示例配置
+# GensokyoWorld 多角色配置模板
 # ================================
 # 单模型扮演整台戏：魔理沙带用户闯红魔馆，主人蕾米莉亚在馆内等着。
 # 由导演（Director）根据剧情决定每轮谁发言、何时切人、何时把话筒交还用户，
 # 而不是固定轮流。启用后请用 --world 或 Runtime world.* RPC 驱动。
 #
-# 用法示例：
-#   python -m GensokyoAI.cli.main --config config/world_example.yaml
+# 用法示例（直接以模板启动）：
+#   python -m GensokyoAI.cli.main --config tmp/temp-world.yaml
+# 或复制为本地配置再改：
+#   cp tmp/temp-world.yaml config/local_world.yaml
 #
 # 场景系统需一并开启，World 依赖场景库判断"谁在哪、能否切换"。
 

@@ -20,7 +20,7 @@
 [Runtime API Contract](./docs/en/runtime_api.md) ·
 [Versioning](./docs/en/versioning.md) ·
 [Changelog Template](./docs/en/changelog.md) ·
-[Default Config Example](./config/default.yaml)
+[Config Template](./tmp/template-conf.yaml)
 
 > The English docs are a community translation. The Chinese version remains the authoritative source in case of ambiguity.
 
@@ -117,7 +117,7 @@ With the initiative timer enabled, a character can, after a normal reply, only s
 
 With the scene system enabled, the environment a character is in (the Hakurei Shrine, the Forest of Magic, the Scarlet Devil Mansion...) becomes persistent, structured state instead of something the character has to restate in every message. Characters open the conversation already situated in a scene, can switch scenes on their own as the story moves (`scene_switch`), and can look up where they are when they lose track (`get_current_scene`).
 
-Two direct benefits: the character's attention stays on personality and dialogue rather than on remembering their location—so even smaller models perform more consistently in-scene; and the current scene is persisted with the session, so resuming later keeps the character right where they left off. The scene library is globally shared and defined in YAML, with all characters drawing from the same set of Gensokyo locations. See the [Quickstart](./QUICKSTART.md) and the `scene` section of the [default config](./config/default.yaml).
+Two direct benefits: the character's attention stays on personality and dialogue rather than on remembering their location—so even smaller models perform more consistently in-scene; and the current scene is persisted with the session, so resuming later keeps the character right where they left off. The scene library is globally shared and defined in YAML, with all characters drawing from the same set of Gensokyo locations. See the [Quickstart](./QUICKSTART.md) and the `scene` section of the [config template](./tmp/template-conf.yaml).
 
 ### A Whole Play: Multi-Character World (GensokyoWorld)
 
@@ -129,7 +129,7 @@ With the `world` config enabled, you go from "playing one character" to "one mod
 - **The world moves the story on its own**: there is exactly one initiative timer per world; after each segment the world plans the next push, and when it fires the Director picks a speaker from whoever is present right now. Your messages always take priority and cancel pending intents.
 - **Save and resume**: world sessions persist independently (stage, transcript, each actor's private session) and restore completely, with structured diagnostics for roster differences instead of silently mixing up characters.
 
-Run the console with `--world` (or `world.enabled: true`) to enter; see the [world example config](./config/world_example.yaml) for a complete setup, and `world.*` RPC in the [Runtime API](./docs/runtime_api.md) for clients. Single-character mode is completely unaffected.
+Run the console with `--world` (or `world.enabled: true`) to enter; see the [world config template](./tmp/temp-world.yaml) for a complete setup, and `world.*` RPC in the [Runtime API](./docs/runtime_api.md) for clients. Single-character mode is completely unaffected.
 
 ### Better Session Management
 
@@ -162,7 +162,7 @@ GensokyoAI optimizes stability for external AI service calls:
 - OpenAI Responses streaming `failed` / `incomplete` events are converted into clearer error messages.
 - Runtime RPC provides `agent.send_message_stream`: JSON Lines / HTTP RPC returns a stable list of events; WebSocket Runtime can push events frame by frame as generation progresses, allowing clients to consume streaming results in their preferred transport form.
 
-The full configuration example is in [Default Config](./config/default.yaml).
+The full configuration example is in [Config Template](./tmp/template-conf.yaml).
 
 ## P0 Stability & Upgrade Capability
 

@@ -92,7 +92,7 @@ set GENSOKYOAI_API_KEY=你的钥匙
 python -m GensokyoAI.cli.main -c "characters/zh_cn/HakureiReimu.yaml" --config "config/local.yaml" --new-session
 ```
 
-支持的 Provider：Ollama / OpenAI / OpenRouter / DeepSeek / OpenAI Responses / Claude / Gemini。细节看 [默认配置](./config/default.yaml) 和 [README 的「快速配置 Provider」](./README.md#快速配置-provider)。
+支持的 Provider：Ollama / OpenAI / OpenRouter / DeepSeek / OpenAI Responses / Claude / Gemini。细节看 [配置模板](./tmp/template-conf.yaml) 和 [README 的「快速配置 Provider」](./README.md#快速配置-provider)。
 
 ---
 
@@ -168,12 +168,12 @@ begin_scene:
 项目自带现成示例（魔理沙 × 蕾米莉亚 × 红魔馆）：
 
 ```bash
-uv run -m GensokyoAI.cli.main --config config/world_example.yaml
+uv run -m GensokyoAI.cli.main --config tmp/temp-world.yaml
 ```
 
 `world_example.yaml` 里 `world.enabled: true`，所以会自动进入 World 模式；用你自己的配置时，打开 `world.enabled` 或加 `--world` 参数即可。
 
-想换角色阵容？编辑 `config/world_example.yaml`（或复制一份）里的 `world.actors`：每个角色一行 id + 角色卡路径，`characters/zh_cn/` 下几十位居民随你点。`protagonist` 决定谁主动开场（填 `__user__` 则等你先开口）。
+想换角色阵容？编辑 `tmp/temp-world.yaml`（建议复制为 `config/local_world.yaml` 再改）里的 `world.actors`：每个角色一行 id + 角色卡路径，`characters/zh_cn/` 下几十位居民随你点。`protagonist` 决定谁主动开场（填 `__user__` 则等你先开口）。
 
 World 模式下有几条专用命令：`/world`（世界状态）、`/roster`（登场角色）、`/stage`（谁在哪个场景）、`/transcript`（当前场景的共享剧本）。单角色会话命令（`/back`、`/history` 等）在 World 模式不适用——世界的存档管理看 `/world`。
 
@@ -188,7 +188,7 @@ World 模式下有几条专用命令：`/world`（世界状态）、`/roster`（
 | 参数 | 作用 |
 | --- | --- |
 | `--character` / `-c` | 指定角色卡路径 |
-| `--config` | 指定配置文件（默认 `config/default.yaml`） |
+| `--config` | 指定配置文件（默认 `config/local.yaml`，首次启动自动生成） |
 | `--new-session` | 强制开一段新对话 |
 | `--resume <会话id>` | 继续之前的某段对话 |
 | `--list-sessions` | 看看你有哪些历史会话 |

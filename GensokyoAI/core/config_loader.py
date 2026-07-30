@@ -48,8 +48,8 @@ class ConfigLoader(ConfigMerger):
 
     @staticmethod
     def default_config_path() -> Path:
-        """返回项目默认配置文件路径。"""
-        return Path(__file__).parent.parent.parent / "config" / "default.yaml"
+        """返回配置模板路径（发行文件；用户配置应为 config/local.yaml）。"""
+        return Path(__file__).parent.parent.parent / "tmp" / "template-conf.yaml"
 
     def load(self, config_file: Path | None = None) -> AppConfig:
         """加载配置"""

@@ -21,7 +21,7 @@
 [**Runtime API 契约**](./docs/runtime_api.md)
 [**版本管理说明**](./docs/versioning.md)
 [**Changelog 模板**](./docs/changelog.md)
-[**默认配置示例**](./config/default.yaml)
+[**配置模板**](./tmp/template-conf.yaml)
 [**Q群！快来！**](https://qun.qq.com/universal-share/share?ac=1&authKey=2YjM%2FXyrxGTrkTDQMoxKM5QBzphCJzFxbXnKYDpF%2FVkmuNvH2%2BNaP2Z6l7d9LsB%2B&busi_data=eyJncm91cENvZGUiOiI2NzU2MDgzNTYiLCJ0b2tlbiI6IkROTnRsMVlMcWdPUzExZlp5T2RMbDI5eXBGRVNRcDV1blAxY2crWGhrUjdpaWVXSXoybE5CdFRSb3Q5Z3dCa0giLCJ1aW4iOiIyMjI2OTU2NTc5In0%3D&data=UBToZl_UF-gj5B9gKcj0YXcw7qCwC5DKmrw0Sh2-XNjTejEA31jAi1BONVOvh9v5PB98Y0f_Hz-MDvXiFrwnLA&svctype=4&tempid=h5_group_info)
 
 ## 项目定位
@@ -117,7 +117,7 @@ GensokyoAI 不是简单的问答机器人，而是围绕“角色扮演”设计
 
 启用场景系统后，角色所处的环境（博丽神社、魔法森林、红魔馆……）被外置为常驻的结构化状态，而不是靠角色在每句对话里反复复述"我在哪"。角色开场就置身于某个场景，剧情推进时可以主动切换场景（`scene_switch`），一时想不起自己在哪也能主动查看（`get_current_scene`）。
 
-这带来两个直接好处：一是角色扮演的注意力可以更集中在人设与对话本身，小模型也能有更稳定的临场表现；二是当前场景随会话持久化，退出重进仍停留在上次的地点。场景库全局共享、用 YAML 定义，所有角色共用同一套幻想乡地点。详见 [快速上手](./QUICKSTART.md) 与 [默认配置](./config/default.yaml) 的 `scene` 节。
+这带来两个直接好处：一是角色扮演的注意力可以更集中在人设与对话本身，小模型也能有更稳定的临场表现；二是当前场景随会话持久化，退出重进仍停留在上次的地点。场景库全局共享、用 YAML 定义，所有角色共用同一套幻想乡地点。详见 [快速上手](./QUICKSTART.md) 与 [配置模板](./tmp/template-conf.yaml) 的 `scene` 节。
 
 ### 一台戏：多角色世界（GensokyoWorld）
 
@@ -129,7 +129,7 @@ GensokyoAI 不是简单的问答机器人，而是围绕“角色扮演”设计
 - **世界会主动推进**：整个世界只有一个主动定时器；段落结束后世界统一规划下一次剧情推进，到点由导演从当下在场角色中选角开口。用户发言永远优先，自动取消旧的主动意图。
 - **可存档可恢复**：World 会话独立持久化（舞台、剧本、各角色私有会话），退出后完整恢复，roster 差异会给出结构化诊断而不是静默串角色。
 
-控制台加 `--world`（或 `world.enabled: true`）即可进入；完整示例见 [world 示例配置](./config/world_example.yaml)，Runtime 客户端使用 `world.*` RPC（见 [Runtime API](./docs/runtime_api.md)）。单角色模式完全不受影响。
+控制台加 `--world`（或 `world.enabled: true`）即可进入；完整示例见 [world 配置模板](./tmp/temp-world.yaml)，Runtime 客户端使用 `world.*` RPC（见 [Runtime API](./docs/runtime_api.md)）。单角色模式完全不受影响。
 
 ### 更好的会话管理
 
@@ -163,7 +163,7 @@ GensokyoAI 针对外部 AI 服务调用做了稳定性优化：
 - OpenAI Responses 流式 `failed` / `incomplete` 事件会转换成更明确的错误信息。
 - Runtime RPC 提供 `agent.send_message_stream`：JSON Lines / HTTP RPC 会返回稳定事件列表，WebSocket Runtime 可按生成进度逐帧推送事件，方便客户端按自身传输形态消费流式结果。
 
-完整配置示例见 [默认配置](./config/default.yaml)。
+完整配置示例见 [配置模板](./tmp/template-conf.yaml)。
 
 ## P0 稳定性与升级能力
 

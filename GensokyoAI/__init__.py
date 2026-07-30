@@ -77,7 +77,7 @@ GensokyoAI - 幻想乡 AI 角色扮演引擎
 命令行参数
 ----------
 --character, -c    角色名称或配置文件路径
---config           配置文件路径 (默认: config/default.yaml)
+--config           配置文件路径 (默认: config/local.yaml，首次启动自动从模板生成)
 --new-session      创建新会话
 --resume SESSION   恢复指定会话
 --list-sessions    列出所有历史会话

@@ -125,7 +125,7 @@ run_default_pip.cmd
 
 ## 4. 配置主聊天模型
 
-默认配置文件位于 `config/default.yaml`。建议复制一份自定义配置，例如 `config/local.yaml`，再通过 `--config config/local.yaml` 启动。
+首次启动会自动从模板 `tmp/template-conf.yaml` 生成本地配置 `config/local.yaml`。日常修改请只改 `config/local.yaml`，不要修改 tmp/ 下的发行模板；也可通过 `--config <路径>` 显式指定其他配置文件。
 
 ### 4.1 Ollama（默认本地 Provider）
 
@@ -421,7 +421,7 @@ gensokyoai --list-sessions
 | 参数 | 简写 | 说明 |
 |------|------|------|
 | `--character` | `-c` | 角色配置文件路径 |
-| `--config` |  | 应用配置文件路径，默认 `config/default.yaml` |
+| `--config` |  | 应用配置文件路径，默认 `config/local.yaml`（首次启动自动生成） |
 | `--new-session` |  | 创建新会话 |
 | `--resume` |  | 恢复指定 ID 的会话 |
 | `--list-sessions` |  | 列出所有历史会话 |
@@ -593,7 +593,7 @@ python -m pip install -e .[default]
 升级建议：
 
 1. 先备份自己的 `config/local.yaml`、`characters/`、`sessions/`、记忆数据和自定义资源。
-2. 对照 `config/default.yaml` 检查新增字段，特别是 `config_schema_version`、Provider 字段和 `resource_control`。
+2. 对照 `tmp/template-conf.yaml` 检查新增字段，特别是 `config_schema_version`、Provider 字段和 `resource_control`。
 3. 启动前先用客户端或 Runtime 的 `config.validate` 检查配置。
 4. 旧 session / memory 数据会在读取时尽量自动迁移，并创建备份；迁移结果可通过 `runtime.info.migration_diagnostics` 查看。
 5. 查看 `docs/versioning.md` 和 `docs/changelog.md` 了解版本策略和变更记录模板。
@@ -649,7 +649,7 @@ ollama pull qwen3.5:9b
 
 现象：启动前提示 `Unknown config field`、范围错误或枚举错误。
 
-处理：对照 `config/default.yaml` 修正字段名和值；优先使用 `config.validate` 查看完整 diagnostics。
+处理：对照 `tmp/template-conf.yaml` 修正字段名和值；优先使用 `config.validate` 查看完整 diagnostics。
 
 ### 资源限制错误
 
@@ -697,7 +697,7 @@ uv run python -m compileall GensokyoAI tests
 
 ### 16.1 凭证与密钥
 
-- 永远不要把真实 API Key 写进 `config/default.yaml` 或 `config/local.yaml`。
+- 永远不要把真实 API Key 写进 `tmp/template-conf.yaml` 或 `config/local.yaml`。
 - 推荐通过环境变量注入：
   - `GENSOKYOAI_API_KEY`：模型 Provider 的 API Key。
   - `GENSOKYOAI_RUNTIME_TOKEN`：Runtime HTTP/WebSocket 的认证 Token。

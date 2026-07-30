@@ -170,7 +170,7 @@ class WorldConfigHardeningTests(unittest.TestCase):
 class WorldExampleFileTests(unittest.TestCase):
     def test_world_example_yaml_loads_and_is_enabled(self):
         loader = ConfigLoader()
-        config = loader.load(Path("config/world_example.yaml"))
+        config = loader.load(Path("tmp/temp-world.yaml"))
 
         self.assertTrue(config.world.enabled)
         self.assertEqual(config.world.protagonist, "marisa")
@@ -183,9 +183,9 @@ class WorldExampleFileTests(unittest.TestCase):
                 f"角色卡不存在: {actor.character_file}",
             )
 
-    def test_default_yaml_world_section_disabled(self):
+    def test_template_conf_world_section_disabled(self):
         loader = ConfigLoader()
-        config = loader.load(Path("config/default.yaml"))
+        config = loader.load(Path("tmp/template-conf.yaml"))
         self.assertFalse(config.world.enabled)
 
 

@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import shutil
 from pathlib import Path
 
 from rich.console import Console
@@ -27,7 +28,12 @@ def parse_args():
     parser.add_argument("--new-session", action="store_true", help="创建新会话")
     parser.add_argument("--resume", type=str, metavar="SESSION_ID", help="恢复指定会话")
     parser.add_argument("--character", "-c", type=str, help="角色名称或角色配置文件路径")
-    parser.add_argument("--config", type=str, default="config/default.yaml", help="配置文件路径")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="配置文件路径（默认 config/local.yaml，首次启动自动从模板生成）",
+    )
     parser.add_argument("--list-sessions", action="store_true", help="列出所有会话")
     parser.add_argument("--no-stream", action="store_true", help="禁用流式输出")
     parser.add_argument(
@@ -37,6 +43,21 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def _ensure_local_config() -> Path:
+    """首次启动：从发行模板生成本地配置（用户只改它，不碰 tmp/ 模板）。"""
+    config_dir = Path("config")
+    local_path = config_dir / "local.yaml"
+    if not local_path.exists():
+        template = Path("tmp/template-conf.yaml")
+        config_dir.mkdir(parents=True, exist_ok=True)
+        if template.exists():
+            shutil.copyfile(template, local_path)
+            console.print(
+                f"[green]✓ 已生成本地配置: {local_path}（后续请修改它，不要改 tmp/ 模板）[/]"
+            )
+    return local_path
 
 
 def find_character_file(name: str) -> Path:
@@ -75,8 +96,8 @@ async def main():
     """主函数"""
     args = parse_args()
 
-    # 加载配置
-    config_file = Path(args.config) if args.config else None
+    # 加载配置（未显式指定时：本地配置优先，首次启动从模板生成）
+    config_file = Path(args.config) if args.config else _ensure_local_config()
     loader = ConfigLoader()
     config = loader.load(config_file)
 

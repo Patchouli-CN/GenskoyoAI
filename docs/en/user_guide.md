@@ -125,7 +125,7 @@ Before first use of `run_default_uv.cmd`, please install uv; usually no manual P
 
 ## 4. Configure the Main Chat Model
 
-The default configuration file is at `config/default.yaml`. We recommend copying it to a custom config, e.g. `config/local.yaml`, and then launching with `--config config/local.yaml`.
+On first launch, the local config `config/local.yaml` is generated automatically from the template `tmp/template-conf.yaml`. Edit only `config/local.yaml` for daily use — never the release templates under tmp/; you can also point `--config <path>` at another file explicitly.
 
 ### 4.1 Ollama (Default Local Provider)
 
@@ -419,7 +419,7 @@ Command-line arguments:
 | Argument | Short | Description |
 |----------|-------|-------------|
 | `--character` | `-c` | Character config file path |
-| `--config` |  | Application config file path; default `config/default.yaml` |
+| `--config` |  | Application config file path; default `config/local.yaml` (auto-generated on first launch) |
 | `--new-session` |  | Create a new session |
 | `--resume` |  | Resume a session by specified ID |
 | `--list-sessions` |  | List all historical sessions |
@@ -591,7 +591,7 @@ python -m pip install -e .[default]
 Upgrade recommendations:
 
 1. First back up your own `config/local.yaml`, `characters/`, `sessions/`, memory data, and custom resources.
-2. Check `config/default.yaml` for new fields, especially `config_schema_version`, provider fields, and `resource_control`.
+2. Check `tmp/template-conf.yaml` for new fields, especially `config_schema_version`, provider fields, and `resource_control`.
 3. Before starting, use the client or Runtime `config.validate` to check the configuration.
 4. Old session / memory data will be migrated automatically when read, with backups created; migration results can be viewed via `runtime.info.migration_diagnostics`.
 5. See `docs/en/versioning.md` and `docs/en/changelog.md` for version policy and changelog templates.
@@ -647,7 +647,7 @@ ollama pull qwen3.5:9b
 
 Symptom: startup reports `Unknown config field`, range error, or enum error.
 
-Solution: correct field names and values against `config/default.yaml`; prefer using `config.validate` to view complete diagnostics.
+Solution: correct field names and values against `tmp/template-conf.yaml`; prefer using `config.validate` to view complete diagnostics.
 
 ### Resource Limit Error
 
@@ -695,7 +695,7 @@ Although this project runs the Agent in a user-local process, there are still so
 
 ### 16.1 Credentials and Keys
 
-- Never write real API keys into `config/default.yaml` or `config/local.yaml`.
+- Never write real API keys into `tmp/template-conf.yaml` or `config/local.yaml`.
 - Recommended injection via environment variables:
   - `GENSOKYOAI_API_KEY`: model provider API key.
   - `GENSOKYOAI_RUNTIME_TOKEN`: Runtime HTTP/WebSocket authentication token.

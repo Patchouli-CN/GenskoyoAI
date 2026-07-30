@@ -245,13 +245,13 @@ def sync_config(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="将 default.yaml 的格式变更同步到本地配置文件")
+    parser = argparse.ArgumentParser(description="将配置模板的格式变更同步到本地配置文件")
     parser.add_argument(
         "source",
         nargs="?",
         type=Path,
-        default=Path("config/default.yaml"),
-        help="源文件路径（默认: config/default.yaml）",
+        default=Path("tmp/template-conf.yaml"),
+        help="源文件路径（默认: tmp/template-conf.yaml）",
     )
     parser.add_argument(
         "target",

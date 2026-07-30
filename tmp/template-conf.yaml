@@ -1,4 +1,5 @@
-# GensokyoAI 默认配置
+# GensokyoAI 配置模板
+# 首次启动时自动复制为 config/local.yaml——日常修改请改 local.yaml，不要改本文件。
 # 当前配置 schema 版本。旧配置可不写该字段；如果写了高于当前支持版本的数字，启动前会报错。
 config_schema_version: 1
 

@@ -664,7 +664,7 @@ class RuntimeService:
             resolved_config_path = (
                 self._resolve_optional(config_path)
                 or self.state.config_path
-                or self.state.root_dir / "config" / "default.yaml"
+                or self._fallback_config_path()
             )
             with open(resolved_config_path, encoding="utf-8") as file:
                 config_data = yaml.safe_load(file) or {}
@@ -869,7 +869,7 @@ class RuntimeService:
 
             config_file = (
                 self._resolve_optional(config_path)
-                or self.state.root_dir / "config" / "default.yaml"
+                or self._fallback_config_path()
             )
             char_file = self._resolve_character(
                 character_path=character_path,
@@ -1780,7 +1780,7 @@ class RuntimeService:
             config_file = (
                 self._resolve_optional(config_path)
                 or self.state.config_path
-                or self.state.root_dir / "config" / "default.yaml"
+                or self._fallback_config_path()
             )
             loader = ConfigLoader()
             config = loader.load(config_file)
@@ -2701,6 +2701,14 @@ class RuntimeService:
             raise RuntimeError(
                 "Semantic memory is not available for the current session"
             ) from error
+
+    def _fallback_config_path(self) -> Path:
+        """未显式指定配置时的兜底：本地配置优先，发行模板兜底。"""
+
+        local = self.state.root_dir / "config" / "local.yaml"
+        if local.exists():
+            return local
+        return self.state.root_dir / "tmp" / "template-conf.yaml"
 
     def _resolve_optional(self, value: str | None) -> Path | None:
         if not value:
