@@ -29,12 +29,12 @@ from ..core.config import AppConfig, ConfigLoader, WorldActorConfig, WorldConfig
 from ..core.events import Event, EventBus, SystemEvent
 from ..runtime.resource_control import ResourceGate, build_resource_gates
 from ..scene.manager import SceneManager
+from ..utils.helpers import build_world_memory_root
 from ..utils.logger import logger
 from ..utils.path_security import sanitize_path_id
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .initiative import WorldInitiativeLoop
-from .memory_paths import build_world_memory_root
 from .memory_projector import WorldMemoryProjector
 from .persistence import WorldPersistence
 from .stage import WorldStage
@@ -441,7 +441,16 @@ class GensokyoWorld:
             )
         sanitized_names[safe_name] = actor_cfg.id
 
-        actor_config = msgspec.structs.replace(config, character=character)
+        # Actor 私有会话统一收进 sessions/world/<world_id>/ 管理：
+        # 与单角色目录（sessions/<角色名>/）隔离，不同 world 的同角色互不混居；
+        # 语义记忆根仍用原始 save_path（memory/world_<id>/<name>/），不要跟着嵌套
+        world_session_config = msgspec.structs.replace(
+            config.session,
+            save_path=config.session.save_path / "world" / sanitize_path_id(world_config.id),
+        )
+        actor_config = msgspec.structs.replace(
+            config, character=character, session=world_session_config
+        )
         deps = AgentDependencies(
             model_client=model_client,
             resource_gates=resource_gates,

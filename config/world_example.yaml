@@ -62,7 +62,7 @@ world:
 
   persistence:
     enabled: true
-    save_path: ./sessions/worlds
+    save_path: ./sessions/world   # world 命名空间根：存档/角色会话/语义记忆同树管理
 
   project_perspective_memories: true   # 同一世界事件各记各视角：魔理沙记尴尬、蕾米记有人擅闯
   user_follows_current_actor: true     # 魔理沙切到红魔馆时，用户跟着一起进去

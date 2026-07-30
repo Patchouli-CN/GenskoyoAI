@@ -107,6 +107,10 @@
 - 事件链 `MESSAGE_RECEIVED → ACTION_DECIDED → GENERATE_RESPONSE` 曾两跳都不转发 `system_contexts`，console 的 `<attention>` 注入与 RPC 的 `system_contexts` 参数从来没到过模型。阶段 3 已修，新增字段务必确认全链透传。
 - **World console 显示曾走 stream/bus 双通道**：send 迭代 `send_message_stream` 显示一份、World 总线订阅又显示一份，`_in_user_turn` 时间标志挡不住异步调度的事件（回调落地时标志已清）。阶段 9 定为**单一通道**：send 用非流式 `world.send_message` 驱动回合，显示全部由 World 总线订阅承担（turn lock 保证用户回合与主动剧情不交错）。别再给 console 加回 stream 迭代显示。
 
+**代码规范（用户 2026-07-30 明确要求）**
+- **`build_*` 工具函数统一放 `utils/`**，且注意功能相关（不是安全工具别进 `path_security.py`，通用辅助进 `helpers.py`）；**不要每个小功能拆一个模块/文件**（`world/memory_paths.py` 这类单函数小模块已被点名并清理）。
+- World 存储布局（用户定稿）：`sessions/world/<world_id>/` 是唯一命名空间——World 存档（`<session>.json`）、actor 私有会话（`<角色名>/`）、语义记忆（`memory/<角色名>/`）同树管理；单角色 `sessions/<角色名>/` 不受影响。
+
 **代码风格既成事实**
 - 已使用 Python 3.14 的 PEP 758 语法（无括号 `except A, B:`）。项目硬要求 3.14+，用旧版本跑会直接语法错误——不是代码写错了。
 - `_impl.py` 已做过一轮瘦身：定时器编排在 `initiative_coordinator.py`、角色扮演框架 prompt 在 `prompts.py`、send 四兄弟收敛为 `_send_impl` / `_send_stream_impl`。往 Agent 加东西前先看这几处有没有合适的落点。

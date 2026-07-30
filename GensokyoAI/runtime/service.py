@@ -1786,7 +1786,7 @@ class RuntimeService:
             config = loader.load(config_file)
             if self._storage_root is not None:
                 # 网络租户：World 存档与 Actor 会话根按租户隔离，绝不跨用户共享
-                config.world.persistence.save_path = self._storage_root / "worlds"
+                config.world.persistence.save_path = self._storage_root / "world"
                 config.world.persistence.save_path.mkdir(parents=True, exist_ok=True)
                 config.session.save_path = self._storage_root / "sessions"
                 config.session.save_path.mkdir(parents=True, exist_ok=True)
@@ -2203,8 +2203,8 @@ class RuntimeService:
 
     def _world_persistence(self) -> WorldPersistence:
         if self._storage_root is not None:
-            return WorldPersistence(self._storage_root / "worlds")
-        root = self._world_persistence_path or (self.state.root_dir / "sessions" / "worlds")
+            return WorldPersistence(self._storage_root / "world")
+        root = self._world_persistence_path or (self.state.root_dir / "sessions" / "world")
         return WorldPersistence(root)
 
     def _world_id_or_current(self, world_id: str | None) -> str:

@@ -20,7 +20,7 @@ from GensokyoAI.runtime.resource_control import build_resource_gates
 from GensokyoAI.session.manager import SessionManager
 from GensokyoAI.tools.executor import ToolExecutor
 from GensokyoAI.tools.registry import ToolRegistry
-from GensokyoAI.world import build_world_memory_root
+from GensokyoAI.utils.helpers import build_world_memory_root
 
 
 class _CompositionProvider(BaseProvider):
@@ -225,7 +225,7 @@ class AgentCompositionTests(unittest.TestCase):
             reimu_b = build_world_memory_root(base, "world/b", "Reimu/博丽")
             marisa_a = build_world_memory_root(base, "world/a", "Marisa")
 
-            self.assertEqual(reimu_a, base / "memory" / "world_world_a" / "Reimu_博丽")
+            self.assertEqual(reimu_a, base / "world" / "world_a" / "memory" / "Reimu_博丽")
             self.assertNotEqual(reimu_a, reimu_b)
             self.assertNotEqual(reimu_a, marisa_a)
 

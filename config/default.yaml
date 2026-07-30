@@ -294,6 +294,6 @@ world:
     max_entries_per_scene: 500
   persistence:
     enabled: true
-    save_path: ./sessions/worlds
+    save_path: ./sessions/world  # world 命名空间根：存档/角色会话/语义记忆同树管理
   project_perspective_memories: true  # 表演段落结束后为在场角色各写各视角记忆
   user_follows_current_actor: true    # 当前演员切场景时用户是否跟随

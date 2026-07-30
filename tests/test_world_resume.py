@@ -34,6 +34,7 @@ from GensokyoAI.core.migrations import (
     migrate_memory_store_payload,
     migrate_session_file_payload,
 )
+from GensokyoAI.utils.helpers import build_world_memory_root
 from GensokyoAI.world import GensokyoWorld, WorldAssemblyError, WorldPersistence
 from GensokyoAI.world.persistence import WorldPersistenceError
 
@@ -137,6 +138,33 @@ class WorldResumeTests(unittest.IsolatedAsyncioTestCase):
         assert world_session is not None
         await world.shutdown()
         return world_session, marisa_session
+
+    async def test_actor_sessions_live_under_world_session_root(self):
+        """Actor 私有会话统一收进 save_path/world/<world_id>/（不与单角色目录混居）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_characters(tmp)
+            world = await GensokyoWorld.create(_make_config(tmp))
+            self.addAsyncCleanup(world.shutdown)
+
+            expected_root = Path(tmp) / "world" / "testworld"
+            expected_memory_names = {"marisa": "雾雨魔理沙", "patchouli": "帕秋莉·诺蕾姬"}
+            for actor_id, agent in world._actors.items():
+                self.assertEqual(agent.config.session.save_path, expected_root)
+                # 语义记忆根不随 session 根嵌套：仍由 build_world_memory_root 决定
+                self.assertEqual(
+                    agent.runtime_context.semantic_memory_root,
+                    build_world_memory_root(
+                        Path(tmp), "testworld", expected_memory_names[actor_id]
+                    ),
+                )
+            # 会话文件实际落盘位置：world/<world_id>/<角色名>/<session>.json
+            marisa_session = (
+                world._actors["marisa"].session_manager.get_current_session().session_id
+            )
+            session_file = expected_root / "雾雨魔理沙" / f"{marisa_session}.json"
+            self.assertTrue(session_file.exists())
+            # 单角色目录不被创建
+            self.assertFalse((Path(tmp) / "雾雨魔理沙").exists())
 
     async def test_resume_restores_stage_transcript_and_actor_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,7 +6,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import wraps
+from pathlib import Path
 from typing import Any
+
+from .path_security import sanitize_path_id
 
 
 def utc_now() -> datetime:
@@ -94,3 +97,15 @@ def safe_get(obj: Any, path: str, default: Any = None) -> Any:
         return obj
     except AttributeError, KeyError, TypeError:
         return default
+
+
+def build_world_memory_root(base_path, world_id: str, character_name: str):
+    """构造 ``world/<world_id>/memory/<character_name>`` 长期记忆根。
+
+    World 的一切存储统一收进 ``world/<world_id>/`` 命名空间（actor 私有会话、
+    语义记忆、World 存档同树管理）；world id 与角色名分别净化，避免通过修改
+    角色显示名伪造命名空间，也确保同一 World 的多个会话自然复用同一角色长期记忆。
+    """
+    safe_world_id = sanitize_path_id(world_id)
+    safe_character_name = sanitize_path_id(character_name)
+    return Path(base_path) / "world" / safe_world_id / "memory" / safe_character_name

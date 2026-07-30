@@ -40,7 +40,8 @@
 - 默认文件后端定位为单节点远程多用户；多节点生产部署仍要求 PostgreSQL 和共享对象存储。
 - Runtime Protocol `2.1.0` 新增 `world.*` 多角色编排方法（14 个）与 capability `world.orchestration`；World 会话使用独立的 `world session schema v1`；`world.send_*` 复用消息幂等账本。协议 major 保持 `2`，客户端无迁移负担。
 - 主动定时器强制兜底链（`fallback_on_no_schedule` 等 4 键）已移除，旧键仅警告迁移；Runtime 事件脱敏占位符统一为 `[REDACTED]`。
-- 对话欲按 2026-07-30 用户定稿重构：主动发言改由 ThinkEngine 四维心情打分 + `initiative_timer.drive_threshold`（默认 0.6）阈值判定，无累积器；`hesitation_*` 配置键与 `drive_*` 累积键退役（仅警告迁移）；`initiative_timer.hesitation` / `initiative_timer.hesitation.set` 转为 legacy/deprecated（`remove_after: "3.0.0"`，仍可从 `legacy_methods` 发现，调用返回退役载荷）；定时器事件 payload 移除 `hesitation_*` 字段。ActionPlanner 的 INITIATIVE_SPEAK 动作 content 语义改为「待表达意图摘要」，执行时统一走说话前思考 + 即时生成管线，预写话术不再直接发送。
+- 对话欲按 2026-07-30 用户定稿重构：主动发言改由 ThinkEngine 四维心情打分 + `initiative_timer.drive_threshold`（默认 0.6）阈值判定，无累积器；`hesitation_*` 配置键与 `drive_*` 累积键退役（仅警告迁移）；`initiative_timer.hesitation` / `initiative_timer.hesitation.set` 转为 legacy/deprecated（`remove_after: "3.0.0"`，仍可从 `legacy_methods` 发现，调用返回退役载荷）；定时器事件 payload 移除 `hesitation_*` 字段。ActionPlanner 的 INITIATIVE_SPEAK 动作 content 语义改为「待表达意图摘要」，执行时统一走说话前思考 + 即时生成管线，预写话术不再直接发送；一切主动开口统一经 INITIATIVE_SPEAK 动作出口，SPEAK 仅服务回复用户。
+- World 模式的所有存储统一收进 `sessions/world/<world_id>/` 命名空间：World 存档（`<session>.json`）、actor 私有会话（`<角色名>/`）、语义记忆（`memory/<角色名>/`）同树管理；此前分散在 `sessions/worlds/`、`sessions/<角色名>/`、`sessions/memory/world_<id>/` 三处。单角色模式路径不受影响。
 
 ---
 

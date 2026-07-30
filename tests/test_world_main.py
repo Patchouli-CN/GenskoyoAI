@@ -206,7 +206,10 @@ class WorldMainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(marisa.actor_id, "marisa")
             self.assertEqual(marisa.world_id, "testworld")
             self.assertFalse(marisa._manage_initiative_timer)
-            self.assertIn("world_testworld", str(marisa._semantic_memory_root))
+            self.assertEqual(
+                marisa._semantic_memory_root,
+                Path(tmp) / "world" / "testworld" / "memory" / "雾雨魔理沙",
+            )
             self.assertNotEqual(
                 marisa.session_manager.get_current_session().session_id,
                 patchouli.session_manager.get_current_session().session_id,

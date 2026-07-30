@@ -9,12 +9,12 @@ from GensokyoAI.core.schema_versions import (
     WORLD_SESSION_FILE_FORMAT,
     WORLD_SESSION_SCHEMA_VERSION,
 )
+from GensokyoAI.utils.helpers import build_world_memory_root
 from GensokyoAI.world import (
     SpeakerKind,
     TranscriptEntry,
     WorldPersistence,
     WorldPersistenceError,
-    build_world_memory_root,
 )
 
 
@@ -157,7 +157,7 @@ class WorldMemoryPathTests(unittest.TestCase):
             self.assertEqual(first, same_world_next_session)
             self.assertNotEqual(first, other_world)
             self.assertNotEqual(first, other_actor)
-            self.assertEqual(first, base / "memory" / "world_world_one" / "Marisa_霧雨")
+            self.assertEqual(first, base / "world" / "world_one" / "memory" / "Marisa_霧雨")
 
 
 if __name__ == "__main__":

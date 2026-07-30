@@ -297,7 +297,7 @@ class WorldPersistenceConfig(Struct):
     """World 会话持久化配置。"""
 
     enabled: bool = True
-    save_path: Path = field(default_factory=lambda: Path("./sessions/worlds"))
+    save_path: Path = field(default_factory=lambda: Path("./sessions/world"))
 
     def __post_init__(self):
         if not isinstance(self.save_path, Path):

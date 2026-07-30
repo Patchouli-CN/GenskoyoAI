@@ -13,7 +13,6 @@ Runtime/Console 接入（阶段 9）。
 from .director import Director
 from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .initiative import WorldInitiativeLoop
-from .memory_paths import build_world_memory_root
 from .memory_projector import PerspectiveMemory, WorldMemoryProjector
 from .persistence import WorldPersistence, WorldPersistenceError
 from .stage import WorldStage
@@ -62,5 +61,4 @@ __all__ = [
     "WorldStateSnapshot",
     "WorldTurn",
     "SharedTranscript",
-    "build_world_memory_root",
 ]
