@@ -97,6 +97,9 @@ run_adapters(Nonebot2Adapter())  # 想挂几个适配器就传几个
 
 第三方适配器包（如 `gskai-nb2`）只需依赖 GensokyoAI 并实现同一协议即可接入；
 `RuntimeHost`（`GensokyoAI/runtime/host.py`）的方法签名属于公开契约。
+适配器还可以用 `host.register_adapter_tool(func)` 把工具函数注入所有租户
+Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力——nb2 的
+`update_member_impression` 就是范例。
 
 ## 行为说明
 
@@ -113,6 +116,8 @@ run_adapters(Nonebot2Adapter())  # 想挂几个适配器就传几个
   `nb2_data/known_members.json`（key 为 `{昵称}_{QQ号}`，同名靠 QQ 号后缀区分、
   改名自动迁移）；之后该群友再说话时，印象以 `【你对 某某 的印象】` 注入当轮
   上下文，角色就能「认识」老熟人。生成是后台任务，不阻塞回复，失败自动跳过。
+  角色还可以通过 `update_member_impression` 工具**自行更新**印象
+  （觉得了解加深或印象过时了自己改写），该工具随宿主注入所有租户。
 - **回复**：默认按 QQ 群聊风格——`GSK_NB2_EXTRA_PROMPT` 注入当轮要求
   （简短、口语、每句一行、不写动作、不用「」），发送前再经 `strip_rp_style`
   确定性清洗残留的 `*动作*` 与「」（提示词压不住角色卡的 RP 惯性时兜底），

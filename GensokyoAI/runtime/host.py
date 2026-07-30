@@ -59,6 +59,8 @@ class RuntimeHost:
         )
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
         self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
+        # 适配器工具模板：(函数, 名称, 是否并行安全)，注入当前及后续租户的工具注册表
+        self._adapter_tools: list[tuple[Callable[..., Any], str | None, bool]] = []
 
     # ==================== 基础调用 ====================
 
@@ -118,6 +120,7 @@ class RuntimeHost:
                 "initiative_timer.update",
                 {"agent_id": agent_id, "session_id": sid, "enabled": False},
             )
+        self._apply_adapter_tools(agent_id)
         return sid, int(revision)
 
     async def fetch_revision(self, agent_id: str, session_id: str) -> int:
@@ -182,6 +185,34 @@ class RuntimeHost:
             idempotency_key=f"nb2-meta:{uuid4().hex[:12]}",
         )
         return content
+
+    async def register_adapter_tool(
+        self, func: Callable[..., Any], *, name: str | None = None, parallel_safe: bool = False
+    ) -> None:
+        """把适配器工具注入当前及后续初始化的租户 Agent 工具注册表。
+
+        工具 schema 由函数签名与文档串生成（tools.base 的 `tool()` 约定）；
+        注入后下一轮回复即可被模型调用。写状态的工具应传 parallel_safe=False。
+        """
+        entry = (func, name, parallel_safe)
+        if entry not in self._adapter_tools:
+            self._adapter_tools.append(entry)
+        # 已装配的租户即时生效（访问 service 租户表属 runtime 包内契约）
+        for service in self._service._tenant_services.values():
+            agent = service.state.agent
+            if agent is not None:
+                agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
+
+    def _apply_adapter_tools(self, agent_id: str) -> None:
+        """把已登记的适配器工具注入刚初始化的租户 Agent。"""
+        if not self._adapter_tools:
+            return
+        service = self._service._tenant_services.get((self._principal.user_id, agent_id))
+        agent = service.state.agent if service is not None else None
+        if agent is None:
+            return
+        for func, name, parallel_safe in self._adapter_tools:
+            agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
 
     # ==================== 主动消息事件（进程内队列推送） ====================
 

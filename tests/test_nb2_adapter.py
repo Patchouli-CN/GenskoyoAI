@@ -97,6 +97,20 @@ class MemberStoreTests(unittest.TestCase):
         self.path.write_text("{bad", encoding="utf-8")
         self.assertIsNone(MemberStore(self.path).get(123))
 
+    def test_update_by_name(self):
+        store = MemberStore(self.path)
+        store.put("小明", 123, "旧印象")
+        self.assertTrue(store.update_by_name("小明", "新印象"))
+        self.assertEqual(store.get(123), "新印象")
+        self.assertIn("小明_123", store._entries)  # key 保持不变
+        self.assertFalse(store.update_by_name("不存在", "x"))
+
+    def test_update_by_name_with_underscore_in_name(self):
+        store = MemberStore(self.path)
+        store.put("摸鱼_达人", 789, "旧")
+        self.assertTrue(store.update_by_name("摸鱼_达人", "新"))
+        self.assertEqual(store.get(789), "新")
+
 
 class Nb2ConfigTests(unittest.TestCase):
     def test_defaults(self):
@@ -337,6 +351,58 @@ class RuntimeHostWrapperTests(unittest.TestCase):
             calls.clear()
             await host.generate_meta_text("KirisameMarisa", "再写一段")
             self.assertEqual([m for m, _ in calls], ["session.messages", "agent.send_message"])
+
+        asyncio.run(run())
+
+
+class RuntimeHostAdapterToolTests(unittest.TestCase):
+    """适配器工具注入：已装配租户即时生效，新租户初始化时自动注入。"""
+
+    def test_register_adapter_tool_current_and_future_tenants(self):
+        async def run():
+            from GensokyoAI.tools.registry import ToolRegistry
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                service = RuntimeService(root)
+                registry_one = ToolRegistry()
+                child_one = RuntimeService(
+                    root,
+                    tenant_key=("nb2", "agent-1"),
+                    storage_root=service._tenant_storage_root("nb2", "agent-1"),
+                )
+                child_one.state.agent = SimpleNamespace(tool_registry=registry_one)
+                service._tenant_services[("nb2", "agent-1")] = child_one
+
+                host = RuntimeHost(user_id="nb2", service=service)
+
+                def my_tool(x: str) -> str:
+                    """测试工具"""
+                    return x
+
+                await host.register_adapter_tool(my_tool)
+                existing = registry_one.get("my_tool")
+                self.assertIsNotNone(existing)
+                self.assertFalse(existing.parallel_safe)  # 默认按写状态串行
+
+                # 新租户：ensure_agent 初始化后自动注入
+                registry_two = ToolRegistry()
+                child_two = RuntimeService(
+                    root,
+                    tenant_key=("nb2", "agent-2"),
+                    storage_root=service._tenant_storage_root("nb2", "agent-2"),
+                )
+                child_two.state.agent = SimpleNamespace(tool_registry=registry_two)
+                service._tenant_services[("nb2", "agent-2")] = child_two
+
+                async def fake_call(method, params=None):
+                    if method == "agent.init":
+                        return {"session": {"session_id": "s-2", "revision": 0}}
+                    return {"enabled": False}
+
+                host._call = fake_call
+                await host.ensure_agent("agent-2", "KirisameMarisa")
+                self.assertIsNotNone(registry_two.get("my_tool"))
 
         asyncio.run(run())
 

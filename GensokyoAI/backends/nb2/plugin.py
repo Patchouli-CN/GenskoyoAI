@@ -109,6 +109,19 @@ async def _extract_group_text(bot: Bot, event: GroupMessageEvent) -> str:
     return "".join(parts).strip()
 
 
+async def update_member_impression(member_name: str, impression: str) -> str:
+    """更新你对某位群友的印象备注：当你对 TA 的了解加深、或之前的印象不再准确时调用。
+    member_name 是群友昵称（群聊消息里【】中的名字）；impression 是新的印象内容
+    （你的第一人称、一两句话，不要动作描写）。同名群友存在多位时会更新第一位。"""
+    cleaned = strip_rp_style(impression).replace("【", "").replace("】", "")[:240].strip()
+    if not cleaned:
+        return "印象内容为空，未更新。"
+    if _members.update_by_name(member_name, cleaned):
+        logger.info(f"[nb2] 角色更新了对 {member_name} 的印象")
+        return f"已更新对 {member_name} 的印象。"
+    return f"还没有关于 {member_name} 的印象记录——先正常交谈，第一印象会自动生成。"
+
+
 async def _learn_impression(member_name: str, member_qq: int, exchange: str) -> None:
     """首轮交谈后给新群友生成角色视角的第一印象（后台任务，不阻塞回复）。"""
     host = _require_host()
@@ -162,6 +175,9 @@ _driver = get_driver()
 
 @_driver.on_startup
 async def _on_startup() -> None:
+    if _config.member_memory:
+        # 让角色可以自行更新群友印象（注入当前及后续租户的工具注册表）
+        await _require_host().register_adapter_tool(update_member_impression)
     logger.info(
         f"[nb2] 适配器已加载: 角色={_config.character}, "
         f"主动发言={'开' if _config.initiative else '关'}, "

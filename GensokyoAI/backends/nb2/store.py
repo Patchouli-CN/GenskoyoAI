@@ -109,6 +109,16 @@ class MemberStore:
             self._entries[f"{qq_name}_{qq_id}"] = impression
             self._save_locked()
 
+    def update_by_name(self, qq_name: str, impression: str) -> bool:
+        """按昵称部分（key 的 ``{name}_`` 前缀）更新印象，供 AI 工具调用；找不到返回 False。"""
+        with self._lock:
+            for key in self._entries:
+                if key.rsplit("_", 1)[0] == qq_name:
+                    self._entries[key] = impression
+                    self._save_locked()
+                    return True
+        return False
+
     def _save_locked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
