@@ -15,6 +15,7 @@ from typing import Any
 
 from nonebot import get_bots, get_driver, on_message
 from nonebot.adapters.onebot.v11 import (
+    Bot,
     GroupMessageEvent,
     Message,
     MessageEvent,
@@ -36,6 +37,7 @@ _store = SessionStore(_config.data_dir / "sessions.json")
 _locks: dict[str, asyncio.Lock] = {}
 _initialized: set[str] = set()  # 本进程内已成功 ensure_agent 的 agent_id
 _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ号)
+_member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
@@ -56,6 +58,39 @@ async def _send_segmented(send: SendCallable, text: str) -> None:
         if index:
             await asyncio.sleep(_REPLY_SEGMENT_DELAY_SECONDS)
         await send(Message(MessageSegment.text(segment)))  # text 段转义 CQ 码
+
+
+async def _resolve_member_name(bot: Bot, group_id: int, qq: str) -> str:
+    """解析群成员显示名：优先缓存（群消息发送者会持续填充），未命中调群成员接口。"""
+    key = (group_id, int(qq))
+    cached = _member_names.get(key)
+    if cached:
+        return cached
+    try:
+        info = await bot.get_group_member_info(group_id=group_id, user_id=int(qq))
+        name = sanitize_display_name(str(info.get("card") or info.get("nickname") or qq))
+    except Exception as error:
+        logger.debug(f"[nb2] 群成员名片查询失败（{group_id}/{qq}）: {error}")
+        name = qq  # 兜底：至少给个 QQ 号
+    _member_names[key] = name
+    return name
+
+
+async def _extract_group_text(bot: Bot, event: GroupMessageEvent) -> str:
+    """逐段提取群消息文本：at 段转译为 @昵称（@bot 自身的段丢弃），其余非文本段忽略。"""
+    parts: list[str] = []
+    for segment in event.get_message():
+        if segment.type == "text":
+            parts.append(str(segment.data.get("text", "")))
+        elif segment.type == "at":
+            qq = str(segment.data.get("qq", ""))
+            if not qq or qq == str(event.self_id):
+                continue
+            if qq == "all":
+                parts.append("@全体成员")
+            else:
+                parts.append(f"@{await _resolve_member_name(bot, event.group_id, qq)}")
+    return "".join(parts).strip()
 
 
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
@@ -118,7 +153,7 @@ private_chat = on_message(rule=Rule(_is_private_message), priority=90, block=Tru
 
 
 @group_chat.handle()
-async def _handle_group(event: GroupMessageEvent) -> None:
+async def _handle_group(event: GroupMessageEvent, bot: Bot) -> None:
     if _config.group_whitelist and event.group_id not in _config.group_whitelist:
         return
     agent_id = f"qq-group-{event.group_id}"
@@ -127,12 +162,16 @@ async def _handle_group(event: GroupMessageEvent) -> None:
     if _config.sender_label:
         raw_name = event.sender.card or event.sender.nickname or str(event.user_id)
         sender_name = sanitize_display_name(raw_name)
+        _member_names[(event.group_id, event.user_id)] = sender_name  # 顺手填充名片缓存
+    text = await _extract_group_text(bot, event)
     await _chat(
-        event,
-        group_chat,
+        matcher=group_chat,
         key=f"group:{event.group_id}",
         agent_id=agent_id,
+        text=text,
         sender_name=sender_name,
+        self_id=event.self_id,
+        message_id=event.message_id,
     )
 
 
@@ -140,7 +179,15 @@ async def _handle_group(event: GroupMessageEvent) -> None:
 async def _handle_private(event: PrivateMessageEvent) -> None:
     agent_id = f"qq-user-{event.user_id}"
     _targets[agent_id] = ("user", event.user_id)
-    await _chat(event, private_chat, key=f"user:{event.user_id}", agent_id=agent_id)
+    await _chat(
+        matcher=private_chat,
+        key=f"user:{event.user_id}",
+        agent_id=agent_id,
+        text=event.get_message().extract_plain_text(),
+        sender_name=None,
+        self_id=event.self_id,
+        message_id=event.message_id,
+    )
 
 
 def _lock_for(key: str) -> asyncio.Lock:
@@ -178,14 +225,16 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
 
 
 async def _chat(
-    event: MessageEvent,
     matcher: type[Matcher],
     *,
     key: str,
     agent_id: str,
-    sender_name: str | None = None,
+    text: str,
+    sender_name: str | None,
+    self_id: int,
+    message_id: int,
 ) -> None:
-    text = event.get_message().extract_plain_text().strip()
+    text = text.strip()
     if not text or text.startswith("/"):
         return  # 忽略纯表情/图片消息与保留的 "/" 命令前缀
     if sender_name:
@@ -201,7 +250,7 @@ async def _chat(
             else:
                 session_id = str(entry["session_id"])
                 revision = int(entry["revision"])
-            idempotency_key = f"nb2:{event.self_id}:{event.message_id}"
+            idempotency_key = f"nb2:{self_id}:{message_id}"
             try:
                 reply, new_revision = await _host.send_message(
                     agent_id,
