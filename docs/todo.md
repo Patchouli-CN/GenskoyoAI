@@ -235,6 +235,18 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.6 QQ 群聊风格适配（2026-07-30，群友反馈，未提交）
+
+- `GSK_NB2_EXTRA_PROMPT`：随每条回复注入 `system_contexts` 的附加要求（RPC 原生通道，
+  只影响当轮回复、不写入会话）；内置默认 = 群聊风格（简短口语、每句一行、不写动作、
+  最多三句），`.env` 可覆盖。**目前不影响主动消息**（生成在 Runtime 侧，无每租户注入口）。
+- `GSK_NB2_SPLIT_REPLY`（默认开）：回复按行拆成多条短消息发送（≤5 条、间隔 0.8s），
+  工具函数 `split_reply_segments` 在 `utils/helpers.py`——按行拆，不做句读分析
+  （用户拍板：模型按行写、适配器按行发，比程序切句子可靠；空格分隔被否，会误伤
+  「Master Spark」这类文本）。主动消息同样走分段发送。
+- 测试：test_nb2_adapter.py 增配置解析 / 按行拆段 / system_contexts 透传共 7 例。
+  基线：624 passed, 3 subtests passed。
+
 ## 8.5 外部审计修复（2026-07-30，已修，未提交）
 
 1. **World 自定义配置权限闸门缺项 → 已修**：核实 world.init 参数全集仅

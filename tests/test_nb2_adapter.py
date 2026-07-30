@@ -7,13 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from GensokyoAI.backends.nb2.config import Nb2Config
+from GensokyoAI.backends.nb2.config import DEFAULT_EXTRA_PROMPT, Nb2Config
 from GensokyoAI.backends.nb2.runtime_host import RuntimeHost, RuntimeRpcError
 from GensokyoAI.backends.nb2.store import SessionStore
 from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.runtime.resource_control import ResourceLimitError
 from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService
+from GensokyoAI.utils.helpers import split_reply_segments
 
 
 class SessionStoreTests(unittest.TestCase):
@@ -67,6 +68,8 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertIsNone(config.root_dir)
         self.assertEqual(config.group_whitelist, frozenset())
         self.assertTrue(config.initiative)
+        self.assertEqual(config.extra_prompt, DEFAULT_EXTRA_PROMPT)
+        self.assertTrue(config.split_reply)
 
     def test_parse_from_env(self):
         env = {
@@ -75,6 +78,8 @@ class Nb2ConfigTests(unittest.TestCase):
             "GSK_NB2_ROOT_DIR": "D:/gsk",
             "GSK_NB2_GROUP_WHITELIST": "123，456, 789 ,abc,",  # 含中文逗号/空格/非数字
             "GSK_NB2_INITIATIVE": "false",
+            "GSK_NB2_EXTRA_PROMPT": " 只说日语。 ",
+            "GSK_NB2_SPLIT_REPLY": "0",
         }
         config = Nb2Config.from_env(env.get)
         self.assertEqual(config.character, "HakureiReimu")
@@ -82,12 +87,42 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertEqual(config.root_dir, Path("D:/gsk"))
         self.assertEqual(config.group_whitelist, frozenset({123, 456, 789}))
         self.assertFalse(config.initiative)
+        self.assertEqual(config.extra_prompt, "只说日语。")
+        self.assertFalse(config.split_reply)
 
     def test_initiative_bool_parsing(self):
         self.assertFalse(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "0"}.get).initiative)
         self.assertFalse(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "off"}.get).initiative)
         self.assertTrue(Nb2Config.from_env({"GSK_NB2_INITIATIVE": "yes"}.get).initiative)
         self.assertTrue(Nb2Config.from_env({"GSK_NB2_INITIATIVE": " "}.get).initiative)
+
+
+class SplitReplySegmentsTests(unittest.TestCase):
+    """按行拆段（utils.helpers.split_reply_segments）：行边界即句子边界。"""
+
+    def test_splits_by_lines_and_drops_blanks(self):
+        text = "第一句。\n\n第二句。\n   \n第三句。"
+        self.assertEqual(split_reply_segments(text), ["第一句。", "第二句。", "第三句。"])
+
+    def test_single_line_single_segment(self):
+        self.assertEqual(split_reply_segments("就一句话。"), ["就一句话。"])
+
+    def test_never_cuts_inside_a_line(self):
+        # 长行不硬切：宁可整条发出，也不出现「没说完」的半截句
+        long_line = "这是一句" + "很长" * 60 + "的话。"
+        segments = split_reply_segments(long_line)
+        self.assertEqual(segments, [long_line])
+
+    def test_over_limit_merges_tail_without_losing_content(self):
+        text = "\n".join(f"第{i}句。" for i in range(1, 9))
+        segments = split_reply_segments(text, max_segments=5)
+        self.assertEqual(len(segments), 5)
+        self.assertEqual(segments[:4], ["第1句。", "第2句。", "第3句。", "第4句。"])
+        for part in ("第5句。", "第6句。", "第7句。", "第8句。"):
+            self.assertIn(part, segments[4])
+
+    def test_empty_input_returns_single_blank(self):
+        self.assertEqual(split_reply_segments("  \n\n "), [""])
 
 
 class RuntimeHostWrapperTests(unittest.TestCase):
@@ -154,6 +189,36 @@ class RuntimeHostWrapperTests(unittest.TestCase):
             self.assertEqual(sends[1]["expected_revision"], 8)
             # 同一幂等键：冲突重试不会产生重复发言
             self.assertEqual(sends[0]["idempotency_key"], sends[1]["idempotency_key"])
+
+        asyncio.run(run())
+
+    def test_send_message_passes_system_contexts_through(self):
+        """附加要求透传 RPC system_contexts；不传则不出现在参数里。"""
+
+        async def run():
+            host = RuntimeHost()
+            captured = []
+
+            async def fake_call(method, params=None):
+                captured.append(dict(params or {}))
+                return {"content": "ok", "session": {"revision": 4}}
+
+            host._call = fake_call
+            await host.send_message(
+                "qq-group-1",
+                "s-1",
+                3,
+                "你好",
+                idempotency_key="k",
+                system_contexts=["【QQ 聊天场景附加要求】\n简短口语化"],
+            )
+            self.assertEqual(
+                captured[0]["system_contexts"], ["【QQ 聊天场景附加要求】\n简短口语化"]
+            )
+
+            captured.clear()
+            await host.send_message("qq-group-1", "s-1", 4, "再见", idempotency_key="k2")
+            self.assertNotIn("system_contexts", captured[0])
 
         asyncio.run(run())
 

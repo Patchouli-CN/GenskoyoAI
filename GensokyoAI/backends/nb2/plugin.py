@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from nonebot import get_bots, get_driver, on_message
@@ -23,6 +24,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
+from ...utils.helpers import split_reply_segments
 from ...utils.logger import logger
 from .config import Nb2Config
 from .runtime_host import RuntimeHost, RuntimeRpcError
@@ -34,6 +36,22 @@ _store = SessionStore(_config.data_dir / "sessions.json")
 _locks: dict[str, asyncio.Lock] = {}
 _initialized: set[str] = set()  # 本进程内已成功 ensure_agent 的 agent_id
 _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ号)
+
+# 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
+_EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
+
+_REPLY_SEGMENT_DELAY_SECONDS = 0.8  # 分段发送间隔，避免消息刷屏抖动
+
+SendCallable = Callable[[Message], Awaitable[None]]
+
+
+async def _send_segmented(send: SendCallable, text: str) -> None:
+    """分段发送：QQ 聊天习惯是多条短消息，而非一大段墙。"""
+    segments = split_reply_segments(text) if _config.split_reply else [text]
+    for index, segment in enumerate(segments):
+        if index:
+            await asyncio.sleep(_REPLY_SEGMENT_DELAY_SECONDS)
+        await send(Message(MessageSegment.text(segment)))  # text 段转义 CQ 码
 
 
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
@@ -52,13 +70,16 @@ async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
         logger.warning(f"[nb2] 协议端未连接，{agent_id} 的主动消息暂缓投递")
         return
     bot = next(iter(bots.values()))
-    message = Message(MessageSegment.text(content))  # text 段转义 CQ 码，防角色文本被解析
     kind, target_id = target
-    try:
+
+    async def _send(message: Message) -> None:
         if kind == "group":
             await bot.send_group_msg(group_id=target_id, message=message)
         else:
             await bot.send_private_msg(user_id=target_id, message=message)
+
+    try:
+        await _send_segmented(_send, content)
         logger.info(f"[nb2] 主动消息已投递到 {kind}:{target_id}（{len(content)} 字）")
     except Exception:
         logger.exception(f"[nb2] 主动消息投递失败（{agent_id}）")
@@ -73,7 +94,8 @@ async def _on_startup() -> None:
         f"[nb2] 适配器已加载: 角色={_config.character}, "
         f"主动发言={'开' if _config.initiative else '关'}, "
         f"群白名单={sorted(_config.group_whitelist) or '不限'}, "
-        f"root={_config.root_dir or 'cwd'}"
+        f"分段回复={'开' if _config.split_reply else '关'}, "
+        f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
 
@@ -162,6 +184,7 @@ async def _chat(event: MessageEvent, matcher: type[Matcher], *, key: str, agent_
                     revision,
                     text,
                     idempotency_key=idempotency_key,
+                    system_contexts=_EXTRA_CONTEXTS,
                 )
             except RuntimeRpcError as error:
                 if error.code == "resource.limit_exceeded":
@@ -172,7 +195,12 @@ async def _chat(event: MessageEvent, matcher: type[Matcher], *, key: str, agent_
                 session_id, revision = await _ensure_agent(agent_id, None)
                 _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
                 reply, new_revision = await _host.send_message(
-                    agent_id, session_id, revision, text, idempotency_key=idempotency_key
+                    agent_id,
+                    session_id,
+                    revision,
+                    text,
+                    idempotency_key=idempotency_key,
+                    system_contexts=_EXTRA_CONTEXTS,
                 )
             _store.update_revision(key, new_revision)
         except RuntimeRpcError as error:
@@ -186,4 +214,4 @@ async def _chat(event: MessageEvent, matcher: type[Matcher], *, key: str, agent_
     if not reply.strip():
         logger.warning(f"[nb2] {agent_id} 返回了空回复")
         reply = "……（好像一下子不知道说什么了，再说一次试试？）"
-    await matcher.send(MessageSegment.text(reply))
+    await _send_segmented(matcher.send, reply)

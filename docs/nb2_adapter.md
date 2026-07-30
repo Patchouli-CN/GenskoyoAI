@@ -51,7 +51,15 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_DATA_DIR` | `nb2_data` | 适配器数据目录（群→会话映射表） |
 | `GSK_NB2_ROOT_DIR` | 当前工作目录 | GensokyoAI 项目根（characters/config 解析基准） |
 | `GSK_NB2_INITIATIVE` | `true` | 角色主动发言；`false` 则停用各租户主动定时器 |
+| `GSK_NB2_SPLIT_REPLY` | `true` | 回复按行拆成多条短消息发送（QQ 群聊风格） |
+| `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
+
+内置的默认附加要求（`GSK_NB2_EXTRA_PROMPT` 留空时生效）：
+
+> 你在 QQ 群聊/私聊里聊天，不是在写角色扮演小说：回复要简短、口语化、像真人发消息；
+> 每句话单独占一行（系统会按行拆成多条消息依次发送）；
+> 不要用 *星号* 或括号描写动作、表情、心理活动；一次回复最多三句话。
 
 `.env` 与 `nb2_data/` 已加入 `.gitignore`，不会入库。
 模型与 API key 沿用项目根的 `config/local.yaml`（与 CLI 相同），无需重复配置。
@@ -70,7 +78,10 @@ python -m GensokyoAI.backends.nb2
 
 - **触发**：群聊需 @bot（或回复 bot 的消息）；私聊全部响应。纯表情 / 图片不回；
   `/` 前缀保留给将来的 bot 命令，当前忽略。
-- **回复**：整段文本一次性回复（聚合模式，无流式）。
+- **回复**：默认按 QQ 群聊风格——`GSK_NB2_EXTRA_PROMPT` 注入当轮要求
+  （简短、口语、每句一行、不写动作），适配器再按行拆成多条短消息依次发送
+  （最多 5 条，超出合并进最后一条；间隔 0.8s 防抖）。附加要求只影响当轮回复，
+  不写入会话历史；目前**不影响主动消息**的生成风格（主动链路由 Runtime 侧生成）。
 - **主动发言**：与 CLI 同一条对话欲链路（ThinkEngine 四维心情评估 → 阈值判断 →
   INITIATIVE_SPEAK），间隔由 `config/local.yaml` 的 `initiative_timer` 段决定。
   每次群回复后每个租户会产生一次对话欲评估调用（短 JSON），想说时再一次生成调用——

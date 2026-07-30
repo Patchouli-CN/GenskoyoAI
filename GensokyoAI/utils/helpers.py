@@ -99,6 +99,21 @@ def safe_get(obj: Any, path: str, default: Any = None) -> Any:
         return default
 
 
+def split_reply_segments(text: str, max_segments: int = 5) -> list[str]:
+    """把回复按行拆成多条短消息（QQ 群聊风格：每句话一行，行边界即句子边界）。
+
+    配合提示词使用：模型被要求每句话单独一行，因此这里不做句读分析，
+    只按行拆分、丢弃空行；段数超过 ``max_segments`` 时超出部分合并进
+    最后一段，不丢内容。
+    """
+    parts = [line.strip() for line in text.splitlines() if line.strip()]
+    if not parts:
+        return [text.strip()]
+    if len(parts) <= max_segments:
+        return parts
+    return parts[: max_segments - 1] + ["\n".join(parts[max_segments - 1 :])]
+
+
 def build_world_memory_root(base_path, world_id: str, character_name: str):
     """构造 ``world/<world_id>/memory/<character_name>`` 长期记忆根。
 
