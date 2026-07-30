@@ -20,6 +20,19 @@ _LOGURU_FULL_TRACEBACK = os.environ.get("LOGURU_FULL_TRACEBACK", "0").lower() in
 # 默认抑制部分底层库的低级别日志，避免污染终端/文件
 _SUPPRESSED_LOW_LEVEL_LOGGERS = {"httpcore", "asyncio", "aiohttp.access"}
 
+# 第三方框架的命名空间：WARNING 以下一律丢弃。
+# 注意 nonebot 原生使用 loguru（不经 LoguruHandler 桥接），必须在 sink 层过滤；
+# uvicorn/websockets 的连接日志同属这类刷屏噪音。
+_SUPPRESSED_THIRD_PARTY_LOGGERS = {"nonebot", "uvicorn", "websockets"}
+
+
+def _third_party_noise_filter(record) -> bool:
+    """loguru sink 过滤器：第三方框架只保留 WARNING 及以上，自家日志不受限。"""
+    name = (record["name"] or "").split(".")[0]
+    if name in _SUPPRESSED_THIRD_PARTY_LOGGERS:
+        return record["level"].no >= logger.level("WARNING").no
+    return True
+
 # 移除默认配置
 logger.remove()
 
@@ -111,6 +124,7 @@ def setup_logging(
             format=log_format_console,
             level=log_level,
             colorize=True,
+            filter=_third_party_noise_filter,
         )
 
     # 添加文件 handler
@@ -128,6 +142,7 @@ def setup_logging(
             backtrace=_LOGURU_FULL_TRACEBACK,
             diagnose=_LOGURU_FULL_TRACEBACK,
             enqueue=True,
+            filter=_third_party_noise_filter,
         )
 
     # 拦截标准 logging
