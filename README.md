@@ -599,7 +599,7 @@ Apache License 2.0 - 详见 [LICENSE](LICENSE) 文件。
 - [ayafileio](https://github.com/Patchouli-CN/ayafileio) - 高性能异步文件 I/O
 - [上海爱丽丝幻乐团](http://www16.big.or.jp/~zun/) - 创造了幻想乡
 - [灵眸AI](https://api.lmuai.com) - 感谢其国内靠谱的AI中转服务
-> 本项目的大部分AI coding开发和角色扮演能力由[灵眸AI](https://api.lmuai.com)提供支持
+- [芙兰蠢兔](https://github.com/AlfreScarlet) - 感谢其提供的Kimi Code账户，用于本项目开发。
 
 ## 🌟 Star History
 
