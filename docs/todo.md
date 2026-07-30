@@ -235,6 +235,23 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.7 适配器约定（2026-07-30，用户设计，未提交）
+
+- 新公共面：`GensokyoAI/adapters/__init__.py`（`RuntimeAdapter` 协议 + `run_adapters`/
+  `serve_adapters` 组装入口，Ctrl+C 逆序停止 + host.close 统一保存）；
+  `RuntimeHost` 从 `backends/nb2/runtime_host.py` 迁至 `GensokyoAI/runtime/host.py`，
+  其方法签名即适配器公开契约。组装形态：`run_adapters(Nonebot2Adapter())`；
+  外部包实现同协议即可接入。
+- nb2 侧：`adapter.py` 的 `Nonebot2Adapter`（uvicorn 以 task 嵌入宿主循环，不用阻塞式
+  nonebot.run()；`.env` 加载与 LOG_LEVEL=CRITICAL 收进 start）；plugin 改为
+  `bind_host()` 注入宿主（**load_plugin 返回 Plugin 对象，模块在 .module 上；
+  直接 import 插件模块会被 nonebot 拒绝登记**）；包根不导出符号（防无 nb2 extra 时
+  测试套误 import nonebot）。
+- 顺手修：`setup_logging` 幂等化——handler id 被外部 `logger.remove()`（nonebot.init）
+  作废时容忍 ValueError（utils/logger.py）。
+- 测试：test_adapters.py 生命周期（顺序启动/逆序停止）；test_nb2_adapter.py 导入路径更新。
+  基线：644 passed, 3 subtests passed。
+
 ## 8.6 QQ 群聊风格适配（2026-07-30，群友反馈，未提交）
 
 - `GSK_NB2_EXTRA_PROMPT`：随每条回复注入 `system_contexts` 的附加要求（RPC 原生通道，

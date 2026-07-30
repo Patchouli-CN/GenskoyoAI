@@ -3,6 +3,7 @@
 # GensokyoAI\utils\logging.py
 
 import asyncio
+import contextlib
 import inspect
 import logging as std_logging
 import os
@@ -108,12 +109,15 @@ def setup_logging(
     """
     global _handlers
 
-    # 移除现有 handlers
+    # 移除现有 handlers；id 可能已被外部 logger.remove()（如 nonebot.init）作废——
+    # 此时 remove 会抛 ValueError，容忍并视为已移除
     if _handlers["console"] is not None:
-        logger.remove(_handlers["console"])
+        with contextlib.suppress(ValueError):
+            logger.remove(_handlers["console"])
         _handlers["console"] = None
     if _handlers["file"] is not None:
-        logger.remove(_handlers["file"])
+        with contextlib.suppress(ValueError):
+            logger.remove(_handlers["file"])
         _handlers["file"] = None
 
     # 默认格式

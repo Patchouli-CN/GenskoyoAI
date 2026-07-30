@@ -8,9 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from GensokyoAI.backends.nb2.config import DEFAULT_EXTRA_PROMPT, Nb2Config
-from GensokyoAI.backends.nb2.runtime_host import RuntimeHost, RuntimeRpcError
 from GensokyoAI.backends.nb2.store import MemberStore, SessionStore
 from GensokyoAI.core.events import Event, EventBus, SystemEvent
+from GensokyoAI.runtime.host import RuntimeHost, RuntimeRpcError
 from GensokyoAI.runtime.resource_control import ResourceLimitError
 from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService

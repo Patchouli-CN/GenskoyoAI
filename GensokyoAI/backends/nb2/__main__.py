@@ -5,44 +5,23 @@
     2. 复制 tmp/nb2.env.example 为 .env 并按需修改
     3. 启动本机器人：python -m GensokyoAI.backends.nb2
     4. 协议端（NapCat 等）反向 WS 指向 ws://127.0.0.1:8080/onebot/v11/ws
+
+等价于自定义组装：
+
+    from GensokyoAI.adapters import run_adapters
+    from GensokyoAI.backends.nb2.adapter import Nonebot2Adapter
+
+    run_adapters(Nonebot2Adapter())
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-import nonebot
-from dotenv import load_dotenv
-from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
-
-from ...utils.logger import logger, setup_logging
+from ...adapters import run_adapters
+from .adapter import Nonebot2Adapter
 
 
 def main() -> None:
-    # 先把 .env 加载进环境变量，适配器的 GSK_* 配置键才能被 plugin 读取；
-    # NoneBot 自身配置（HOST/PORT/DRIVER 等）由 nonebot.init() 自行解析。
-    load_dotenv()
-    environment = os.environ.get("ENVIRONMENT")
-    if environment:
-        load_dotenv(f".env.{environment}", override=True)
-    # nonebot 初始化日志只有「前几行」受其 log_level 过滤——压到 CRITICAL 让它们闭嘴；
-    # init 之后它的 sink 会被整体移除，此值不再影响任何后续日志
-    os.environ.setdefault("LOG_LEVEL", "CRITICAL")
-    nonebot.init()
-    # nonebot 会挂自己的 loguru sink（格式自成一套、与项目重复）：直接全部清掉，
-    # 日志统一走 GensokyoAI 体系。nonebot 的 WARNING+ 仍会经我们的 sink 显示
-    # （过滤器只压它 WARNING 以下的刷屏流水），不损失有效信息。
-    logger.remove()
-    # 首个租户初始化加载应用配置时，会按 config/local.yaml 重新应用日志配置。
-    setup_logging(log_file=Path("logs/GENSOKYOAI.log"))
-    driver = nonebot.get_driver()
-    driver.register_adapter(OneBotV11Adapter)
-    nonebot.load_plugin("GensokyoAI.backends.nb2.plugin")
-    try:
-        nonebot.run()
-    except KeyboardInterrupt:
-        logger.info("[nb2] 适配器已退出")
+    run_adapters(Nonebot2Adapter())
 
 
 if __name__ == "__main__":

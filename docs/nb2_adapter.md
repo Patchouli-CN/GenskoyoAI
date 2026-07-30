@@ -82,6 +82,22 @@ python -m GensokyoAI.backends.nb2
 #    ws://127.0.0.1:8080/onebot/v11/ws
 ```
 
+### 自定义组装（适配器约定）
+
+适配器实现 `GensokyoAI.adapters.RuntimeAdapter` 协议（`start(host)` / `stop()`），
+由 `run_adapters` 统一创建进程内 `RuntimeHost` 并托管生命周期；nb2 是首个实现者。
+等价手写入口：
+
+```python
+from GensokyoAI.adapters import run_adapters
+from GensokyoAI.backends.nb2.adapter import Nonebot2Adapter
+
+run_adapters(Nonebot2Adapter())  # 想挂几个适配器就传几个
+```
+
+第三方适配器包（如 `gskai-nb2`）只需依赖 GensokyoAI 并实现同一协议即可接入；
+`RuntimeHost`（`GensokyoAI/runtime/host.py`）的方法签名属于公开契约。
+
 ## 行为说明
 
 - **触发**：群聊需 @bot（或回复 bot 的消息）；私聊全部响应。纯表情 / 图片不回；

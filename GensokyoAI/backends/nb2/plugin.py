@@ -1,10 +1,11 @@
 """NoneBot2 插件：QQ 群/私聊 ↔ GensokyoAI Runtime 桥接。
 
 触发规则：群聊 @bot / 回复 bot（to_me），私聊全部响应。
-适配器与 Runtime 同进程：经 RuntimeHost 进程内驱动 RuntimeService 多租户路径，
-每个 QQ 群、每个私聊用户映射为独立租户（agent_id），会话、记忆与资源闸彼此隔离；
-主动消息经事件订阅队列进程内实时投递；群友印象存 known_members.json fake db。
-依赖可选组件（pip extra: nb2），仅在 `python -m GensokyoAI.backends.nb2` 启动时加载。
+RuntimeHost 由 Nonebot2Adapter.start() 注入（bind_host），生命周期归组装入口
+`run_adapters` 管；每个 QQ 群、每个私聊用户映射为独立租户（agent_id），会话、
+记忆与资源闸彼此隔离；主动消息经事件订阅队列进程内实时投递；
+群友印象存 known_members.json fake db。
+依赖可选组件（pip extra: nb2），仅在 Nonebot2Adapter 启动时加载。
 """
 
 from __future__ import annotations
@@ -26,14 +27,14 @@ from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
 from ...core.agent.prompts import build_member_impression_prompt
+from ...runtime.host import RuntimeHost, RuntimeRpcError
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
 from .config import Nb2Config
-from .runtime_host import RuntimeHost, RuntimeRpcError
 from .store import MemberStore, SessionStore
 
 _config = Nb2Config.from_env()
-_host = RuntimeHost(root_dir=_config.root_dir)
+_host: RuntimeHost | None = None  # 由 Nonebot2Adapter.start() 经 bind_host 注入
 _store = SessionStore(_config.data_dir / "sessions.json")
 _members = MemberStore(_config.data_dir / "known_members.json")
 _locks: dict[str, asyncio.Lock] = {}
@@ -48,6 +49,18 @@ _EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"]
 _REPLY_SEGMENT_DELAY_SECONDS = 0.8  # 分段发送间隔，避免消息刷屏抖动
 
 SendCallable = Callable[[Message], Awaitable[None]]
+
+
+def bind_host(host: RuntimeHost) -> None:
+    """注入 RuntimeHost（由 Nonebot2Adapter.start 在 load_plugin 前调用）。"""
+    global _host
+    _host = host
+
+
+def _require_host() -> RuntimeHost:
+    if _host is None:
+        raise RuntimeError("nb2 插件尚未绑定 RuntimeHost（应由 Nonebot2Adapter.start 注入）")
+    return _host
 
 
 async def _send_segmented(send: SendCallable, text: str) -> None:
@@ -98,9 +111,10 @@ async def _extract_group_text(bot: Bot, event: GroupMessageEvent) -> str:
 
 async def _learn_impression(member_name: str, member_qq: int, exchange: str) -> None:
     """首轮交谈后给新群友生成角色视角的第一印象（后台任务，不阻塞回复）。"""
+    host = _require_host()
     try:
         prompt = build_member_impression_prompt(_config.character, member_name, exchange)
-        raw = await _host.generate_meta_text(_config.character, prompt)
+        raw = await host.generate_meta_text(_config.character, prompt)
         impression = strip_rp_style(raw).replace("【", "").replace("】", "")[:240].strip()
         if not impression:
             return
@@ -161,7 +175,8 @@ async def _on_startup() -> None:
 
 @_driver.on_shutdown
 async def _on_shutdown() -> None:
-    await _host.close()
+    # 宿主生命周期归 run_adapters 管（逆序 stop 后统一 host.close()），这里无需动作
+    logger.debug("[nb2] nonebot 驱动已停止")
 
 
 def _is_private_message(event: MessageEvent) -> bool:
@@ -223,9 +238,10 @@ def _lock_for(key: str) -> asyncio.Lock:
 
 
 async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[str, int]:
+    host = _require_host()
     stored_session = str(entry["session_id"]) if entry and entry.get("session_id") else None
     try:
-        session_id, revision = await _host.ensure_agent(
+        session_id, revision = await host.ensure_agent(
             agent_id,
             _config.character,
             stored_session,
@@ -236,12 +252,12 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
             raise
         # Runtime 侧该会话已被删除：退化为恢复最新会话 / 新建会话
         logger.warning(f"[nb2] 会话 {stored_session} 恢复失败，改为恢复最新会话")
-        session_id, revision = await _host.ensure_agent(
+        session_id, revision = await host.ensure_agent(
             agent_id, _config.character, None, disable_initiative=not _config.initiative
         )
     if _config.initiative:
         try:
-            await _host.subscribe_events(agent_id, _deliver_initiative)
+            await host.subscribe_events(agent_id, _deliver_initiative)
         except Exception as error:
             # 订阅失败只影响主动投递，不阻塞正常问答
             logger.warning(f"[nb2] 订阅主动消息事件失败（{agent_id}），主动投递暂不可用: {error}")
@@ -284,13 +300,8 @@ async def _chat(
                 revision = int(entry["revision"])
             idempotency_key = f"nb2:{self_id}:{message_id}"
             try:
-                reply, new_revision = await _host.send_message(
-                    agent_id,
-                    session_id,
-                    revision,
-                    text,
-                    idempotency_key=idempotency_key,
-                    system_contexts=contexts,
+                reply, new_revision = await _host_send(
+                    agent_id, session_id, revision, text, idempotency_key, contexts
                 )
             except RuntimeRpcError as error:
                 if error.code == "resource.limit_exceeded":
@@ -300,13 +311,8 @@ async def _chat(
                 logger.warning(f"[nb2] 发送失败 [{error.code}]，重建租户会话后重试: {error}")
                 session_id, revision = await _ensure_agent(agent_id, None)
                 _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
-                reply, new_revision = await _host.send_message(
-                    agent_id,
-                    session_id,
-                    revision,
-                    text,
-                    idempotency_key=idempotency_key,
-                    system_contexts=contexts,
+                reply, new_revision = await _host_send(
+                    agent_id, session_id, revision, text, idempotency_key, contexts
                 )
             _store.update_revision(key, new_revision)
         except RuntimeRpcError as error:
@@ -331,3 +337,21 @@ async def _chat(
         _impression_inflight.add(member_qq)
         asyncio.create_task(_learn_impression(member_name, member_qq, f"{text}\n{reply}"))
     await _send_segmented(matcher.send, reply)
+
+
+async def _host_send(
+    agent_id: str,
+    session_id: str,
+    revision: int,
+    text: str,
+    idempotency_key: str,
+    contexts: list[str],
+) -> tuple[str, int]:
+    return await _require_host().send_message(
+        agent_id,
+        session_id,
+        revision,
+        text,
+        idempotency_key=idempotency_key,
+        system_contexts=contexts,
+    )

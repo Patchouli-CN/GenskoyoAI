@@ -1,10 +1,13 @@
-"""进程内 Runtime 宿主：直接驱动 RuntimeService 的多租户路径。
+"""进程内 Runtime 宿主：适配器的公共契约，直接驱动 RuntimeService 多租户路径。
 
-适配器与 Runtime 同仓库同进程，无需 HTTP/WS 绕路——以网络主体上下文调用
-`RuntimeService.handle()`（与 tests/test_runtime_multi_user.py 相同的驱动方式），
-租户隔离（agent_id）、资源闸、幂等账本、revision 乐观锁全部保留；
+适配器（QQ/Discord/任何平台）与 Runtime 同进程时，无需 HTTP/WS 绕路——以网络主体
+上下文调用 `RuntimeService.handle()`（与 tests/test_runtime_multi_user.py 相同的
+驱动方式），租户隔离（agent_id）、资源闸、幂等账本、revision 乐观锁全部保留；
 主动消息经 `create_event_subscription` 返回的 asyncio.Queue 进程内「推送」，
 每个租户一个队列，天然隔离，不需要任何帧路由。
+
+这是 `GensokyoAI.adapters.RuntimeAdapter` 协议里 start() 收到的宿主对象；
+其方法签名属于适配器公开契约，改动需保持向后兼容。
 """
 
 from __future__ import annotations
@@ -16,11 +19,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ...runtime.auth import RuntimePrincipal, reset_current_principal, set_current_principal
-from ...runtime.resource_control import ResourceLimitError
-from ...runtime.rpc import RpcError
-from ...runtime.service import RuntimeService
-from ...utils.logger import logger
+from ..utils.logger import logger
+from .auth import RuntimePrincipal, reset_current_principal, set_current_principal
+from .resource_control import ResourceLimitError
+from .rpc import RpcError
+from .service import RuntimeService
 
 
 class RuntimeRpcError(RuntimeError):
@@ -36,7 +39,7 @@ EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class RuntimeHost:
-    """nb2 适配器的进程内 Runtime 宿主（每个 QQ 群/私聊 = 一个 agent_id 租户）。"""
+    """适配器的进程内 Runtime 宿主（每个外部会话/频道 = 一个 agent_id 租户）。"""
 
     def __init__(
         self,
