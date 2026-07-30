@@ -8,6 +8,7 @@ from typing import Any, Literal
 from msgspec import Struct
 
 from ..utils.url_security import UnsafeUrlError, validate_external_url
+from .agent.providers.specs import PROVIDER_SPECS, ProviderSpec
 from .config_schema import (
     EmbeddingConfig,
     InitiativeTimerConfig,
@@ -137,15 +138,6 @@ class ConfigValidator:
         "timeout",
         "use_proxy",
     }
-    PROVIDERS_REQUIRING_API_KEY = {
-        "openai",
-        "openrouter",
-        "deepseek",
-        "openai_responses",
-        "claude",
-        "gemini",
-    }
-    KNOWN_PROVIDERS = {*PROVIDERS_REQUIRING_API_KEY, "ollama"}
     DEPRECATED_FIELDS: dict[str, tuple[str, str]] = {
         "initiative_timer.fallback_on_no_schedule": (
             "initiative_timer.drive_threshold",
@@ -212,90 +204,6 @@ class ConfigValidator:
             "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
         ),
     }
-    PROVIDER_FIELD_MATRIX: dict[str, dict[str, set[str]]] = {
-        "ollama": {
-            "unsupported": {
-                "api_path",
-                "extra_headers",
-                "web_search_enabled",
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-                "web_search_allow_fallback",
-            },
-            "discouraged": {
-                "api_key",
-                "auth",
-                "reasoning_effort",
-            },
-            "supported_web_search": set(),
-        },
-        "openai": {
-            "discouraged": {
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-            },
-            "supported_web_search": set(),
-        },
-        "openrouter": {
-            "discouraged": {
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-            },
-            "supported_web_search": set(),
-        },
-        "deepseek": {
-            "unsupported": {
-                "api_path",
-                "web_search_enabled",
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-                "web_search_allow_fallback",
-            },
-            "supported_web_search": set(),
-        },
-        "openai_responses": {
-            "discouraged": set(),
-            "supported_web_search": {
-                "web_search_enabled",
-                "web_search_strategy",
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-                "web_search_allow_fallback",
-            },
-        },
-        "claude": {
-            "unsupported": {
-                "api_path",
-                "web_search_enabled",
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-                "web_search_allow_fallback",
-            },
-            "supported_web_search": set(),
-        },
-        "gemini": {
-            "unsupported": {
-                "api_path",
-                "extra_headers",
-                "auth",
-                "web_search_context_size",
-                "web_search_user_location",
-                "web_search_metadata",
-            },
-            "supported_web_search": {
-                "web_search_enabled",
-                "web_search_strategy",
-                "web_search_allow_fallback",
-            },
-        },
-    }
-
     def validate_config_dict(self, data: dict[str, Any]) -> list[ConfigDiagnostic]:
         diagnostics: list[ConfigDiagnostic] = []
         self._validate_top_level(data, diagnostics)
@@ -546,7 +454,7 @@ class ConfigValidator:
                         "请填写模型服务名称，例如 ollama、openai 或 deepseek。",
                     )
                 )
-            elif provider not in self.KNOWN_PROVIDERS:
+            elif provider not in PROVIDER_SPECS:
                 diagnostics.append(
                     self._warning(
                         f"{section}.provider",
@@ -555,14 +463,16 @@ class ConfigValidator:
                         code="config.provider.unknown",
                     )
                 )
+        # Provider 元数据（providers/specs.py）——字段约束、api_key 要求与专属规则的唯一事实源
+        spec = PROVIDER_SPECS.get(provider) if isinstance(provider, str) else None
 
-        # SSRF 防护：base_url 不能指向内网 / 元数据服务
+        # SSRF 防护：base_url 不能指向内网 / 元数据服务（本地服务如 ollama 由 spec 放行）
         base_url = data.get("base_url")
         self._validate_url_field(
             f"{section}.base_url",
             base_url,
             diagnostics,
-            allow_private=provider == "ollama",
+            allow_private=bool(spec and spec.allow_private_base_url),
             code="config.model.base_url.unsafe",
         )
 
@@ -594,7 +504,8 @@ class ConfigValidator:
                 )
             )
         if (
-            provider in self.PROVIDERS_REQUIRING_API_KEY
+            spec is not None
+            and spec.requires_api_key
             and not data.get("api_key")
             and not data.get("auth")
         ):
@@ -606,33 +517,23 @@ class ConfigValidator:
                     code="config.model.api_key_missing",
                 )
             )
-        if isinstance(provider, str):
-            self._validate_provider_field_matrix(section, provider, data, diagnostics)
-
-        if (
-            provider == "deepseek"
-            and data.get("thinking_enabled") is False
-            and data.get("reasoning_effort")
-        ):
-            diagnostics.append(
-                self._warning(
-                    f"{section}.reasoning_effort",
-                    "reasoning_effort is ignored when DeepSeek thinking_enabled is false",
-                    "关闭 thinking mode 时建议同时移除 reasoning_effort，避免误以为推理强度仍生效。",
-                    code="config.model.reasoning_effort_ignored",
-                )
-            )
+        if spec is not None and isinstance(provider, str):
+            self._validate_provider_field_matrix(section, provider, data, spec, diagnostics)
+            if spec.extra_rule is not None:
+                for field_name, technical, suggestion, code, severity in spec.extra_rule(data):
+                    factory = self._error if severity == "error" else self._warning
+                    diagnostics.append(
+                        factory(f"{section}.{field_name}", technical, suggestion, code=code)
+                    )
 
     def _validate_provider_field_matrix(
         self,
         section: str,
         provider: str,
         data: dict[str, Any],
+        spec: ProviderSpec,
         diagnostics: list[ConfigDiagnostic],
     ) -> None:
-        matrix = self.PROVIDER_FIELD_MATRIX.get(provider)
-        if not matrix:
-            return
         configured_fields = {key for key, value in data.items() if value not in (None, "", [], {})}
         web_search_fields = {
             "web_search_enabled",
@@ -642,14 +543,14 @@ class ConfigValidator:
             "web_search_metadata",
             "web_search_allow_fallback",
         }
-        unsupported_fields = configured_fields & matrix.get("unsupported", set())
+        unsupported_fields = configured_fields & spec.unsupported
         if data.get("web_search_enabled") is not True:
             unsupported_fields -= web_search_fields
         for field_name in sorted(unsupported_fields):
             diagnostics.append(
-                self._provider_unsupported_field_diagnostic(section, provider, field_name)
+                self._provider_unsupported_field_diagnostic(section, provider, field_name, spec)
             )
-        for field_name in sorted(configured_fields & matrix.get("discouraged", set())):
+        for field_name in sorted(configured_fields & spec.discouraged):
             diagnostics.append(
                 self._warning(
                     f"{section}.{field_name}",
@@ -659,10 +560,9 @@ class ConfigValidator:
                 )
             )
         configured_web_search_fields = configured_fields & web_search_fields
-        supported_web_search = matrix.get("supported_web_search", set())
-        unsupported_web_search_fields = configured_web_search_fields - supported_web_search
+        unsupported_web_search_fields = configured_web_search_fields - spec.supported_web_search
         if data.get("web_search_enabled") is True and unsupported_web_search_fields:
-            severity = "error" if unsupported_web_search_fields & unsupported_fields else "warning"
+            severity = "error" if unsupported_web_search_fields & spec.unsupported else "warning"
             diagnostic_factory = self._error if severity == "error" else self._warning
             diagnostics.append(
                 diagnostic_factory(
@@ -674,15 +574,12 @@ class ConfigValidator:
             )
 
     def _provider_unsupported_field_diagnostic(
-        self, section: str, provider: str, field_name: str
+        self, section: str, provider: str, field_name: str, spec: ProviderSpec
     ) -> ConfigDiagnostic:
-        if provider == "ollama" and field_name == "api_path":
-            return self._error(
-                f"{section}.{field_name}",
-                "Ollama provider does not support custom api_path",
-                "Ollama 请只配置 base_url，例如 http://127.0.0.1:11434；不要配置 api_path。",
-                code="config.provider.api_path_unsupported",
-            )
+        custom = spec.unsupported_messages.get(field_name)
+        if custom:
+            technical, suggestion, code = custom
+            return self._error(f"{section}.{field_name}", technical, suggestion, code=code)
         return self._error(
             f"{section}.{field_name}",
             f"Field '{field_name}' is not supported by provider '{provider}'",

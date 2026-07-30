@@ -235,6 +235,19 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.8 Provider 校验元数据化（2026-07-30，用户提出「校验硬编码不优雅」）
+
+- 新 `core/agent/providers/specs.py`：`ProviderSpec`（requires_api_key /
+  allow_private_base_url / unsupported / discouraged / supported_web_search /
+  unsupported_messages / extra_rule）+ `PROVIDER_SPECS` 全表——provider 校验知识的
+  唯一事实源；新增 Provider 只需登记一行。deepseek 的 reasoning_effort 语义进
+  `extra_rule` 钩子，ollama 的 api_path 定制诊断进 `unsupported_messages`。
+- `config_validator.py` 删除三处硬编码（PROVIDERS_REQUIRING_API_KEY /
+  KNOWN_PROVIDERS / PROVIDER_FIELD_MATRIX），全部改消费 PROVIDER_SPECS；
+  诊断 code 全部不变（config.provider.unknown / api_key_missing / field_unsupported /
+  api_path_unsupported / reasoning_effort_ignored 等），行为等价。
+- 基线：647 passed, 3 subtests passed，ruff/pyright 全绿。
+
 ## 8.7 适配器约定（2026-07-30，用户设计，未提交）
 
 - 新公共面：`GensokyoAI/adapters/__init__.py`（`RuntimeAdapter` 协议 + `run_adapters`/
