@@ -2601,10 +2601,10 @@ class RuntimeService:
             resource_control = getattr(config, "resource_control", None)
             if resource_control is not None:
                 return resource_control
-        return ConfigLoader().load().resource_control
+        return ConfigLoader().load(self._fallback_config_path()).resource_control
 
     def _build_resource_gates(self, resource_control: Any | None = None) -> dict[str, ResourceGate]:
-        config = resource_control or ConfigLoader().load().resource_control
+        config = resource_control or ConfigLoader().load(self._fallback_config_path()).resource_control
         return build_resource_gates(config)
 
     def _resource_limit_rpc_error(self, error: ResourceLimitError) -> RpcError:

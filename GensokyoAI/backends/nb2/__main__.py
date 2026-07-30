@@ -26,10 +26,14 @@ def main() -> None:
     environment = os.environ.get("ENVIRONMENT")
     if environment:
         load_dotenv(f".env.{environment}", override=True)
+    # nonebot 初始化日志只有「前几行」受其 log_level 过滤——压到 CRITICAL 让它们闭嘴；
+    # init 之后它的 sink 会被整体移除，此值不再影响任何后续日志
+    os.environ.setdefault("LOG_LEVEL", "CRITICAL")
     nonebot.init()
-    # nonebot.init() 会重排 loguru（移除既有 sink），必须在此之后才挂项目自己的
-    # 日志（含第三方噪音过滤），终端与文件看到的才是 GensokyoAI 的格式；
-    # nonebot 自身日志的级别由 .env 的 LOG_LEVEL 控制（建议 WARNING）。
+    # nonebot 会挂自己的 loguru sink（格式自成一套、与项目重复）：直接全部清掉，
+    # 日志统一走 GensokyoAI 体系。nonebot 的 WARNING+ 仍会经我们的 sink 显示
+    # （过滤器只压它 WARNING 以下的刷屏流水），不损失有效信息。
+    logger.remove()
     # 首个租户初始化加载应用配置时，会按 config/local.yaml 重新应用日志配置。
     setup_logging(log_file=Path("logs/GENSOKYOAI.log"))
     driver = nonebot.get_driver()

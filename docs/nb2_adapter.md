@@ -47,7 +47,6 @@ cp tmp/nb2.env.example .env
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `DRIVER` / `HOST` / `PORT` | fastapi / 127.0.0.1 / 8080 | NoneBot 自身监听（反向 WS 服务） |
-| `LOG_LEVEL` | `WARNING` | nonebot 自身日志级别（它自己的 sink）；适配器日志走 GensokyoAI 体系 |
 | `GSK_NB2_CHARACTER` | `KirisameMarisa` | 所有群 / 私聊共用的角色 |
 | `GSK_NB2_DATA_DIR` | `nb2_data` | 适配器数据目录（群→会话映射表） |
 | `GSK_NB2_ROOT_DIR` | 当前工作目录 | GensokyoAI 项目根（characters/config 解析基准） |
@@ -66,7 +65,8 @@ cp tmp/nb2.env.example .env
 
 `.env` 与 `nb2_data/` 已加入 `.gitignore`，不会入库。
 模型与 API key 沿用项目根的 `config/local.yaml`（与 CLI 相同），无需重复配置。
-日志走 GensokyoAI 体系（格式 + 第三方噪音过滤）；是否显示到控制台与级别沿用
+日志统一走 GensokyoAI 体系（格式 + 第三方噪音过滤）：启动时会移除 nonebot 自带的
+loguru sink，nonebot 的 WARNING+ 仍经我们的 sink 显示。是否显示到控制台与级别沿用
 `local.yaml` 的 `log_console` / `log_level`（控制台盯梢时保持 `log_console: true` 即可），
 也可用 `GENSOKYOAI_LOG_CONSOLE` / `GENSOKYOAI_LOG_LEVEL` 环境变量临时覆盖。
 
