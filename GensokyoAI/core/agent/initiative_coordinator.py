@@ -89,7 +89,7 @@ class InitiativeCoordinator:
             )
             return None
 
-        delay = InitiativeTimerManager._apply_enthusiasm(
+        delay = self._ensure_manager()._apply_enthusiasm(
             decision.delay_seconds, decision.enthusiasm
         )
         return await self._ensure_manager().schedule_intent(
@@ -119,14 +119,19 @@ class InitiativeCoordinator:
             if not manager.is_active_trigger(timer_id):
                 logger.debug(f"[Agent] 主动触发 {timer_id} 已被新消息/新计划取代，放弃本次生成")
                 return {"sent": False, "timer_id": timer_id, "aborted": True}
-            return await self._generate_initiative_message(
+            return await self.generate_initiative_message(
                 timer_id=timer_id, pending_summary=pending_summary
             )
 
-    async def _generate_initiative_message(
+    async def generate_initiative_message(
         self, *, timer_id: str, pending_summary: str
     ) -> dict[str, Any] | None:
-        """生成并发布主动消息（调用方必须已持有回合信号量并完成时效校验）。"""
+        """生成并发布主动消息（调用方必须已持有回合信号量并完成时效校验）。
+
+        主动定时器触发与 ActionPlanner 主动说话（思考冲动）共用本管线：
+        入参统一为「待表达意图摘要」（存意图不存话术），经说话前思考 +
+        即时生成产出真正发给用户的消息。
+        """
         agent = self._agent
         await agent._ensure_background_manager()
         tool_build_result = await agent._build_tools()

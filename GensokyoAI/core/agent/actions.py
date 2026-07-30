@@ -65,6 +65,7 @@ class ActionFactory:
 
     @staticmethod
     def initiative_speak(content: str, reason: str = "") -> Action:
+        """主动说话行动；content 语义是「待表达意图摘要」，执行时经生成管线产出真正话术。"""
         return Action(
             type=ActionType.INITIATIVE_SPEAK,
             priority=ActionPriority.HIGH,

@@ -163,6 +163,8 @@ class ActionPlanner:
             return ActionFactory.wait(reason="对话欲评估失败，保持沉默")
 
         if decision.want_speak:
+            # content 传「待表达意图摘要」而非定稿话术：
+            # 真正发给用户的消息由 executor 经说话前思考 + 即时生成产出
             return ActionFactory.initiative_speak(
                 content=decision.message,
                 reason=f"{decision.reason} (驱动力:{decision.total_drive:.2f})",

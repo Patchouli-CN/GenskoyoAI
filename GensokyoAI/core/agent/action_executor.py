@@ -4,6 +4,7 @@
 
 import asyncio
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from ...utils.logger import logger
 from ..events import Event, EventBus, EventPriority, SystemEvent
@@ -98,24 +99,24 @@ class ActionExecutor:
         )
 
     async def _execute_initiative_speak(self, event: Event) -> None:
-        """执行 INITIATIVE_SPEAK - 主动说话"""
-        action_data = event.data.get("action", {})
-        message = action_data.get("content", "")
+        """执行 INITIATIVE_SPEAK - 主动说话：意图摘要即时生成真正消息。
 
-        if message:
-            self.event_bus.publish(
-                Event(
-                    type=SystemEvent.THINK_ENGINE_INITIATIVE,
-                    source="action_executor",
-                    data={"message": message},
-                )
-            )
-            self.event_bus.publish(
-                Event(
-                    type=SystemEvent.MESSAGE_SENT,
-                    source="agent",
-                    data={"content": message, "initiative": True},
-                )
+        action.content 的语义是「待表达意图摘要」（存意图不存话术）：
+        统一走说话前思考 + 即时生成管线（与主动定时器触发同一条路径），
+        杜绝评估时预写的话术被直接当作定稿发送。
+        """
+        action_data = event.data.get("action", {})
+        intent = action_data.get("content", "").strip()
+        if not intent:
+            return
+        agent = self.agent
+        if agent._think_engine is None:
+            return
+        # 与进行中的回复互斥：说话冲动的即时生成不得插队写乱私历
+        async with agent._request_semaphore:
+            await agent._initiative_coordinator.generate_initiative_message(
+                timer_id=f"thought-{uuid4().hex[:8]}",
+                pending_summary=intent,
             )
 
     async def _execute_wait(self, event: Event) -> None:
