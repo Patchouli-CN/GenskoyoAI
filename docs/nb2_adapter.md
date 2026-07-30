@@ -55,7 +55,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_STRIP_RP_STYLE` | `true` | 发送前清洗 RP 标记（`*动作*`、`「」`），确定性生效 |
 | `GSK_NB2_SENDER_LABEL` | `true` | 群聊消息注入 `【昵称】` 说话人标记（私聊不标） |
 | `GSK_NB2_MEMBER_MEMORY` | `true` | 群友印象：首轮交谈后生成第一印象，之后随消息注入 |
-| `GSK_NB2_OWNER_QQ` | 空（全部禁用） | 指令白名单（逗号分隔 QQ 号）；`/quota` 等 owner 指令仅名单内可用 |
+| `GSK_NB2_OWNER_QQ` | 空 | OWNER 级指令白名单（逗号分隔 QQ 号）；仅影响 OWNER 级指令 |
 | `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
 
@@ -105,8 +105,11 @@ Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力
 ## 行为说明
 
 - **触发**：群聊需 @bot（或回复 bot 的消息）；私聊全部响应。纯表情 / 图片不回；
-  `/` 前缀为 bot 指令（当前仅 `/quota` 或 `/额度`：查询 Provider 账户余额，
-  仅 `GSK_NB2_OWNER_QQ` 白名单内用户可用，其他人静默拒绝；指令不进会话）。
+  `/` 前缀为 bot 指令（不进会话）。指令采用四级权限模型
+  `VISITOR < USER < ADMIN < OWNER`：`OWNER`= `GSK_NB2_OWNER_QQ` 名单、
+  `ADMIN`= QQ 群管理/群主、`USER`= 普通群成员/私聊、`VISITOR`= 身份无法核实的
+  最低信任级；当前指令：`/quota`（`/额度`，USER 级，查询 Provider 余额）、
+  `/help`（`/帮助`，VISITOR 级，按调用者权限列出可用指令）。
 - **说话人归属**：群聊多对单场景下，消息正文自动带 `【群名片/昵称】` 前缀
   （注入前经 `sanitize_display_name` 净化：去换行/括号、限长 24，防群名片伪造指令），
   角色因此能分清每轮是谁在说、并用昵称称呼对方；私聊不加标记。

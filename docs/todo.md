@@ -235,6 +235,19 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.10 nb2 指令系统四级权限模型（2026-07-30，未提交）
+
+- `backends/nb2/commands.py`：`PermissionLevel`（VISITOR=0 < USER=1 < ADMIN=2 < OWNER=3，
+  IntEnum 天然可比较）+ `BotCommand` 注册表 + `resolve_level` / `can_execute` 纯逻辑
+  （nonebot 无关可单测）；新指令 = COMMANDS 加一行。
+- 指令分发在 handler 层（指令不进会话）：群名片查询拿 role（失败 → VISITOR，fail-lower），
+  未注册指令静默忽略，无权限静默拒绝（不提示指令存在）。
+- 当前指令：`/help`（VISITOR 级，按调用者权限动态列出可见指令）、
+  `/quota`（USER 级 = 全员开放，查 Provider 余额）。`GSK_NB2_OWNER_QQ` 语义变为
+  OWNER 级名单，只影响 OWNER 级指令。
+- 测试：tests/test_nb2_commands.py（权限解析、别名索引、help 按级过滤、quota 格式化）。
+  基线：662 passed, 3 subtests passed。
+
 ## 8.9 额度查询与 nb2 指令系统（2026-07-30，未提交）
 
 - Provider 额度接口（可选能力）：`BaseProvider.get_quota()` 默认 None；

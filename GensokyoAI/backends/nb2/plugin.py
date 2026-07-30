@@ -30,6 +30,12 @@ from ...core.agent.prompts import build_member_impression_prompt
 from ...runtime.host import RuntimeHost, RuntimeRpcError
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
+from .commands import (
+    CommandContext,
+    can_execute,
+    find_command,
+    resolve_level,
+)
 from .config import Nb2Config
 from .store import MemberStore, SessionStore
 
@@ -215,6 +221,9 @@ async def _handle_group(event: GroupMessageEvent, bot: Bot) -> None:
         sender_name = sanitize_display_name(raw_name)
         _member_names[(event.group_id, event.user_id)] = sender_name  # 顺手填充名片缓存
     text = await _extract_group_text(bot, event)
+    if text.strip().startswith("/"):
+        await _dispatch_command(text.strip(), event, bot, group_chat)
+        return  # 指令消息不进会话
     await _chat(
         matcher=group_chat,
         key=f"group:{event.group_id}",
@@ -229,15 +238,19 @@ async def _handle_group(event: GroupMessageEvent, bot: Bot) -> None:
 
 
 @private_chat.handle()
-async def _handle_private(event: PrivateMessageEvent) -> None:
+async def _handle_private(event: PrivateMessageEvent, bot: Bot) -> None:
     agent_id = f"qq-user-{event.user_id}"
     _targets[agent_id] = ("user", event.user_id)
     member_name = sanitize_display_name(event.sender.nickname or str(event.user_id))
+    text = event.get_message().extract_plain_text()
+    if text.strip().startswith("/"):
+        await _dispatch_command(text.strip(), event, bot, private_chat)
+        return  # 指令消息不进会话
     await _chat(
         matcher=private_chat,
         key=f"user:{event.user_id}",
         agent_id=agent_id,
-        text=event.get_message().extract_plain_text(),
+        text=text,
         sender_name=None,
         member_name=member_name,
         member_qq=event.user_id,
@@ -246,44 +259,50 @@ async def _handle_private(event: PrivateMessageEvent) -> None:
     )
 
 
-def _parse_command(text: str) -> str | None:
-    """解析 bot 指令名（含中文别名）；不认识的指令返回 None。"""
-    name = text[1:].strip().split(maxsplit=1)[0].lower()
-    return {"quota": "quota", "额度": "quota"}.get(name)
-
-
-def _format_quota(data: dict[str, Any] | None) -> str:
-    """格式化额度信息为单行文本（Moonshot 形态优先，其余原样展示）。"""
-    if data is None:
-        return "当前 Provider 不支持额度查询。"
-    available = data.get("available_balance")
-    if available is not None:
-        details = []
-        for label, key in (("现金", "cash_balance"), ("代金券", "voucher_balance")):
-            value = data.get(key)
-            if isinstance(value, int | float):
-                details.append(f"{label} ¥{value:.2f}")
-        suffix = f"（{'，'.join(details)}）" if details else ""
-        shown = f"¥{available:.2f}" if isinstance(available, int | float) else str(available)
-        return f"当前额度：{shown}{suffix}"
-    return f"额度信息：{data}"
-
-
-async def _handle_command(text: str, matcher: type[Matcher], member_qq: int | None) -> None:
-    """处理 bot 指令。v1 只开放额度查询，且仅限白名单（GSK_NB2_OWNER_QQ，空名单=全拒）。"""
-    command = _parse_command(text)
-    if command != "quota":
-        return
-    if member_qq not in _config.owner_qq:
-        logger.warning(f"[nb2] 非白名单用户 {member_qq} 尝试 /quota，已静默拒绝")
-        return
+async def _fetch_member_role(bot: Bot, event: MessageEvent) -> str | None:
+    """取群成员角色用于权限判定；私聊按普通成员，查询失败返回 None（→ VISITOR）。"""
+    if not isinstance(event, GroupMessageEvent):
+        return "member"
     try:
-        data = await _require_host().get_quota(_config.character)
+        info = await bot.get_group_member_info(group_id=event.group_id, user_id=event.user_id)
+        return str(info.get("role") or "member")
     except Exception as error:
-        logger.error(f"[nb2] 额度查询失败: {error}")
-        await matcher.send(MessageSegment.text("额度查询失败了……稍后再试吧。"))
+        logger.debug(f"[nb2] 群成员角色查询失败（{event.group_id}/{event.user_id}）: {error}")
+        return None
+
+
+async def _dispatch_command(
+    text: str, event: MessageEvent, bot: Bot, matcher: type[Matcher]
+) -> None:
+    """bot 指令分发：查表 → 四级权限判定 → 执行；未注册或无权限静默忽略。"""
+    name = text[1:].strip().split(maxsplit=1)[0].lower()
+    command = find_command(name)
+    if command is None:
         return
-    await matcher.send(MessageSegment.text(_format_quota(data)))
+    role = await _fetch_member_role(bot, event)
+    level = resolve_level(event.user_id, _config.owner_qq, role)
+    if not can_execute(command, level):
+        logger.warning(
+            f"[nb2] 用户 {event.user_id}（{level.name}）尝试 /{command.name}"
+            f"（需 {command.permission.name}），已静默拒绝"
+        )
+        return
+
+    async def send(content: str) -> None:
+        await matcher.send(MessageSegment.text(content))
+
+    ctx = CommandContext(
+        host=_require_host(),
+        config=_config,
+        member_qq=event.user_id,
+        level=level,
+        send=send,
+    )
+    try:
+        await command.handler(ctx)
+    except Exception:
+        logger.exception(f"[nb2] 指令 /{command.name} 执行失败")
+        await matcher.send(MessageSegment.text("指令执行出了点问题……"))
 
 
 def _lock_for(key: str) -> asyncio.Lock:
@@ -334,11 +353,8 @@ async def _chat(
     message_id: int,
 ) -> None:
     text = text.strip()
-    if not text:
-        return  # 忽略纯表情/图片消息
-    if text.startswith("/"):
-        await _handle_command(text, matcher, member_qq)
-        return  # 指令消息不进会话（v1 仅 /quota，白名单鉴权）
+    if not text or text.startswith("/"):
+        return  # 忽略纯表情/图片消息与未登记的指令文本（指令已在 handler 层分发）
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
