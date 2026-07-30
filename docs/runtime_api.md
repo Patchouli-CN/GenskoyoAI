@@ -770,7 +770,7 @@ CLI 的 `/history import`、`/history delete`、`/history insert` 和 `/history 
 
 SSE `/events` 会推送 Runtime 事件。事件字段会经过敏感信息清洗，`api_key`、`authorization`、`token`、`password` 等字段会替换为 `[redacted]`。
 
-租户事件带稳定 `event_id`、单调 `sequence`、`user_id`、`agent_id` 和 `recorded_at`。SSE 必须传 `agent_id`，可通过 `Last-Event-ID` 或 `after_sequence` 恢复；WS `runtime.subscribe` 使用相同的 `after_sequence` / `replay_limit`。事件日志默认每个 Agent 保留最近 10,000 条，单次最多回放 1,000 条；游标早于保留窗口时客户端应重新读取权威 session 状态。
+租户事件带稳定 `event_id`、单调 `sequence`、`user_id`、`agent_id` 和 `recorded_at`。SSE 必须传 `agent_id`，可通过 `Last-Event-ID` 或 `after_sequence` 恢复；WS `runtime.subscribe` 使用相同的 `after_sequence` / `replay_limit`（`replay_limit=0` 表示不回放历史，只接收新事件）。事件日志默认每个 Agent 保留最近 10,000 条，单次最多回放 1,000 条；游标早于保留窗口时客户端应重新读取权威 session 状态。
 
 ## 记忆管理 API
 

@@ -70,8 +70,9 @@ class RuntimeEventStore:
     ) -> list[dict[str, Any]]:
         if after_sequence < 0:
             raise ValueError("Runtime after_sequence must be greater than or equal to 0")
-        if not 1 <= limit <= 1000:
-            raise ValueError("Runtime replay limit must be between 1 and 1000")
+        # limit=0 语义为「不回放」（切片 [:0] 天然返回空）
+        if not 0 <= limit <= 1000:
+            raise ValueError("Runtime replay limit must be between 0 and 1000")
         async with self._lock:
             return [
                 dict(event)

@@ -745,7 +745,7 @@ CLI `/history import`, `/history delete`, `/history insert`, and `/history regen
 
 ## Event Subscription
 
-Tenant events carry stable `event_id`, monotonic `sequence`, `user_id`, `agent_id`, and `recorded_at`. SSE requires `agent_id` and resumes through `Last-Event-ID` or `after_sequence`; WS `runtime.subscribe` accepts the same `after_sequence` / `replay_limit`. Each Agent retains the latest 10,000 events and replays at most 1,000 per request. When a cursor predates retention, reread authoritative session state.
+Tenant events carry stable `event_id`, monotonic `sequence`, `user_id`, `agent_id`, and `recorded_at`. SSE requires `agent_id` and resumes through `Last-Event-ID` or `after_sequence`; WS `runtime.subscribe` accepts the same `after_sequence` / `replay_limit` (`replay_limit=0` disables replay — only new events are delivered). Each Agent retains the latest 10,000 events and replays at most 1,000 per request. When a cursor predates retention, reread authoritative session state.
 
 SSE `/events` pushes Runtime events. Event fields are sanitized for sensitive information; fields such as `api_key`, `authorization`, `token`, `password` are replaced with `[redacted]`.
 

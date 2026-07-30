@@ -39,6 +39,20 @@ def test_event_store_persists_sequence_and_replays_filtered_events() -> None:
     asyncio.run(run())
 
 
+def test_event_store_replay_limit_zero_disables_replay() -> None:
+    """replay_limit=0 语义为「不回放」（nb2 适配器订阅事件时用来避免历史刷屏）。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = RuntimeEventStore(Path(temp_dir) / "events.jsonl")
+            await store.append({"type": "message.sent", "data": {"value": 1}})
+
+            assert await store.replay(limit=0) == []
+            assert len(await store.replay(limit=1)) == 1
+
+    asyncio.run(run())
+
+
 def test_media_store_returns_stable_resource_and_resolves_image_part() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         store = MediaStore(Path(temp_dir))
