@@ -250,3 +250,21 @@ def test_tenant_agent_limit_reads_config_default() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         service = RuntimeService(Path(temp_dir))
         assert service._tenant_agent_limit() == 32
+
+
+def test_host_system_status_counts_tenants_and_operations() -> None:
+    """get_system_status：按 agent_id 前缀统计开户数，附带在途操作数与延迟。"""
+    from GensokyoAI.runtime.host import RuntimeHost
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        service = RuntimeService(Path(temp_dir))
+        _register_idle_tenant(service, "nb2", "qq-group-111")
+        _register_idle_tenant(service, "nb2", "qq-group-222")
+        _register_idle_tenant(service, "nb2", "qq-user-333")
+        _register_idle_tenant(service, "nb2", "nb2-meta")
+        service._active_network_operations = 3
+
+        status = RuntimeHost(service=service).get_system_status()
+        assert status["tenants"] == {"groups": 2, "users": 1, "meta": 1, "other": 0}
+        assert status["active_operations"] == 3
+        assert status["latency"] == {"count": 0}  # 元租户未装配 Agent → 空延迟

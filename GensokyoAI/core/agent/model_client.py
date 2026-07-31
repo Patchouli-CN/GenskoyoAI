@@ -4,6 +4,7 @@
 
 import asyncio
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, TypeVar, cast
 
@@ -56,6 +57,8 @@ class ModelClient:
         self._provider: BaseProvider = ProviderFactory.create(config)
         self._embedding_provider: BaseProvider | None = None
         self._embedding_config = embedding_config or EmbeddingConfig()
+        # 最近模型调用耗时滚动窗口（(context, duration_ms)，供 /status 等观测入口）
+        self._latency_samples: deque[tuple[str, float]] = deque(maxlen=50)
         logger.debug(f"ModelClient 初始化完成，Provider: {config.provider}, 模型: {config.name}")
 
     def _build_options(self) -> dict[str, Any]:
@@ -260,7 +263,20 @@ class ModelClient:
         now = self._now()
         timing.end_time = now
         timing.duration_ms = self._elapsed_ms(timing.start_time, now)
+        self._latency_samples.append((timing.context, timing.duration_ms))
         return timing
+
+    def latency_stats(self) -> dict[str, Any]:
+        """最近模型调用耗时统计（滚动窗口，供 /status 等观测入口）。"""
+        samples = [duration for _, duration in self._latency_samples]
+        if not samples:
+            return {"count": 0}
+        return {
+            "count": len(samples),
+            "avg_ms": round(sum(samples) / len(samples), 1),
+            "last_ms": round(samples[-1], 1),
+            "max_ms": round(max(samples), 1),
+        }
 
     def _publish_timing(self, timing: ModelCallTiming) -> None:
         """发布模型调用耗时观测事件。"""

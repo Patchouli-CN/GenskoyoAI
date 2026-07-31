@@ -230,6 +230,33 @@ class RuntimeHost:
                 return agent.config
         return ConfigLoader().load(self._service._fallback_config_path())
 
+    def get_system_status(self) -> dict[str, Any]:
+        """系统状态快照（nb2 /status 指令）：租户开户数、在途处理数、模型延迟。
+
+        延迟统计借元租户的模型客户端（账户级共享 Provider，样本有代表性）；
+        元租户未初始化时返回空延迟。
+        """
+        tenants = {"groups": 0, "users": 0, "meta": 0, "other": 0}
+        for _, agent_id in self._service._tenant_services:
+            if agent_id.startswith("qq-group-"):
+                tenants["groups"] += 1
+            elif agent_id.startswith("qq-user-"):
+                tenants["users"] += 1
+            elif agent_id == "nb2-meta":
+                tenants["meta"] += 1
+            else:
+                tenants["other"] += 1
+        latency: dict[str, Any] = {"count": 0}
+        agent = self._tenant_agent("nb2-meta")
+        client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
+        if client is not None:
+            latency = client.latency_stats()
+        return {
+            "tenants": tenants,
+            "active_operations": self._service._active_network_operations,
+            "latency": latency,
+        }
+
     async def get_quota(self, character: str) -> dict[str, Any] | None:
         """查询 Provider 账户额度（账户级；借元租户的模型客户端，不支持返回 None）。"""
         agent_id = "nb2-meta"

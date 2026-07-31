@@ -96,6 +96,45 @@ async def cmd_quota(ctx: CommandContext) -> CommandResult:
     return CommandResult.success("quota", text)
 
 
+def _format_status(status: dict[str, Any]) -> str:
+    """格式化系统状态（开户数 / 处理中 / 思考延迟）。"""
+    tenants = status["tenants"]
+    total = sum(tenants.values())
+    lines = [
+        "系统状态：",
+        f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）",
+        f"处理中：{status['active_operations']} 个会话正在生成",
+    ]
+    latency = status.get("latency") or {}
+    if latency.get("count"):
+        lines.append(
+            f"思考延迟：近 {latency['count']} 次平均 {latency['avg_ms'] / 1000:.1f}s"
+            f"（最近 {latency['last_ms'] / 1000:.1f}s，峰值 {latency['max_ms'] / 1000:.1f}s）"
+        )
+    else:
+        lines.append("思考延迟：暂无样本")
+    return "\n".join(lines)
+
+
+@command(
+    name="status",
+    aliases=["状态"],
+    description="查看系统状态（开户数/处理中/思考延迟）",
+    permission=PermissionLevel.USER,
+    registry=NB2_COMMANDS,
+)
+async def cmd_status(ctx: CommandContext) -> CommandResult:
+    host = ctx.metadata["host"]
+    try:
+        status = host.get_system_status()
+    except Exception:
+        await ctx.metadata["send"]("状态查询失败了……稍后再试吧。")
+        return CommandResult.failure("status", "系统状态读取异常")
+    text = _format_status(status)
+    await ctx.metadata["send"](text)
+    return CommandResult.success("status", "ok")
+
+
 def _unique_commands() -> list[CommandDefinition]:
     """本地注册表去重（别名共享同一 CommandDefinition），按注册顺序。"""
     seen: set[str] = set()
