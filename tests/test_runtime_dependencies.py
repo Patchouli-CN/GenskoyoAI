@@ -1821,6 +1821,45 @@ class CharacterValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "system_prompt"):
                 ConfigLoader().load_character(path)
 
+    def test_motivation_weights_parse_with_defaults(self):
+        from GensokyoAI.core.config_schema import MotivationWeightsConfig
+
+        validator = CharacterValidator()
+        # 不写：默认通用人格基线
+        config = validator.to_character_config({"name": "A", "system_prompt": "x"})
+        self.assertEqual(config.motivation_weights, MotivationWeightsConfig())
+        # 写部分：缺失维度回落默认
+        config = validator.to_character_config(
+            {
+                "name": "A",
+                "system_prompt": "x",
+                "motivation_weights": {"relational_need": 0.6},
+            }
+        )
+        self.assertEqual(config.motivation_weights.relational_need, 0.6)
+        self.assertEqual(config.motivation_weights.emotional_charge, 0.35)
+
+    def test_motivation_weights_validation_errors(self):
+        validator = CharacterValidator()
+        diagnostics = validator.validate_character_dict(
+            {
+                "name": "A",
+                "system_prompt": "x",
+                "motivation_weights": {"relational_need": 1.5, "mood": 0.5},
+            }
+        )
+        paths = {item.path for item in diagnostics}
+        codes = {item.code for item in diagnostics}
+        self.assertIn("motivation_weights.relational_need", paths)
+        self.assertIn("motivation_weights.mood", paths)
+        self.assertIn("character.motivation_weights.field_range", codes)
+        self.assertIn("character.motivation_weights.field_unknown", codes)
+
+        bad_type = validator.validate_character_dict(
+            {"name": "A", "system_prompt": "x", "motivation_weights": "很黏人"}
+        )
+        self.assertIn("character.motivation_weights.type", {item.code for item in bad_type})
+
     def test_character_validate_rpc_returns_preview_and_diagnostics(self):
         service = RuntimeService()
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .config_schema import BeginScene, CharacterConfig
+from .config_schema import BeginScene, CharacterConfig, MotivationWeightsConfig
 from .config_validator import ConfigDiagnostic, ConfigValidationError
 
 
@@ -21,6 +21,7 @@ class CharacterValidator:
         "begin_scene",
         "example_dialogue",
         "metadata",
+        "motivation_weights",
     }
     REQUIRED_FIELDS = {"name", "system_prompt"}
     SYSTEM_PROMPT_WARNING_LENGTH = 12000
@@ -83,6 +84,7 @@ class CharacterValidator:
         self._validate_begin_scene(data.get("begin_scene"), diagnostics)
         self._validate_example_dialogue(data.get("example_dialogue"), diagnostics)
         self._validate_metadata(data.get("metadata"), diagnostics)
+        self._validate_motivation_weights(data.get("motivation_weights"), diagnostics)
         return diagnostics
 
     def build_preview(
@@ -129,7 +131,74 @@ class CharacterValidator:
             begin_scene=self._normalize_begin_scene(data.get("begin_scene")),
             example_dialogue=data.get("example_dialogue"),
             metadata=data.get("metadata", {}),
+            motivation_weights=self._normalize_motivation_weights(
+                data.get("motivation_weights")
+            ),
         )
+
+    _MOTIVATION_WEIGHT_FIELDS = frozenset(
+        {
+            "expression_drive",
+            "emotional_charge",
+            "relational_need",
+            "situational_relevance",
+        }
+    )
+
+    def _validate_motivation_weights(self, value: Any, diagnostics: list[ConfigDiagnostic]) -> None:
+        """校验 motivation_weights：四个维度权重，各 0~1，缺省维度用默认值。"""
+        if value is None:
+            return
+        if not isinstance(value, dict):
+            diagnostics.append(
+                self._error(
+                    "motivation_weights",
+                    "Character field 'motivation_weights' must be an object",
+                    "请写成 {expression_drive: 0.3, ...} 形式的 key/value 对象。",
+                    code="character.motivation_weights.type",
+                )
+            )
+            return
+        for field_name in sorted(set(value) - self._MOTIVATION_WEIGHT_FIELDS):
+            diagnostics.append(
+                self._error(
+                    f"motivation_weights.{field_name}",
+                    f"Unknown motivation_weights field '{field_name}'",
+                    "四维权重仅支持 expression_drive / emotional_charge / relational_need / situational_relevance。",
+                    code="character.motivation_weights.field_unknown",
+                )
+            )
+        for field_name in sorted(self._MOTIVATION_WEIGHT_FIELDS & set(value)):
+            field_value = value[field_name]
+            if isinstance(field_value, bool) or not isinstance(field_value, int | float):
+                diagnostics.append(
+                    self._error(
+                        f"motivation_weights.{field_name}",
+                        f"motivation_weights field '{field_name}' must be a number",
+                        "请填写 0~1 之间的数值。",
+                        code="character.motivation_weights.field_type",
+                    )
+                )
+            elif not 0.0 <= field_value <= 1.0:
+                diagnostics.append(
+                    self._error(
+                        f"motivation_weights.{field_name}",
+                        f"motivation_weights field '{field_name}' must be in [0, 1]",
+                        "权重取值范围 0~1；总和保持 1 时对话欲量纲不变。",
+                        code="character.motivation_weights.field_range",
+                    )
+                )
+
+    def _normalize_motivation_weights(self, value: Any) -> MotivationWeightsConfig:
+        """构造权重配置：缺省维度回落默认（通用人格基线）。"""
+        if not isinstance(value, dict):
+            return MotivationWeightsConfig()
+        kwargs = {
+            name: float(value[name])
+            for name in self._MOTIVATION_WEIGHT_FIELDS & set(value)
+            if isinstance(value[name], int | float) and not isinstance(value[name], bool)
+        }
+        return MotivationWeightsConfig(**kwargs)
 
     def _validate_unknown_fields(
         self,

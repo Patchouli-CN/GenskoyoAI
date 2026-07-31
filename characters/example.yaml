@@ -73,6 +73,24 @@ example_dialogue:
   - user: "[触发角色特殊反应的问题]"
     assistant: "「[展现角色标志性反应]」"
 
+# 【可选】四维心情权重 motivation_weights - 性格决定哪维动机更主导「对话欲」
+# ------------------------------------------------------------------
+# 主动发言前，ThinkEngine 会让角色用四个维度给自己打分（各 0~1），
+# 再按下面的权重加权成 total_drive，超过 initiative_timer.drive_threshold 就开口。
+# 默认值即通用人格基线（0.3 / 0.35 / 0.2 / 0.15，总和 1）；
+# 不填或只填部分维度时，缺失维度回落默认值。
+#
+# 调参思路（总和保持 1 量纲不变，刻意放大总和 = 整体更话痨）：
+# - 情感型角色（情绪来得快、憋不住话）：调高 emotional_charge
+# - 表达型角色（话痨、爱分享）：调高 expression_drive
+# - 黏人型角色（总在等对方回应）：调高 relational_need
+# - 严谨型角色（不合时宜绝不开口）：调高 situational_relevance
+# motivation_weights:
+#   expression_drive: 0.3     # 表达欲：有话想说的冲动
+#   emotional_charge: 0.35    # 情感驱动力：情绪需要出口
+#   relational_need: 0.2      # 关系需求：想拉近/回应对方
+#   situational_relevance: 0.15  # 情景相关性：此刻开口是否合时宜
+
 # 【可选】元数据 - 额外的角色信息，可用于检索或展示
 metadata:
   species: "种族（人类/妖怪/神灵等）"

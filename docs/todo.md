@@ -235,6 +235,20 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.17 四维心情权重进角色卡（2026-07-31，用户点单 backlog）
+
+- 角色卡新字段 `motivation_weights`（可选）：expression_drive / emotional_charge /
+  relational_need / situational_relevance，各 0~1，默认 0.3/0.35/0.2/0.15
+  （= 原硬编码通用人格基线，不写行为不变）；缺失维度回落默认，总和保持 1 量纲
+  不变，刻意放大总和 = 整体更话痨。校验器：未知维度/越界/非对象均报错。
+- 装配链：CharacterConfig.motivation_weights → Agent.start 传 ThinkEngine →
+  `_parse_speaking_drive` 构造 MotivationProfile(weights=...)，total_drive 按
+  角色权重加权（原硬编码权重移入 MotivationWeightsConfig 作默认值）。
+  `_parse_speaking_drive` 顺带从 staticmethod 改实例方法（要读 self._motivation_weights）。
+- example.yaml / example_en.yaml 补注释段（含四型人格调参思路）；user_guide 字段说明同步。
+- 测试：权重解析/默认值/校验报错、同一份四维打分在不同权重下想说↔沉默对照。
+  基线：694 passed, 3 subtests passed。
+
 ## 8.16 「两句两句回」修复（2026-07-31，用户报 bug）
 
 - 现象：热聊中用户每回一句，角色回一句 + 过一会儿又追一句（=被动回复 +

@@ -226,6 +226,40 @@ class ThinkEngineDecisionTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_evaluate_speaking_drive_uses_character_motivation_weights(self):
+        """角色卡 motivation_weights 决定 total_drive 加权方式（性格差异）。"""
+        from GensokyoAI.core.config_schema import MotivationWeightsConfig
+
+        async def run():
+            model_client = _FakeModelClient(
+                '{"message": "想你了", "delay_seconds": 120, "reason": "黏人", '
+                '"enthusiasm": 0.8, "motivation": {"expression_drive": 0.0, '
+                '"emotional_charge": 0.0, "relational_need": 0.9, "situational_relevance": 0.0}}'
+            )
+            # 黏人型角色：relational_need 权重 0.9 → total = 0.9*0.9 = 0.81 >= 0.6
+            engine, _ = self._make_engine(model_client)
+            engine._motivation_weights = MotivationWeightsConfig(
+                expression_drive=0.05,
+                emotional_charge=0.05,
+                relational_need=0.9,
+                situational_relevance=0.0,
+            )
+            decision = await engine.evaluate_speaking_drive("刚才的回复", [])
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertAlmostEqual(decision.total_drive, 0.81, places=2)
+            self.assertTrue(decision.want_speak)
+
+            # 同一份四维打分换回默认权重：total = 0.9*0.2 = 0.18 < 0.6 → 沉默
+            engine2, _ = self._make_engine(_FakeModelClient(model_client.content))
+            decision2 = await engine2.evaluate_speaking_drive("刚才的回复", [])
+            self.assertIsNotNone(decision2)
+            assert decision2 is not None
+            self.assertAlmostEqual(decision2.total_drive, 0.18, places=2)
+            self.assertFalse(decision2.want_speak)
+
+        asyncio.run(run())
+
     def test_evaluate_speaking_drive_returns_none_on_invalid_json(self):
         async def run():
             model_client = _FakeModelClient("这不是 JSON")

@@ -24,6 +24,7 @@ from ...memory.types import Topic
 from ...utils.helpers import utc_now
 from ...utils.logger import logger
 from ..config import InitiativeTimerConfig, ThinkEngineConfig
+from ..config_schema import MotivationWeightsConfig
 from ..events import Event, EventBus, SystemEvent
 from .model_client import ModelClient
 from .motivation_evaluator import MotivationProfile
@@ -113,6 +114,7 @@ class ThinkEngine:
         config: ThinkEngineConfig,
         initiative_timer_config: InitiativeTimerConfig | None = None,
         debug_silent_output: bool = False,
+        motivation_weights: MotivationWeightsConfig | None = None,
     ) -> None:
         self.semantic_memory = semantic_memory
         self.model_client = model_client
@@ -121,6 +123,8 @@ class ThinkEngine:
         self.config = config
         self.initiative_timer_config = initiative_timer_config
         self.debug_silent_output = debug_silent_output
+        # 四维心情权重（角色卡 motivation_weights）；None = 通用人格基线
+        self._motivation_weights = motivation_weights or MotivationWeightsConfig()
 
         # 长期思考状态
         self._running = False
@@ -435,8 +439,7 @@ class ThinkEngine:
 
         return None
 
-    @staticmethod
-    def _parse_speaking_drive(text: str, *, threshold: float) -> SpeakingDriveDecision | None:
+    def _parse_speaking_drive(self, text: str, *, threshold: float) -> SpeakingDriveDecision | None:
         """解析对话欲评估 JSON 并按阈值给出二元判断；motivation 缺失/畸形按零动机。"""
         match = _JSON_OBJECT_PATTERN.search(text)
         raw = match.group(0) if match else text
@@ -455,13 +458,14 @@ class ThinkEngine:
             return max(0.0, min(1.0, float(value)))
 
         raw_motivation = data.get("motivation")
-        motivation = MotivationProfile()
+        motivation = MotivationProfile(weights=self._motivation_weights)
         if isinstance(raw_motivation, dict):
             motivation = MotivationProfile(
                 expression_drive=_clamp01(raw_motivation.get("expression_drive")),
                 emotional_charge=_clamp01(raw_motivation.get("emotional_charge")),
                 relational_need=_clamp01(raw_motivation.get("relational_need")),
                 situational_relevance=_clamp01(raw_motivation.get("situational_relevance")),
+                weights=self._motivation_weights,
             )
 
         total_drive = motivation.total_drive

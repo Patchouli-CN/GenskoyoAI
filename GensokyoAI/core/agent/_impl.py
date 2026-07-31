@@ -687,6 +687,11 @@ class Agent:
                 config=self.config.think_engine,
                 initiative_timer_config=self.config.initiative_timer,
                 debug_silent_output=self.config.debug_silent_output,
+                motivation_weights=(
+                    self.config.character.motivation_weights
+                    if self.config.character is not None
+                    else None
+                ),
             )
             self._lazy_components.think_engine = self._think_engine
         if self._think_engine:

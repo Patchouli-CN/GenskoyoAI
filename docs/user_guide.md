@@ -320,6 +320,12 @@ example_dialogue:
 - `begin_scene`：场景开场描述（可选）。配置 `begin_scene: true` 时，模型会基于该描述主动生成一段角色当前状态的叙述，而不是朗读静态 `greeting`。
 - `example_dialogue`：示例对话，帮助模型理解角色风格。
 - `metadata`：角色元数据，可用于检索或展示。
+- `motivation_weights`：四维心情权重（可选），决定哪维动机更主导「对话欲」（主动发言）。
+  四个维度为 `expression_drive`（表达欲）、`emotional_charge`（情感驱动）、
+  `relational_need`（关系需求）、`situational_relevance`（情景相关），
+  默认 `0.3 / 0.35 / 0.2 / 0.15`（总和 1，量纲不变）；缺失维度回落默认。
+  情感型调高 `emotional_charge`、话痨型调高 `expression_drive`、
+  黏人型调高 `relational_need`、严谨型调高 `situational_relevance`。
 
 开场模式由顶层配置 `begin_scene` 控制：
 

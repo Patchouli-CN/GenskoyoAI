@@ -6,25 +6,29 @@
 `ThinkEngine.evaluate_speaking_drive`）；本模块只保留共享的数据结构。
 """
 
-from msgspec import Struct
+from msgspec import Struct, field
+
+from ..config_schema import MotivationWeightsConfig
 
 
 class MotivationProfile(Struct):
-    """动机画像"""
+    """动机画像；weights 来自角色卡 motivation_weights（默认通用人格基线）。"""
 
     expression_drive: float = 0.0  # 表达欲：有话想说的冲动
     emotional_charge: float = 0.0  # 情感驱动力：当前情绪想释放
     relational_need: float = 0.0  # 关系需求：想和对方互动
     situational_relevance: float = 0.0  # 情景相关性：话题和当前场景的匹配度
+    weights: MotivationWeightsConfig = field(default_factory=MotivationWeightsConfig)
 
     @property
     def total_drive(self) -> float:
-        """综合驱动力"""
+        """综合驱动力（按角色卡权重加权）"""
+        w = self.weights
         return (
-            self.expression_drive * 0.3
-            + self.emotional_charge * 0.35
-            + self.relational_need * 0.2
-            + self.situational_relevance * 0.15
+            self.expression_drive * w.expression_drive
+            + self.emotional_charge * w.emotional_charge
+            + self.relational_need * w.relational_need
+            + self.situational_relevance * w.situational_relevance
         )
 
     def to_prompt_context(self) -> str:

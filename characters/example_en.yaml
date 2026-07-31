@@ -57,6 +57,24 @@ example_dialogue:
   - user: "[A question that triggers a special reaction]"
     assistant: "「[Show the character's signature reaction]」"
 
+# [Optional] Motivation weights - personality decides which drive dominates the urge to speak
+# ------------------------------------------------------------------
+# Before proactive speech, the ThinkEngine scores four dimensions (0~1 each) and
+# combines them with these weights into total_drive; speech happens when it
+# exceeds initiative_timer.drive_threshold. Defaults are the generic baseline
+# (0.3 / 0.35 / 0.2 / 0.15, sum 1); missing dimensions fall back to defaults.
+#
+# Tuning (keep the sum at 1 to preserve the scale; a larger sum = more talkative):
+# - Emotional characters: raise emotional_charge
+# - Expressive characters: raise expression_drive
+# - Clingy characters: raise relational_need
+# - Reserved characters: raise situational_relevance
+# motivation_weights:
+#   expression_drive: 0.3
+#   emotional_charge: 0.35
+#   relational_need: 0.2
+#   situational_relevance: 0.15
+
 # [Optional] Metadata - extra character information for retrieval or display
 metadata:
   species: "Race (human / youkai / deity / etc.)"

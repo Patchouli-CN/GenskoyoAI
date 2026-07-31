@@ -356,6 +356,19 @@ class BeginScene(Struct):
         return bool((self.scene and self.scene.strip()) or (self.action and self.action.strip()))
 
 
+class MotivationWeightsConfig(Struct):
+    """四维心情权重（角色卡 motivation_weights 节）：性格决定哪维动机更主导对话欲。
+
+    默认值即通用人格基线；总和为 1 时 total_drive 保持 0~1 量纲，
+    刻意调大某维（总和 >1）等于让这个角色整体更「话痨」，反之更「闷」。
+    """
+
+    expression_drive: float = 0.3  # 表达欲：有话想说的冲动
+    emotional_charge: float = 0.35  # 情感驱动力：情绪需要出口
+    relational_need: float = 0.2  # 关系需求：想拉近/回应对方
+    situational_relevance: float = 0.15  # 情景相关性：此刻开口是否合时宜
+
+
 class CharacterConfig(Struct):
     """角色配置"""
 
@@ -365,6 +378,7 @@ class CharacterConfig(Struct):
     begin_scene: BeginScene | None = None
     example_dialogue: list[dict[str, str]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    motivation_weights: MotivationWeightsConfig = field(default_factory=MotivationWeightsConfig)
 
 
 class AppConfig(Struct):
