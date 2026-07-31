@@ -349,6 +349,34 @@ class InitiativeCoordinatorDriveTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_generate_aborts_when_consecutive_limit_reached(self):
+        """连续主动上限在生成管线统一把关：思考冲动路径（不过 schedule_intent）也被拦。"""
+        from GensokyoAI.core.agent.initiative_coordinator import InitiativeCoordinator
+
+        async def run():
+            event_bus = EventBus(enable_trace=False)
+            await event_bus.start()
+            try:
+                coordinator = InitiativeCoordinator(self._make_agent(event_bus, None))
+                manager = coordinator._ensure_manager()
+                manager._consecutive_initiative_count = (
+                    manager.config.max_initiative_times  # 达到上限
+                )
+                result = await coordinator.generate_initiative_message(
+                    timer_id="thought-test", pending_summary="还想说点啥"
+                )
+                self.assertIsNotNone(result)
+                assert result is not None
+                self.assertFalse(result["sent"])
+                self.assertTrue(result["limited"])
+                # 用户回复后计数重置，主动发言恢复
+                manager.reset_consecutive_initiative_count()
+                self.assertFalse(manager._has_reached_initiative_limit())
+            finally:
+                await event_bus.stop()
+
+        asyncio.run(run())
+
 
 class InitiativeCoordinatorEnabledTests(unittest.TestCase):
     """enabled 运行时开关：无主动消息投递通道的接入方（如 QQ Bot）彻底停用主动发言。"""

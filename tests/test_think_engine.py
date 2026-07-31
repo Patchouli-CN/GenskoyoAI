@@ -273,6 +273,8 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             self.assertIn("你是 博丽灵梦", system_prompt)
             self.assertIn("内在状态评估", system_prompt)
             self.assertIn("只输出一个原始 JSON 对象", system_prompt)
+            # 节奏规则：热聊中把话头留给对方（防「每句都两句回」回归）
+            self.assertIn("把话头留给对方", system_prompt)
             self.assertIn("「赛钱箱在那边，随意投一点吧。」", user_prompt)
             self.assertIn("User: 你好", user_prompt)
 

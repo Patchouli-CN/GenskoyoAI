@@ -235,6 +235,23 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.16 「两句两句回」修复（2026-07-31，用户报 bug）
+
+- 现象：热聊中用户每回一句，角色回一句 + 过一会儿又追一句（=被动回复 +
+  回复后对话欲评估超阈值排的主动消息），且评估在热聊里几乎总是超阈值。
+- 排查结论：无双发 bug——定时器替换语义正常（schedule_intent 先弃旧排新，
+  至多一个待发）；用户消息进来自动弃旧定时器 + 重置连续计数。问题在两点：
+  1. 对话欲评估提示词只有「自己连说时打低」的约束，没有「对方正热聊时
+     把话头留给对方」的约束 → 热聊中四维总分几乎必超 0.6。
+  2. 长期思考路径（think_interval 每分钟一次思考 → INITIATIVE_SPEAK）
+     不经 schedule_intent，不受 max_initiative_times 上限约束，可无限连发。
+- 修复：build_speaking_drive_prompts 加节奏规则（对方积极回应、节奏紧凑
+  时 situational/relational 明显打低，把话头留给对方，除非有等不及的事）；
+  generate_initiative_message 入口统一检查 _has_reached_initiative_limit()，
+  思考路径同闸——max_initiative_times 成为真正的全局连续主动上限
+  （用户回复后计数重置自动恢复）。
+- 测试：提示词节奏断言 + 管线上限拦截/重置恢复。基线：691 passed, 3 subtests passed。
+
 ## 8.15 主动消息提示词去机制化（2026-07-31，用户报「暴露内部」）
 
 - 起因：QQ 主动消息漏出「……也罢，既然主动开口的时机到了——」——说话前思考

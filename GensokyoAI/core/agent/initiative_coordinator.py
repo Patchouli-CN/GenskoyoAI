@@ -146,9 +146,19 @@ class InitiativeCoordinator:
 
         主动定时器触发与 ActionPlanner 主动说话（思考冲动）共用本管线：
         入参统一为「待表达意图摘要」（存意图不存话术），经说话前思考 +
-        即时生成产出真正发给用户的消息。
+        即时生成产出真正发给用户的消息。连续主动上限（max_initiative_times）
+        也在本管线统一把关——思考冲动路径不经过 schedule_intent，若不在此
+        拦截便可无视上限连续主动发言（用户回复后计数重置自动恢复）。
         """
         agent = self._agent
+        if self._ensure_manager()._has_reached_initiative_limit():
+            logger.info("[Agent] 已达连续主动发言上限，本次主动发言放弃（等用户回复）")
+            return {
+                "sent": False,
+                "timer_id": timer_id,
+                "pending_summary": pending_summary,
+                "limited": True,
+            }
         await agent._ensure_background_manager()
         tool_build_result = await agent._build_tools()
         agent.message_builder.update_tool_build_result(tool_build_result)
