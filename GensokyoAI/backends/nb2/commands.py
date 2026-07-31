@@ -99,7 +99,8 @@ async def cmd_quota(ctx: CommandContext) -> CommandResult:
 def _format_status(status: dict[str, Any]) -> str:
     """格式化系统状态（开户数 / 处理中 / 思考延迟）。"""
     tenants = status["tenants"]
-    total = sum(tenants.values())
+    # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解
+    total = tenants["groups"] + tenants["users"] + tenants["other"]
     lines = [
         "系统状态：",
         f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）",

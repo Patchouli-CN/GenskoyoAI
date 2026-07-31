@@ -130,7 +130,8 @@ class StatusCommandTests(unittest.TestCase):
                 "latency": {"count": 12, "median_ms": 3200.0, "avg_ms": 3500.0, "last_ms": 2100.0, "max_ms": 9000.0},
             }
         )
-        self.assertIn("5 群 / 3 私聊（共 9 个会话租户）", text)
+        # 元租户（后台设施）不计入会话总数：5+3=8，不含 meta 的 1
+        self.assertIn("5 群 / 3 私聊（共 8 个会话租户）", text)
         self.assertIn("处理中：2 个会话正在生成", text)
         self.assertIn("中位 3.2s", text)
         self.assertIn("近 12 次内心思考", text)
