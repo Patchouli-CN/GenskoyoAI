@@ -11,6 +11,8 @@ RuntimeHost 由 Nonebot2Adapter.start() 注入（bind_host），生命周期归�
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -29,6 +31,9 @@ from nonebot.rule import Rule, to_me
 from ...commands import CommandContext, CommandExecutor
 from ...core.agent.prompts import (
     build_member_impression_prompt,
+    build_mute_break_context,
+    build_mute_break_judge_prompt,
+    build_mute_forgive_context,
     build_repeat_annoyance_context,
     build_repeat_farewell_context,
 )
@@ -179,6 +184,33 @@ async def _learn_impression(member_name: str, member_qq: int, exchange: str) -> 
         logger.warning(f"[nb2] 生成对 {member_name} 的印象失败: {error}")
     finally:
         _impression_inflight.discard(member_qq)
+
+
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+
+
+async def _judge_mute_break(member_label: str, text: str) -> str:
+    """冷却期破例判定：LLM 以角色性格裁决 forgive/respond；失败一律 ignore（fail-closed）。
+
+    只处理「有新意」的内容（纯复读已被 RepeatGuard 在判定前拦截，不烧 token）；
+    经元租户一次性脱稿调用，短 JSON 输出。
+    """
+    host = _require_host()
+    try:
+        raw = await host.generate_meta_text(
+            _config.character,
+            build_mute_break_judge_prompt(_config.character, member_label, text),
+        )
+        match = _JSON_OBJECT_PATTERN.search(raw)
+        data = json.loads(match.group(0) if match else raw)
+        if isinstance(data, dict):
+            if data.get("forgive") is True:
+                return "forgive"
+            if data.get("respond") is True:
+                return "respond"
+    except Exception as error:
+        logger.debug(f"[nb2] 破例判定失败（{member_label}）: {error}")
+    return "ignore"
 
 
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
@@ -402,17 +434,33 @@ async def _chat(
     if not text or text.startswith("/"):
         return  # 忽略纯表情/图片消息与未登记的指令文本（指令已在 handler 层分发）
     verdict = None
+    break_action: str | None = None
     if _repeat_guard is not None and member_qq is not None:
         verdict = _repeat_guard.check(key, member_qq, text)
         member_label = member_name or str(member_qq)
         if verdict.verdict is RepeatVerdict.MUTED:
-            # 「不理」冷却中：静默丢弃，不进 Runtime（零 token），模拟真人已读不回
+            # 「不理」冷却中且仍是复读：静默丢弃，不进 Runtime（零 token）
             logger.info(
                 f"[nb2] {agent_id} 的 {member_label} 处于「不理」冷却"
-                f"（剩 {verdict.remaining_seconds:.0f} 秒），消息已忽略"
+                f"（剩 {verdict.remaining_seconds:.0f} 秒），复读消息已忽略"
             )
             return
-        if verdict.verdict is RepeatVerdict.ANNOYED:
+        if verdict.verdict is RepeatVerdict.MUTED_NOVEL:
+            # 冷却中但内容有新意：由 LLM 以角色性格裁决要不要破例
+            if _repeat_guard.llm_break:
+                break_action = await _judge_mute_break(member_label, text)
+            if break_action == "forgive":
+                _repeat_guard.forgive(key, member_qq)
+                logger.info(f"[nb2] {agent_id} 的 {member_label} 获得原谅，「不理」解除")
+            elif break_action == "respond":
+                logger.info(f"[nb2] {agent_id} 的 {member_label} 触发破例回应（尚未消气）")
+            else:
+                logger.info(
+                    f"[nb2] {agent_id} 的 {member_label} 冷却中"
+                    f"（剩 {verdict.remaining_seconds:.0f} 秒），新内容未获破例，消息已忽略"
+                )
+                return
+        elif verdict.verdict is RepeatVerdict.ANNOYED:
             logger.info(
                 f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次，"
                 "已注入厌烦情绪（回复将转冷淡）"
@@ -439,6 +487,12 @@ async def _chat(
         elif verdict.verdict is RepeatVerdict.FAREWELL:
             # 最后一句话：本轮表态后进入「不理」冷却
             contexts.append(build_repeat_farewell_context(member_label))
+        elif verdict.verdict is RepeatVerdict.MUTED_NOVEL and break_action is not None:
+            # 冷却期破例：消气原谅 / 偷偷回一句（「不理」状态仍继续）
+            if break_action == "forgive":
+                contexts.append(build_mute_forgive_context(member_label))
+            else:
+                contexts.append(build_mute_break_context(member_label))
     reply = ""
     async with _lock_for(key):
         try:

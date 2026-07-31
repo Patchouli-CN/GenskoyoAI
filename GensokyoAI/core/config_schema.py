@@ -156,7 +156,11 @@ class RepeatGuardConfig(Struct):
     history_size: int = 5  # 每用户参与判重的近期消息条数
     warn_streak: int = 3  # 连续复读达到该次数：注入厌烦情绪，回复转冷淡
     mute_streak: int = 5  # 连续复读达到该次数：角色最后一句话表态，随后进入「不理」冷却
-    mute_minutes: int = 10  # 「不理」冷却时长（分钟），期间该用户消息直接忽略
+    mute_minutes: int = 10  # 「不理」冷却时长（分钟），期间复读消息直接忽略
+    # 冷却期间遇到「有新意」的内容时，交给 LLM 以角色性格做破例判定
+    # （诚恳道歉/真心请求可能消气，有趣内容可能破例回一句）；
+    # False = 一律静默到冷却结束，零额外 token
+    llm_break: bool = True
 
 
 class WebSearchAPIConfig(Struct):

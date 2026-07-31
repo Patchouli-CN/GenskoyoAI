@@ -235,6 +235,23 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.20 RP 反模板 + 「不理」LLM 破例判定（2026-07-31，用户定稿）
+
+- 反模板：`build_roleplay_system_prompt` 追加第 7 条【禁止模板化回复】——
+  长短/结构/节奏随情绪变化、不沿用最近几条的开头句式与结尾模式、
+  口癖点到即止、不强制三段式不以问句收尾。
+- 「不理」从纯算法硬丢改「算法拦复读 + LLM 裁新内容」（用户：随角色性格自由点，
+  比如求她可以偷偷理一下）：
+  - RepeatGuard 新 verdict `MUTED_NOVEL`：冷却期内继续复读 → 照旧白丢（零 token）；
+    内容有新意 → 交调用方。冷却期保留判重窗口（识别持续刷屏），到期/原谅才清零。
+  - plugin `_judge_mute_break`：元租户脱稿短 JSON（build_mute_break_judge_prompt，
+    {"forgive","respond"}），fail-closed 默认 ignore。
+  - forgive → `guard.forgive()` 解除冷却 + 注入原谅上下文（嘴硬/下台阶随性格）；
+    respond → 注入破例上下文（别扭/端架子回一句，「不理」状态不解除——偷偷理一下）。
+  - 开关 `repeat_guard.llm_break`（默认 true；false = 一律静默到冷却结束，零额外 token）。
+- 测试：冷却期复读白丢/新内容分流、forgive 提前解除且不影响他人、llm_break 配置读取。
+  基线：697 passed, 3 subtests passed。
+
 ## 8.19 全身检查：伪异步专项审查 + 修复批次一（2026-07-31，用户点单）
 
 - 审查：5 个 explore 子代理分区（core/agent、runtime、memory/session、

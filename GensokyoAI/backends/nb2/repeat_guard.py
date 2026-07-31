@@ -1,10 +1,12 @@
 """复读烦躁模型：同一用户连续复读/刷屏时，角色逐渐厌烦直至暂时不理。
 
-判定完全在适配器侧按发送者进行（发送者身份只存在于接入层），纯内存、零 token：
+判定完全在适配器侧按发送者进行（发送者身份只存在于接入层）：
 - 与近期消息窗口内任意一条相似（归一化后相同或相似度达标）即判复读，连击 +1；
 - 连击达到 warn_streak：调用方注入厌烦情绪上下文，角色回复自然转冷淡；
 - 连击达到 mute_streak：调用方让角色说最后一句话表态，随后进入「不理」冷却；
-- 冷却期间该用户消息被静默丢弃（不进 Runtime）；冷却结束自动消气、从零计数。
+- 冷却期内继续复读 → 静默丢弃（零 token）；内容有新意 → 交给调用方，
+  由 LLM 以角色性格裁决：消气原谅（forgive）/ 破例回一句（respond）/ 继续不理；
+- 冷却结束自动消气、从零计数。
 
 阈值来自全局配置 repeat_guard 节（config/local.yaml），见 RepeatGuardConfig。
 """
@@ -29,7 +31,8 @@ class RepeatVerdict(Enum):
     OK = auto()  # 正常回应
     ANNOYED = auto()  # 厌烦区：注入厌烦上下文，角色回复转冷淡
     FAREWELL = auto()  # 最后一句话：本轮注入告别上下文，随后进入「不理」冷却
-    MUTED = auto()  # 冷却中：静默丢弃，不进 Runtime
+    MUTED = auto()  # 冷却中且内容仍是复读：静默丢弃，不进 Runtime（零 token）
+    MUTED_NOVEL = auto()  # 冷却中但内容有新意：交给调用方做破例判定（LLM 以性格裁决）
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,7 @@ class RepeatGuard:
         warn_streak: int = 3,
         mute_streak: int = 5,
         mute_minutes: int = 10,
+        llm_break: bool = True,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.similarity = similarity
@@ -64,6 +68,9 @@ class RepeatGuard:
         self.warn_streak = warn_streak
         self.mute_streak = mute_streak
         self.mute_seconds = mute_minutes * 60.0
+        # 冷却期间遇到「有新意」的内容时，是否交给 LLM 以角色性格做破例判定
+        # （False = 一律静默到冷却结束，零额外 token）
+        self.llm_break = llm_break
         self._clock = clock
         self._states: dict[tuple[str, int], _UserState] = {}
 
@@ -75,6 +82,7 @@ class RepeatGuard:
             warn_streak=config.warn_streak,
             mute_streak=config.mute_streak,
             mute_minutes=config.mute_minutes,
+            llm_break=config.llm_break,
             **kwargs,
         )
 
@@ -92,7 +100,7 @@ class RepeatGuard:
         return False
 
     def check(self, conversation_key: str, user_id: int, text: str) -> RepeatCheck:
-        """判定一条新消息；MUTED 之外的结果都会推进该用户的判重窗口。"""
+        """判定一条新消息；冷却期内：复读白丢（零 token），新内容交调用方破例判定。"""
         now = self._clock()
         key = (conversation_key, user_id)
         state = self._states.get(key)
@@ -100,7 +108,22 @@ class RepeatGuard:
             state = self._states[key] = _UserState(recent=deque(maxlen=self.history_size))
 
         if state.muted_until > now:
-            return RepeatCheck(RepeatVerdict.MUTED, remaining_seconds=state.muted_until - now)
+            remaining = state.muted_until - now
+            normalized = self._normalize(text)
+            if not normalized:
+                return RepeatCheck(RepeatVerdict.MUTED, remaining_seconds=remaining)
+            # 冷却期保留判重窗口：继续复读 → 白丢（算法拦截，不烦 LLM）；
+            # 有新意 → 交给调用方（LLM 以角色性格裁决要不要破例理一下）
+            is_repeat = self._is_repeat(state, normalized)
+            state.recent.append(normalized)
+            verdict = RepeatVerdict.MUTED if is_repeat else RepeatVerdict.MUTED_NOVEL
+            return RepeatCheck(verdict, remaining_seconds=remaining)
+
+        if state.muted_until > 0:
+            # 冷却刚结束：消气清零，重新计数（判重窗口一并清空）
+            state.muted_until = 0.0
+            state.streak = 0
+            state.recent.clear()
 
         normalized = self._normalize(text)
         if not normalized:
@@ -112,11 +135,18 @@ class RepeatGuard:
 
         if state.streak >= self.mute_streak:
             streak = state.streak
-            # 进入冷却：清空连击与判重窗口，冷却结束后从零开始（消气了）
+            # 进入冷却：连击清零但保留判重窗口（冷却期内识别继续刷屏用）
             state.streak = 0
-            state.recent.clear()
             state.muted_until = now + self.mute_seconds
             return RepeatCheck(RepeatVerdict.FAREWELL, streak=streak)
         if state.streak >= self.warn_streak:
             return RepeatCheck(RepeatVerdict.ANNOYED, streak=state.streak)
         return RepeatCheck(RepeatVerdict.OK, streak=state.streak)
+
+    def forgive(self, conversation_key: str, user_id: int) -> None:
+        """提前解除「不理」冷却并清零（LLM 判定消气后调用）。"""
+        state = self._states.get((conversation_key, user_id))
+        if state is not None:
+            state.muted_until = 0.0
+            state.streak = 0
+            state.recent.clear()

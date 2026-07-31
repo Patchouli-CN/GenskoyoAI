@@ -63,15 +63,31 @@ class RepeatGuardTests(unittest.TestCase):
         for want in expected:
             self.assertIs(self.guard.check("group:1", 42, "转").verdict, want)
 
-        # 冷却中：静默丢弃，继续发言不改变状态
+        # 冷却中继续复读：算法白丢（零 token）
         muted = self.guard.check("group:1", 42, "转")
         self.assertIs(muted.verdict, RepeatVerdict.MUTED)
         self.assertGreater(muted.remaining_seconds, 0)
-        self.assertIs(self.guard.check("group:1", 42, "还在吗").verdict, RepeatVerdict.MUTED)
+        # 冷却中出现新内容：交 LLM 破例判定
+        self.assertIs(self.guard.check("group:1", 42, "对不起，我错了").verdict, RepeatVerdict.MUTED_NOVEL)
 
         # 冷却结束：消气，连击与判重窗口都已清零
         self.clock.advance(601)
         self.assertIs(self.guard.check("group:1", 42, "转").verdict, RepeatVerdict.OK)
+
+    def test_forgive_releases_mute_early(self):
+        for _ in range(6):
+            self.guard.check("group:1", 42, "转")  # 进入冷却
+        self.assertIs(self.guard.check("group:1", 42, "转").verdict, RepeatVerdict.MUTED)
+        self.guard.forgive("group:1", 42)
+        # 原谅后立即恢复正常（窗口与连击清零）
+        self.assertIs(self.guard.check("group:1", 42, "转").verdict, RepeatVerdict.OK)
+        # 对其他用户不影响
+        self.assertIs(self.guard.check("group:1", 99, "转").verdict, RepeatVerdict.OK)
+
+    def test_llm_break_flag_from_config(self):
+        guard = RepeatGuard.from_config(RepeatGuardConfig(llm_break=False), clock=self.clock)
+        self.assertFalse(guard.llm_break)
+        self.assertTrue(RepeatGuard.from_config(RepeatGuardConfig(), clock=self.clock).llm_break)
 
     def test_normal_message_resets_streak(self):
         self.guard.check("group:1", 42, "转")
