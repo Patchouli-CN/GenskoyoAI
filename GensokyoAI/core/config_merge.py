@@ -243,7 +243,7 @@ class ConfigMerger:
             episodic_summary_model=choose(
                 "episodic_summary_model",
                 override.episodic_summary_model
-                if override.episodic_summary_model != "qwen3.5:9b"
+                if override.episodic_summary_model is not None
                 else base.episodic_summary_model,
             ),
             episodic_keep_recent=choose(
@@ -267,7 +267,7 @@ class ConfigMerger:
             auto_memory_model=choose(
                 "auto_memory_model",
                 override.auto_memory_model
-                if override.auto_memory_model != "qwen3.5:9b"
+                if override.auto_memory_model is not None
                 else base.auto_memory_model,
             ),
             topic_generation=self._merge_topic_generation(

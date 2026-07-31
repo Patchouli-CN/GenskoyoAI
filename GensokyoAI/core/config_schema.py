@@ -95,13 +95,16 @@ class MemoryConfig(Struct):
 
     working_max_turns: int = 20
     episodic_threshold: int = 50
-    episodic_summary_model: str = "qwen3.5:9b"
+    # 情景摘要模型；None = 跟随主模型（model.name）。
+    # 注意：episodic 写入路径当前未启用（event_listeners 中已注释），本字段为预留。
+    episodic_summary_model: str | None = None
     episodic_keep_recent: int = 10
     semantic_enabled: bool = True
     semantic_top_k: int = 5
     semantic_similarity_threshold: float = 0.7
     auto_memory_enabled: bool = True
-    auto_memory_model: str = "qwen3.5:9b"
+    # 自动记忆模型；None = 跟随主模型。当前无消费方（预留字段）。
+    auto_memory_model: str | None = None
 
     topic_generation: TopicGenerationConfig = field(default_factory=TopicGenerationConfig)
 

@@ -159,13 +159,13 @@ embedding:
 memory:
   working_max_turns: 20
   episodic_threshold: 50
-  episodic_summary_model: claude-sonnet-4-6-thinking   # 复用主模型做摘要
+  episodic_summary_model: null   # 情景摘要模型；null = 跟随主模型（episodic 写入路径当前未启用，预留）
   episodic_keep_recent: 10
   semantic_enabled: false  # 当前用 Claude 不带 embedding，临时关闭语义记忆；后续接 embedding 后改回 true
   semantic_top_k: 5
   semantic_similarity_threshold: 0.7
   auto_memory_enabled: true
-  auto_memory_model: claude-sonnet-4-6-thinking        # 复用主模型写记忆
+  auto_memory_model: null        # 自动记忆模型；null = 跟随主模型（当前无消费方，预留）
   
   # 话题生成配置
   topic_generation:

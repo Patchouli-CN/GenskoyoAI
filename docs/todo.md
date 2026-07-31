@@ -235,6 +235,22 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.24 memory 模型字段跟随主模型（2026-07-31，用户报 provider 不支持）
+
+- `episodic_summary_model` / `auto_memory_model` 原默认值写死 Ollama 本地模型名
+  （qwen3.5:9b），改为 `None = 跟随主模型`（ModelClient.chat 的 model=None
+  回落 config.name）；merge 哨兵同步改 None；local.yaml 与模板同步。
+- 事实记录：auto_memory_model 当前无消费方（纯预留字段）；
+  episodic 写入路径（event_listeners:81）当前注释停用，episodic_summary_model 同为预留。
+
+## 8.23 nb2 web_search 启用（ddg 免 key）（2026-07-31，用户点单）
+
+- 启用路径（纯配置，零代码）：`tool.web_search.enabled: true` + `provider: ddg`
+  （ddgs 包是主依赖已内置）+ `trigger_strategy: explicit`；
+  不需要进 `tool.builtin_tools` 名单（web_search 不在 _MODULE_TOOL_PREFIXES，
+  不受名单过滤）；provider 内建搜索（model.web_search_enabled）须保持 off 才不打架。
+- 已实测 ddg 搜索返回正常（local.yaml 已开，模板 provider 本就是 ddg）。
+
 ## 8.22 nb2 /status 系统状态指令（2026-07-31，用户点单）
 
 - `ModelClient` 新增 `_latency_samples` 滚动窗口（近 50 次模型调用耗时，
