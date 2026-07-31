@@ -385,9 +385,9 @@ class ThinkEngine:
             {"role": "user", "content": user_prompt},
         ]
 
-        logger.trace(
-            f"[ThinkEngine] 对话欲评估请求 messages:\n"
-            f"{json.dumps(messages, ensure_ascii=False, indent=2, default=str)}"
+        logger.opt(lazy=True).trace(
+            "[ThinkEngine] 对话欲评估请求 messages:\n{dump}",
+            dump=lambda: json.dumps(messages, ensure_ascii=False, indent=2, default=str),
         )
 
         max_retries = 1

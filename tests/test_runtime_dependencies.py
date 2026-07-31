@@ -777,11 +777,20 @@ class FakeRuntimeSessionPersistence:
     def load_messages(self, session_id):
         return list(self.manager.messages_by_session.get(session_id, []))
 
+    async def load_messages_async(self, session_id):
+        return self.load_messages(session_id)
+
     def save_session(self, session):
         self.saved_sessions.append(session.session_id)
 
+    async def save_session_async(self, session):
+        self.save_session(session)
+
     def replace_messages(self, session_id, messages):
         self.manager.messages_by_session[session_id] = [dict(message) for message in messages]
+
+    async def replace_messages_async(self, session_id, messages):
+        self.replace_messages(session_id, messages)
 
 
 class FakeRuntimeSessionManager:
@@ -828,6 +837,9 @@ class FakeRuntimeSessionManager:
         self.persistence.save_session(self.sessions[session_id])
         return True
 
+    async def replace_messages_async(self, session_id, messages):
+        return self.replace_messages(session_id, messages)
+
     def delete_session(self, session_id):
         if session_id not in self.sessions:
             return False
@@ -843,6 +855,10 @@ class FakeRuntimeSessionManager:
         if self.current:
             messages = self.messages_by_session.get(self.current.session_id, [])
             self.current.total_turns = len(messages) // 2
+
+    async def save_current_async(self):
+        self.save_current()
+        return True
 
 
 class FakeRuntimeSemanticMemory:

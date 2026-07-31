@@ -102,33 +102,19 @@ class BackgroundManager:
 
     def submit(self, task: BackgroundTask) -> bool:
         """提交任务到队列"""
+        # 计数直接同步自增：事件循环单线程，put_nowait/+= 之间无让出，本就原子
         if not self._accepting_tasks:
-
-            async def _update_rejected():
-                async with self._stats_lock:
-                    self._stats["dropped"] += 1
-
-            asyncio.create_task(_update_rejected())
+            self._stats["dropped"] += 1
             logger.warning(f"后台管理器已停止接收任务，拒绝任务: {task.name}")
             return False
 
         try:
             self._task_queue.put_nowait(task)
-
-            async def _update_stats():
-                async with self._stats_lock:
-                    self._stats["submitted"] += 1
-
-            asyncio.create_task(_update_stats())
+            self._stats["submitted"] += 1
             logger.debug(f"提交任务: {task.name} (优先级: {task.priority.name})")
             return True
         except asyncio.QueueFull:
-
-            async def _update_dropped():
-                async with self._stats_lock:
-                    self._stats["dropped"] += 1
-
-            asyncio.create_task(_update_dropped())
+            self._stats["dropped"] += 1
             logger.warning(f"任务队列已满 ({self.max_queue_size})，丢弃任务: {task.name}")
             return False
 

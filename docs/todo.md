@@ -235,6 +235,31 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.19 全身检查：伪异步专项审查 + 修复批次一（2026-07-31，用户点单）
+
+- 审查：5 个 explore 子代理分区（core/agent、runtime、memory/session、
+  backends/adapters/cli/commands、world/scene/tools/background/utils）+ 主审逐条亲验。
+  总评：骨架健康（provider 全异步、持久化 worker 池、锁粒度大多正确）；
+  真问题集中在 runtime 层幂等/会话文件 I/O 绕过了已有的异步变体。
+- 修复批次一（A 热路径同步 I/O + B 免费小胜利）：
+  - A1 `operation_store`：begin/succeed/fail/cancel 全链路 async，`_save_async`
+    走 to_thread（账本随时长增长，原每条消息同步全量重写 2 次）。
+  - A2 `_idempotent_response`/`_finalize_message_operation` 改 async，
+    换用现成的 `load_messages_async`/`replace_messages_async`；
+    SessionManager 新增 `replace_messages_async`。
+  - A3 rollback/export RPC 换 `save_current_async`（新增）+ async 读。
+  - B4 两处大 json.dumps trace 日志改 `logger.opt(lazy=True)` 惰性求值。
+  - B5 coordinator 主动生成：`_build_tools` 与 `pre_speak_thought` 改 gather
+    （缩短回合信号量占用一个 LLM 往返）。
+  - B6 background stats 计数去掉 create_task/锁，直接同步自增（单线程原子）。
+- 审查遗留（批次二候选，均未修）：media/providers 图片 base64 同步 I/O、
+  topic_store O(N) 关键词打分、semantic 全量重 embed、nb2 sessions.json 每消息
+  重写、repeat_guard difflib 无上限、external_manager 串行 refresh、world 投影
+  串行、console /history 同步读写；存疑裁决：service._lock 包 LLM 生成=承重不动、
+  world 段尾规划=有意、episodic=死代码启用前再修。
+- 测试：store.begin 测试异步化、robustness/dependencies fake 补 async 镜像。
+  基线：695 passed, 3 subtests passed。
+
 ## 8.18 nb2 引用原文进上下文（2026-07-31，用户点单 backlog）
 
 - 起因：A 引用 B 的话 @bot 问「你认识她吗」，角色看不到被引用的内容只能瞎猜

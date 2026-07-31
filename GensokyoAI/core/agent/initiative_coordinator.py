@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -160,10 +161,8 @@ class InitiativeCoordinator:
                 "limited": True,
             }
         await agent._ensure_background_manager()
-        tool_build_result = await agent._build_tools()
-        agent.message_builder.update_tool_build_result(tool_build_result)
 
-        # 委托 ThinkEngine 进行说话前思考
+        # 说话前思考的上下文准备（与工具构建互不依赖，下面并发执行）
         recent_messages = agent.working_memory.get_recent(8)
         recent_context = "\n".join(
             f"{item.get('role', 'unknown')}: {item.get('content', '')}"
@@ -172,12 +171,17 @@ class InitiativeCoordinator:
         )
         if agent._think_engine is None:
             raise AgentError("ThinkEngine not initialized")
-        thought = await agent._think_engine.pre_speak_thought(
-            pending_summary=pending_summary,
-            recent_context=recent_context,
-            max_tokens=agent.config.think_engine.think_max_tokens,
-            temperature=agent.config.think_engine.think_temperature,
+        # 工具构建与说话前思考互不依赖，并发以缩短回合信号量占用
+        tool_build_result, thought = await asyncio.gather(
+            agent._build_tools(),
+            agent._think_engine.pre_speak_thought(
+                pending_summary=pending_summary,
+                recent_context=recent_context,
+                max_tokens=agent.config.think_engine.think_max_tokens,
+                temperature=agent.config.think_engine.think_temperature,
+            ),
         )
+        agent.message_builder.update_tool_build_result(tool_build_result)
 
         system_contexts = [build_initiative_message_context(pending_summary, thought)]
         system_contexts = await agent._prepend_scene_context(system_contexts)
@@ -198,9 +202,9 @@ class InitiativeCoordinator:
             initiative_options["max_tokens"] = max_tokens
         use_stream = agent.config.model.stream
 
-        logger.trace(
-            f"[Agent] 主动消息生成请求 messages:\n"
-            f"{json.dumps(messages, ensure_ascii=False, indent=2, default=str)}"
+        logger.opt(lazy=True).trace(
+            "[Agent] 主动消息生成请求 messages:\n{dump}",
+            dump=lambda: json.dumps(messages, ensure_ascii=False, indent=2, default=str),
         )
 
         message = ""

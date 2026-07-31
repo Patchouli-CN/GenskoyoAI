@@ -123,24 +123,27 @@ def test_network_runtime_info_exposes_remote_resource_requirements() -> None:
 
 
 def test_operation_store_recovers_pending_request_without_reexecuting() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        path = Path(temp_dir) / "operations.json"
-        store = RuntimeOperationStore(path)
-        fingerprint = store.request_fingerprint({"message": "hello"})
-        created = store.begin(
-            session_id="session-1",
-            idempotency_key="send-1",
-            request_fingerprint=fingerprint,
-            generation_id="generation-1",
-        )
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "operations.json"
+            store = RuntimeOperationStore(path)
+            fingerprint = store.request_fingerprint({"message": "hello"})
+            created = await store.begin(
+                session_id="session-1",
+                idempotency_key="send-1",
+                request_fingerprint=fingerprint,
+                generation_id="generation-1",
+            )
 
-        recovered = RuntimeOperationStore(path).get("session-1", "send-1")
+            recovered = RuntimeOperationStore(path).get("session-1", "send-1")
 
-        assert created["status"] == "pending"
-        assert recovered is not None
-        assert recovered["status"] == "failed"
-        assert recovered["error"]["code"] == "message.operation_outcome_unknown"
-        assert recovered["error"]["details"]["outcome_unknown"] is True
+            assert created["status"] == "pending"
+            assert recovered is not None
+            assert recovered["status"] == "failed"
+            assert recovered["error"]["code"] == "message.operation_outcome_unknown"
+            assert recovered["error"]["details"]["outcome_unknown"] is True
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(

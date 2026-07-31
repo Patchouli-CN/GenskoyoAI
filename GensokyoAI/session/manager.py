@@ -194,6 +194,29 @@ class SessionManager:
 
         return True
 
+    async def replace_messages_async(self, session_id: str, messages: list[dict]) -> bool:
+        """`replace_messages` 的异步变体：消息热路径（幂等 finalize 等）不阻塞事件循环。"""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+
+        previous = await self._persistence.load_messages_async(session_id)
+        normalized_messages, changed = self._merge_message_model(previous, messages)
+        wm = self._working_memories.get(session_id)
+        if wm is None:
+            wm = WorkingMemoryManager(max_turns=self._working_max_turns)
+            self._working_memories[session_id] = wm
+        wm.replace_messages(normalized_messages)
+
+        session.total_turns = len(normalized_messages) // 2
+        if changed:
+            session.revision += 1
+            session.touch()
+        await self._persistence.replace_messages_async(session_id, normalized_messages)
+        await self._persistence.save_session_async(session)
+        logger.debug(f"异步替换会话消息: {session_id}, {len(normalized_messages)} 条")
+        return True
+
     def delete_session(self, session_id: str) -> bool:
         """删除会话"""
         if session_id in self._sessions:
@@ -212,6 +235,14 @@ class SessionManager:
             # 保存工作记忆（会自动更新 total_turns 和保存会话）
             self.save_working_memory()
         logger.debug(f"会话已保存: {self._current_session_id}")
+
+    async def save_current_async(self) -> bool:
+        """`save_current` 的异步变体：async RPC 路径不阻塞事件循环。"""
+        if not self._current_session_id:
+            return False
+        saved = await self.save_working_memory_async()
+        logger.debug(f"会话已异步保存: {self._current_session_id}")
+        return saved
 
     def assert_revision(self, session_id: str, expected_revision: int | None) -> SessionContext:
         session = self._sessions.get(session_id)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Mapping
@@ -13,7 +14,12 @@ from GensokyoAI.utils.helpers import utc_now
 
 
 class RuntimeOperationStore:
-    """Atomically persist bounded message-generation operation state."""
+    """Atomically persist bounded message-generation operation state.
+
+    写路径（begin/succeed/fail/cancel）为 async：账本随运行时长增长，
+    全量序列化+落盘放到 ``asyncio.to_thread``，不阻塞共享事件循环。
+    读路径（get）为纯内存查询，保持同步。
+    """
 
     MAX_RECORDS = 10_000
 
@@ -39,7 +45,7 @@ class RuntimeOperationStore:
         record = self._records.get(self._record_key(session_id, idempotency_key))
         return dict(record) if record is not None else None
 
-    def begin(
+    async def begin(
         self,
         *,
         session_id: str,
@@ -66,16 +72,16 @@ class RuntimeOperationStore:
         }
         self._records[storage_key] = record
         self._trim()
-        self._save()
+        await self._save_async()
         return dict(record)
 
-    def succeed(
+    async def succeed(
         self,
         session_id: str,
         idempotency_key: str,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        return self._finish(
+        return await self._finish(
             session_id,
             idempotency_key,
             status="succeeded",
@@ -83,13 +89,13 @@ class RuntimeOperationStore:
             error=None,
         )
 
-    def fail(
+    async def fail(
         self,
         session_id: str,
         idempotency_key: str,
         error: dict[str, Any],
     ) -> dict[str, Any]:
-        return self._finish(
+        return await self._finish(
             session_id,
             idempotency_key,
             status="failed",
@@ -97,13 +103,13 @@ class RuntimeOperationStore:
             error=error,
         )
 
-    def cancel(
+    async def cancel(
         self,
         session_id: str,
         idempotency_key: str,
         error: dict[str, Any],
     ) -> dict[str, Any]:
-        return self._finish(
+        return await self._finish(
             session_id,
             idempotency_key,
             status="cancelled",
@@ -111,7 +117,7 @@ class RuntimeOperationStore:
             error=error,
         )
 
-    def _finish(
+    async def _finish(
         self,
         session_id: str,
         idempotency_key: str,
@@ -132,7 +138,7 @@ class RuntimeOperationStore:
                 "error": error,
             }
         )
-        self._save()
+        await self._save_async()
         return dict(record)
 
     def _load(self) -> dict[str, dict[str, Any]]:
@@ -207,6 +213,10 @@ class RuntimeOperationStore:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
+    async def _save_async(self) -> None:
+        """消息热路径用：全量序列化+落盘丢线程，让出事件循环。"""
+        await asyncio.to_thread(self._save)
 
     @staticmethod
     def _record_key(session_id: str, idempotency_key: str) -> str:

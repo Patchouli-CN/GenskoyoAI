@@ -1213,13 +1213,13 @@ class RuntimeService:
             raise ValueError("No active session to export")
 
         if current and current.session_id == target_session_id:
-            manager.save_current()
+            await manager.save_current_async()
 
         session = manager.get_session(target_session_id)
         if session is None:
             raise ValueError(f"Session does not exist: {target_session_id}")
 
-        messages = manager.persistence.load_messages(target_session_id)
+        messages = await manager.persistence.load_messages_async(target_session_id)
         is_current = bool(current and current.session_id == target_session_id)
         character_name = agent.config.character.name if agent.config.character else None
         return {
@@ -1429,9 +1429,11 @@ class RuntimeService:
             before_messages = agent.session_manager.get_working_memory().get_context()
             before_total_turns = session.total_turns
             agent.rollback(num=num, mode=mode)  # type: ignore[arg-type]
-            agent.session_manager.save_current()
+            await agent.session_manager.save_current_async()
             after_session = agent.session_manager.get_current_session()
-            after_messages = agent.session_manager.persistence.load_messages(session.session_id)
+            after_messages = await agent.session_manager.persistence.load_messages_async(
+                session.session_id
+            )
             return {
                 "rolled_back": True,
                 "num": num,
@@ -1464,7 +1466,7 @@ class RuntimeService:
                 if session is None:
                     raise ValueError("No active session to send a message")
                 fingerprint = self._message_request_fingerprint(message, system_contexts)
-                replay = self._idempotent_response(
+                replay = await self._idempotent_response(
                     agent,
                     session.session_id,
                     idempotency_key,
@@ -1479,7 +1481,7 @@ class RuntimeService:
                 )
                 operation_session_id = session.session_id
                 generation_id = str(uuid4())
-                self._begin_message_operation(
+                await self._begin_message_operation(
                     operation_session_id,
                     idempotency_key,
                     request_fingerprint=fingerprint,
@@ -1493,7 +1495,7 @@ class RuntimeService:
                         else await agent.send(resolved_message, system_contexts)
                     )
                     content = response.content if response else ""
-                    message_payload = self._finalize_message_operation(
+                    message_payload = await self._finalize_message_operation(
                         agent,
                         operation_session_id,
                         idempotency_key,
@@ -1510,17 +1512,17 @@ class RuntimeService:
                         "session": self._session_payload(session) if session else None,
                         "initiative_timer": self._agent_initiative_timer_payload(agent),
                     }
-                    self._succeed_message_operation(
+                    await self._succeed_message_operation(
                         operation_session_id,
                         idempotency_key,
                         result,
                     )
                     return result
                 except asyncio.CancelledError:
-                    self._cancel_message_operation(operation_session_id, idempotency_key)
+                    await self._cancel_message_operation(operation_session_id, idempotency_key)
                     raise
                 except Exception as error:
-                    self._fail_message_operation(operation_session_id, idempotency_key, error)
+                    await self._fail_message_operation(operation_session_id, idempotency_key, error)
                     raise
 
     async def iter_message_stream(
@@ -1589,7 +1591,7 @@ class RuntimeService:
             if session is None:
                 raise ValueError("No active session to send a message")
             fingerprint = self._message_request_fingerprint(message, system_contexts)
-            replay = self._idempotent_response(
+            replay = await self._idempotent_response(
                 agent,
                 session.session_id,
                 idempotency_key,
@@ -1613,7 +1615,7 @@ class RuntimeService:
                 expected_revision,
             )
             resolved_generation_id = generation_id or str(uuid4())
-            self._begin_message_operation(
+            await self._begin_message_operation(
                 session.session_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
@@ -1668,10 +1670,10 @@ class RuntimeService:
         except GeneratorExit:
             # 消费者中途关闭流（WS 断连/取消落在发送窗口）：把账本收敛为
             # cancelled，避免幂等记录永久 pending 卡死后续同键重试
-            self._cancel_message_operation(session_id, idempotency_key)
+            await self._cancel_message_operation(session_id, idempotency_key)
             raise
         except asyncio.CancelledError:
-            self._cancel_message_operation(session_id, idempotency_key)
+            await self._cancel_message_operation(session_id, idempotency_key)
             yield {
                 "type": "cancelled",
                 "index": index,
@@ -1681,7 +1683,7 @@ class RuntimeService:
             }
             raise
         except Exception as error:
-            self._fail_message_operation(session_id, idempotency_key, error)
+            await self._fail_message_operation(session_id, idempotency_key, error)
             yield {
                 "type": "error",
                 "index": index,
@@ -1693,7 +1695,7 @@ class RuntimeService:
             raise
 
         session = agent.session_manager.get_current_session()
-        message_payload = self._finalize_message_operation(
+        message_payload = await self._finalize_message_operation(
             agent,
             session.session_id if session else "",
             idempotency_key,
@@ -1709,7 +1711,7 @@ class RuntimeService:
             "session": self._session_payload(session) if session else None,
             "initiative_timer": self._agent_initiative_timer_payload(agent),
         }
-        self._succeed_message_operation(session_id, idempotency_key, result)
+        await self._succeed_message_operation(session_id, idempotency_key, result)
         yield {
             "type": "finish",
             "index": index,
@@ -1898,7 +1900,7 @@ class RuntimeService:
             if replay is not None:
                 return replay
             generation_id = str(uuid4())
-            self._begin_message_operation(
+            await self._begin_message_operation(
                 ledger_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
@@ -1918,13 +1920,13 @@ class RuntimeService:
                 result = self._world_message_result(
                     world, turns, generation_id=generation_id, idempotent_replay=False
                 )
-                self._succeed_message_operation(ledger_id, idempotency_key, result)
+                await self._succeed_message_operation(ledger_id, idempotency_key, result)
                 return result
             except asyncio.CancelledError:
-                self._cancel_message_operation(ledger_id, idempotency_key)
+                await self._cancel_message_operation(ledger_id, idempotency_key)
                 raise
             except Exception as error:
-                self._fail_message_operation(ledger_id, idempotency_key, error)
+                await self._fail_message_operation(ledger_id, idempotency_key, error)
                 raise
 
     async def iter_world_message_stream(
@@ -1991,7 +1993,7 @@ class RuntimeService:
                     "generation_id": replay.get("generation_id") or resolved_generation_id,
                 }
                 return
-            self._begin_message_operation(
+            await self._begin_message_operation(
                 ledger_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
@@ -2013,10 +2015,10 @@ class RuntimeService:
                     yield event
             except GeneratorExit:
                 # 消费者中途关闭流：账本收敛 cancelled（对齐 agent 流语义）
-                self._cancel_message_operation(ledger_id, idempotency_key)
+                await self._cancel_message_operation(ledger_id, idempotency_key)
                 raise
             except asyncio.CancelledError:
-                self._cancel_message_operation(ledger_id, idempotency_key)
+                await self._cancel_message_operation(ledger_id, idempotency_key)
                 yield {
                     "type": "cancelled",
                     "generation_id": resolved_generation_id,
@@ -2024,7 +2026,7 @@ class RuntimeService:
                 }
                 raise
             except Exception as error:
-                self._fail_message_operation(ledger_id, idempotency_key, error)
+                await self._fail_message_operation(ledger_id, idempotency_key, error)
                 yield {
                     "type": "error",
                     "generation_id": resolved_generation_id,
@@ -2038,7 +2040,7 @@ class RuntimeService:
                 generation_id=resolved_generation_id,
                 idempotent_replay=False,
             )
-            self._succeed_message_operation(ledger_id, idempotency_key, result)
+            await self._succeed_message_operation(ledger_id, idempotency_key, result)
             yield {"type": "world.finish", **result}
 
     async def world_send_message_stream(
@@ -3168,7 +3170,7 @@ class RuntimeService:
             )
         return self._operation_replay(operation)
 
-    def _idempotent_response(
+    async def _idempotent_response(
         self,
         agent: Agent,
         session_id: str,
@@ -3186,7 +3188,7 @@ class RuntimeService:
         )
         if replay is not None:
             return replay
-        messages = agent.session_manager.persistence.load_messages(session_id)
+        messages = await agent.session_manager.persistence.load_messages_async(session_id)
         for index, message in enumerate(messages):
             if message.get("role") != "user" or message.get("idempotency_key") != key:
                 continue
@@ -3255,7 +3257,7 @@ class RuntimeService:
             {"message": message, "system_contexts": system_contexts or []}
         )
 
-    def _begin_message_operation(
+    async def _begin_message_operation(
         self,
         session_id: str,
         idempotency_key: str | None,
@@ -3266,7 +3268,7 @@ class RuntimeService:
         if self._operation_store is None or idempotency_key is None:
             return
         key = self._normalize_idempotency_key(idempotency_key)
-        operation = self._operation_store.begin(
+        operation = await self._operation_store.begin(
             session_id=session_id,
             idempotency_key=key,
             request_fingerprint=request_fingerprint,
@@ -3275,7 +3277,7 @@ class RuntimeService:
         if operation.get("status") != "pending":
             self._operation_replay(operation)
 
-    def _succeed_message_operation(
+    async def _succeed_message_operation(
         self,
         session_id: str,
         idempotency_key: str | None,
@@ -3283,13 +3285,13 @@ class RuntimeService:
     ) -> None:
         if self._operation_store is None or idempotency_key is None or not session_id:
             return
-        self._operation_store.succeed(
+        await self._operation_store.succeed(
             session_id,
             self._normalize_idempotency_key(idempotency_key),
             result,
         )
 
-    def _fail_message_operation(
+    async def _fail_message_operation(
         self,
         session_id: str,
         idempotency_key: str | None,
@@ -3297,20 +3299,20 @@ class RuntimeService:
     ) -> None:
         if self._operation_store is None or idempotency_key is None:
             return
-        self._operation_store.fail(
+        await self._operation_store.fail(
             session_id,
             self._normalize_idempotency_key(idempotency_key),
             runtime_error_to_dict(error),
         )
 
-    def _cancel_message_operation(
+    async def _cancel_message_operation(
         self,
         session_id: str,
         idempotency_key: str | None,
     ) -> None:
         if self._operation_store is None or idempotency_key is None:
             return
-        self._operation_store.cancel(
+        await self._operation_store.cancel(
             session_id,
             self._normalize_idempotency_key(idempotency_key),
             {
@@ -3424,7 +3426,7 @@ class RuntimeService:
         public["content"] = public_parts
         return public
 
-    def _finalize_message_operation(
+    async def _finalize_message_operation(
         self,
         agent: Agent,
         session_id: str,
@@ -3461,8 +3463,8 @@ class RuntimeService:
         )
         if key and user_index is not None:
             messages[user_index]["idempotency_key"] = key
-        manager.replace_messages(session_id, messages)
-        persisted = manager.persistence.load_messages(session_id)
+        await manager.replace_messages_async(session_id, messages)
+        persisted = await manager.persistence.load_messages_async(session_id)
         return next(
             (message for message in reversed(persisted) if message.get("role") == "assistant"),
             {},

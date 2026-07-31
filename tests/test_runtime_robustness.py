@@ -25,7 +25,13 @@ from GensokyoAI.runtime.service import RuntimeService
 class _FakeSessionManager:
     def __init__(self, session_id: str) -> None:
         self._session = SimpleNamespace(session_id=session_id, revision=0)
-        self.persistence = SimpleNamespace(load_messages=lambda _sid: [])
+
+        async def _load_messages_async(_sid):
+            return []
+
+        self.persistence = SimpleNamespace(
+            load_messages=lambda _sid: [], load_messages_async=_load_messages_async
+        )
 
     def get_current_session(self):
         return self._session
