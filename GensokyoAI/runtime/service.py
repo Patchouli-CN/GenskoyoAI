@@ -9,6 +9,7 @@ transport such as ``bridge_main.py`` or a future HTTP/WebSocket adapter.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import time
@@ -118,6 +119,23 @@ def runtime_compatibility_notes() -> list[dict[str, str]]:
     return [dict(item) for item in RUNTIME_COMPATIBILITY_NOTES]
 
 
+def _tenant_log_context(func):
+    """租户方法装饰器：方法执行期间的所有日志行带上 [agent_id] 前缀。
+
+    多租户下各租户 Agent 的角色名相同，关闭/运行日志肉眼无法区分；
+    用 loguru contextualize 打标签（格式侧的 tenant_label 见 utils/logger.py）。
+    """
+
+    @functools.wraps(func)
+    async def wrapper(self: RuntimeService, *args: Any, **kwargs: Any) -> Any:
+        if self._tenant_key is None:
+            return await func(self, *args, **kwargs)
+        with logger.contextualize(tenant=self._tenant_key[1]):
+            return await func(self, *args, **kwargs)
+
+    return wrapper
+
+
 class RuntimeService:
     """Frontend-agnostic facade around :class:`GensokyoAI.core.agent.Agent`.
 
@@ -169,6 +187,7 @@ class RuntimeService:
         if self._tenant_key is None:
             self._load_tenant_catalog()
 
+    @_tenant_log_context
     async def handle(
         self,
         method: str,
@@ -2622,6 +2641,7 @@ class RuntimeService:
                 removed += 1
         return {"subscription_id": subscription_id, "closed": True, "removed": removed}
 
+    @_tenant_log_context
     async def shutdown(self) -> dict[str, Any]:
         if self._tenant_key is None:
             self.begin_drain()
