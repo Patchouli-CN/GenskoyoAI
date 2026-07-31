@@ -189,24 +189,25 @@ class ModelClientRetryTests(unittest.TestCase):
         self.assertGreaterEqual(stats["avg_ms"], 0)
 
     def test_latency_stats_empty_and_rolling(self):
-        from GensokyoAI.core.agent.types import ModelCallTiming
-
         client = ModelClient(
             ModelConfig(provider="retryable_test", name="test-model", retry_max_attempts=1)
         )
         self.assertEqual(client.latency_stats(), {"count": 0})
-        for index, ms in enumerate((100.0, 300.0, 200.0)):
-            timing = ModelCallTiming(
-                context="chat", provider="p", model="m", start_time=float(index), message_count=1
-            )
-            timing.end_time = float(index) + ms / 1000
-            timing.duration_ms = ms
-            client._latency_samples.append((timing.context, timing.duration_ms))
+        for context, ms in (("think_engine", 100.0), ("chat", 900.0), ("think_engine", 300.0), ("think_engine", 200.0)):
+            client._latency_samples.append((context, ms))
+        # 全量统计
         stats = client.latency_stats()
-        self.assertEqual(stats["count"], 3)
-        self.assertEqual(stats["avg_ms"], 200.0)
-        self.assertEqual(stats["last_ms"], 200.0)
-        self.assertEqual(stats["max_ms"], 300.0)
+        self.assertEqual(stats["count"], 4)
+        self.assertEqual(stats["max_ms"], 900.0)
+        # 按调用方过滤：think_engine 中位数 = 200.0
+        think_stats = client.latency_stats(context="think_engine")
+        self.assertEqual(think_stats["count"], 3)
+        self.assertEqual(think_stats["median_ms"], 200.0)
+        self.assertEqual(think_stats["max_ms"], 300.0)
+        # 偶数样本中位数取中间两值均值
+        client._latency_samples.append(("think_engine", 400.0))
+        even_stats = client.latency_stats(context="think_engine")
+        self.assertEqual(even_stats["median_ms"], 250.0)
 
     def test_does_not_retry_400_and_sanitizes_error(self):
         NonRetryableProvider.calls = 0

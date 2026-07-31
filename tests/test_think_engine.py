@@ -34,9 +34,10 @@ class _FakeModelClient:
     def supports(self, capability: str) -> bool:
         return self.structured_output and capability == "structured_output"
 
-    async def chat(self, messages, options=None):
+    async def chat(self, messages, options=None, call_context=None):
         self.last_messages = messages
         self.last_options = options
+        self.last_call_context = call_context
         self.call_count += 1
         return UnifiedResponse(message=UnifiedMessage(role="assistant", content=self.content))
 

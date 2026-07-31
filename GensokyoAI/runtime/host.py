@@ -250,7 +250,8 @@ class RuntimeHost:
         agent = self._tenant_agent("nb2-meta")
         client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
         if client is not None:
-            latency = client.latency_stats()
+            # 思考延迟专取 ThinkEngine 内心戏（长期思考/说话前思考/对话欲评估）
+            latency = client.latency_stats(context="think_engine")
         return {
             "tenants": tenants,
             "active_operations": self._service._active_network_operations,

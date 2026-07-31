@@ -235,6 +235,16 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.26 /status 思考延迟口径优化（2026-07-31，用户点单）
+
+- `ModelClient.chat` 新增 `call_context` 调用方标签（写入 ModelCallTiming.context）；
+  ThinkEngine 三处内心戏（长期思考/说话前思考/对话欲评估）打标 "think_engine"。
+- `latency_stats(context=...)` 支持按方过滤并改报**中位数**（median_ms，
+  保留 avg/last/max）；host.get_system_status 延迟专取 think_engine 上下文。
+- /status 文案：`思考延迟：中位 X.Xs（近 N 次内心思考，峰值 Y.Ys）`；
+  无样本显示 `思考延迟：预计中…`。
+- 测试：中位数奇偶样本、上下文过滤、fake 签名适配、新文案断言。增量 52 passed。
+
 ## 8.25 情绪→行为倾向映射（2026-07-31，用户「just do it」）
 
 - 阈值调制：`Emotion.threshold_adjustment()`（[-0.10,+0.12]）——happy/love/

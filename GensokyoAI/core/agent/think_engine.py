@@ -300,6 +300,7 @@ class ThinkEngine:
                     # thinking 模型的思考消耗预算，抬下限避免正文被挤空
                     "num_predict": max(self.config.think_max_tokens, _DECISION_MIN_MAX_TOKENS),
                 },
+                call_context="think_engine",
             )
 
             thought = response.message.content
@@ -378,6 +379,7 @@ class ThinkEngine:
                     "num_predict": thought_max_tokens,
                     "max_tokens": thought_max_tokens,
                 },
+                call_context="think_engine",
             )
             content = response.message.content
             thought = content.strip() if isinstance(content, str) else ""
@@ -452,6 +454,7 @@ class ThinkEngine:
                 response = await self.model_client.chat(
                     messages=messages,
                     options=options,
+                    call_context="think_engine",
                 )
                 content = response.message.content
                 text = content.strip() if isinstance(content, str) else ""

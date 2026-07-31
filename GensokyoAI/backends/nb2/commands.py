@@ -108,11 +108,11 @@ def _format_status(status: dict[str, Any]) -> str:
     latency = status.get("latency") or {}
     if latency.get("count"):
         lines.append(
-            f"思考延迟：近 {latency['count']} 次平均 {latency['avg_ms'] / 1000:.1f}s"
-            f"（最近 {latency['last_ms'] / 1000:.1f}s，峰值 {latency['max_ms'] / 1000:.1f}s）"
+            f"思考延迟：中位 {latency['median_ms'] / 1000:.1f}s"
+            f"（近 {latency['count']} 次内心思考，峰值 {latency['max_ms'] / 1000:.1f}s）"
         )
     else:
-        lines.append("思考延迟：暂无样本")
+        lines.append("思考延迟：预计中…")
     return "\n".join(lines)
 
 

@@ -266,13 +266,25 @@ class ModelClient:
         self._latency_samples.append((timing.context, timing.duration_ms))
         return timing
 
-    def latency_stats(self) -> dict[str, Any]:
-        """最近模型调用耗时统计（滚动窗口，供 /status 等观测入口）。"""
-        samples = [duration for _, duration in self._latency_samples]
+    def latency_stats(self, context: str | None = None) -> dict[str, Any]:
+        """最近模型调用耗时统计（滚动窗口，供 /status 等观测入口）。
+
+        context 非空时只统计该调用方（如 "think_engine" 内心戏专项）；
+        返回中位数（median_ms）与均值/最近/峰值；无样本时 {"count": 0}。
+        """
+        samples = [
+            duration
+            for sample_context, duration in self._latency_samples
+            if context is None or sample_context == context
+        ]
         if not samples:
             return {"count": 0}
+        ordered = sorted(samples)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
         return {
             "count": len(samples),
+            "median_ms": round(median, 1),
             "avg_ms": round(sum(samples) / len(samples), 1),
             "last_ms": round(samples[-1], 1),
             "max_ms": round(max(samples), 1),
@@ -470,6 +482,7 @@ class ModelClient:
         tools: list[dict] | None = None,
         model: str | None = None,
         options: dict | None = None,
+        call_context: str | None = None,
         **kwargs,
     ) -> UnifiedResponse:
         """
@@ -480,6 +493,7 @@ class ModelClient:
             tools: 工具定义列表（可选）
             model: 模型名称（可选，默认使用配置中的模型）
             options: 模型选项（可选，默认使用配置构建）
+            call_context: 调用方标签（如 "think_engine"），用于延迟统计按方分类
             **kwargs: 额外参数（如 think 等）
 
         Returns:
@@ -497,7 +511,7 @@ class ModelClient:
             kwargs.setdefault("think", bool(self.config.think))
 
         timing = ModelCallTiming(
-            context="chat",
+            context=call_context or "chat",
             provider=self.config.provider,
             model=call_model,
             start_time=self._now(),

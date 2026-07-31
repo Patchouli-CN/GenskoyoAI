@@ -127,13 +127,13 @@ class StatusCommandTests(unittest.TestCase):
             {
                 "tenants": {"groups": 5, "users": 3, "meta": 1, "other": 0},
                 "active_operations": 2,
-                "latency": {"count": 50, "avg_ms": 3200.0, "last_ms": 2100.0, "max_ms": 9000.0},
+                "latency": {"count": 12, "median_ms": 3200.0, "avg_ms": 3500.0, "last_ms": 2100.0, "max_ms": 9000.0},
             }
         )
         self.assertIn("5 群 / 3 私聊（共 9 个会话租户）", text)
         self.assertIn("处理中：2 个会话正在生成", text)
-        self.assertIn("平均 3.2s", text)
-        self.assertIn("最近 2.1s", text)
+        self.assertIn("中位 3.2s", text)
+        self.assertIn("近 12 次内心思考", text)
         self.assertIn("峰值 9.0s", text)
 
     def test_format_status_no_latency_samples(self):
@@ -144,7 +144,7 @@ class StatusCommandTests(unittest.TestCase):
                 "latency": {"count": 0},
             }
         )
-        self.assertIn("思考延迟：暂无样本", text)
+        self.assertIn("思考延迟：预计中…", text)
 
     def test_status_handler_sends_formatted_text(self):
         async def run():
