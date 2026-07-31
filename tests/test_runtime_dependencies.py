@@ -1855,6 +1855,36 @@ class CharacterValidationTests(unittest.TestCase):
         self.assertEqual(config.motivation_weights.relational_need, 0.6)
         self.assertEqual(config.motivation_weights.emotional_charge, 0.35)
 
+    def test_emotion_baseline_parse_and_validation(self):
+        validator = CharacterValidator()
+        # 不写：空基线（全 0 平稳）
+        config = validator.to_character_config({"name": "A", "system_prompt": "x"})
+        self.assertEqual(config.emotion_baseline, {})
+        # 写部分：保留合法维度
+        config = validator.to_character_config(
+            {"name": "A", "system_prompt": "x", "emotion_baseline": {"happy": 0.4}}
+        )
+        self.assertEqual(config.emotion_baseline, {"happy": 0.4})
+
+        diagnostics = validator.validate_character_dict(
+            {
+                "name": "A",
+                "system_prompt": "x",
+                "emotion_baseline": {"happy": 1.5, "mood": 0.5},
+            }
+        )
+        codes = {item.code for item in diagnostics}
+        paths = {item.path for item in diagnostics}
+        self.assertIn("character.emotion_baseline.field_range", codes)
+        self.assertIn("character.emotion_baseline.field_unknown", codes)
+        self.assertIn("emotion_baseline.happy", paths)
+        self.assertIn("emotion_baseline.mood", paths)
+
+        bad_type = validator.validate_character_dict(
+            {"name": "A", "system_prompt": "x", "emotion_baseline": "开心"}
+        )
+        self.assertIn("character.emotion_baseline.type", {item.code for item in bad_type})
+
     def test_motivation_weights_validation_errors(self):
         validator = CharacterValidator()
         diagnostics = validator.validate_character_dict(

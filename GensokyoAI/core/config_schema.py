@@ -383,6 +383,8 @@ class CharacterConfig(Struct):
     example_dialogue: list[dict[str, str]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     motivation_weights: MotivationWeightsConfig = field(default_factory=MotivationWeightsConfig)
+    # 八维情绪基线（emotion.py）：角色的「平常心情」与衰减目标，如 {"happy": 0.4}
+    emotion_baseline: dict[str, float] = field(default_factory=dict)
 
 
 class AppConfig(Struct):

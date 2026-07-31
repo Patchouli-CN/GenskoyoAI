@@ -113,18 +113,19 @@ def build_speaking_drive_prompts(
     context_text: str,
     min_delay_seconds: int,
     max_delay_seconds: int,
+    emotion_line: str = "",
 ) -> tuple[str, str]:
     """对话欲评估的 (system, user) 提示词对。
 
     输出契约（JSON 字段）由 think_engine.evaluate_speaking_drive 解析，
-    改字段必须两边同步。
+    改字段必须两边同步。emotion_line 非空时注入当前情绪状态。
     """
     system_prompt = f"""你是 {character_name}。
 
 现在不是对用户说话，而是在向 GensokyoAI 系统提交你的内在状态评估。
 这个评估仍然必须由你以 {character_name} 的身份、性格、动机和当前上下文来完成；系统只负责读取你提交的机器可解析状态，并根据四维总分独立判断你是否开口——你不需要（也不能）在结果里决定是否说话。
 
-请完成两件事：
+请完成三件事：
 1. 用四个维度量化你此刻的动机（各 0~1）：
    expression_drive（表达欲：思考内容本身催生的表达冲动）、
    emotional_charge（情感驱动力：情绪是否需要一个出口）、
@@ -141,6 +142,10 @@ def build_speaking_drive_prompts(
    - 如果近期对话的最后几条都是你自己说的、用户尚未回应，message 必须是
      不依赖用户参与也能成立的新拍（新举动/新观察/轻量搭话），不能是上一条的延续；
      这种情况下 situational_relevance 也应相应打低。
+3. 报告你此刻的情绪状态（各 0~1，平静接近 0）：
+   anger（愤怒）、sorrow（悲伤）、fear（恐惧）、happy（快乐）、
+   love（爱意）、surprised（惊讶）、disgust（厌恶）、shame（羞耻）。
+   结合你的性格与最近经历如实自评——这会影响你之后说话的语气。
 
 另外输出：
 - delay_seconds：建议系统多久后（秒，{min_delay_seconds}~{max_delay_seconds}）安排这次主动开口。
@@ -155,6 +160,8 @@ def build_speaking_drive_prompts(
 近期对话上下文：
 {context_text}
 
+你当前的情绪状态：{emotion_line or "（平稳，无显著情绪）"}
+
 请根据以上上下文提交评估。输出必须且只能是下面的 JSON 对象，不要有任何其他内容：
 
 {{
@@ -162,6 +169,16 @@ def build_speaking_drive_prompts(
   "delay_seconds": 120,
   "reason": "简短理由",
   "enthusiasm": 0.5,
+  "emotion": {{
+    "anger": 0.0,
+    "sorrow": 0.0,
+    "fear": 0.0,
+    "happy": 0.0,
+    "love": 0.0,
+    "surprised": 0.0,
+    "disgust": 0.0,
+    "shame": 0.0
+  }},
   "motivation": {{
     "expression_drive": 0.0,
     "emotional_charge": 0.0,
@@ -171,6 +188,15 @@ def build_speaking_drive_prompts(
 }}
 """
     return system_prompt, user_prompt
+
+
+def build_emotion_tone_context(emotion_line: str) -> str:
+    """情绪语气注入（解析方：无，随本轮消息注入 system_contexts，不写入会话）。"""
+    return (
+        f"【你当前的情绪状态】{emotion_line}\n"
+        "让它自然渗入你的语气、措辞与反应强度；"
+        "不要直接说出这些数值，也不要提及「情绪状态」这回事。"
+    )
 
 
 # ==================== 主动消息生成（InitiativeCoordinator） ====================

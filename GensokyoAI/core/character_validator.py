@@ -22,6 +22,7 @@ class CharacterValidator:
         "example_dialogue",
         "metadata",
         "motivation_weights",
+        "emotion_baseline",
     }
     REQUIRED_FIELDS = {"name", "system_prompt"}
     SYSTEM_PROMPT_WARNING_LENGTH = 12000
@@ -85,6 +86,7 @@ class CharacterValidator:
         self._validate_example_dialogue(data.get("example_dialogue"), diagnostics)
         self._validate_metadata(data.get("metadata"), diagnostics)
         self._validate_motivation_weights(data.get("motivation_weights"), diagnostics)
+        self._validate_emotion_baseline(data.get("emotion_baseline"), diagnostics)
         return diagnostics
 
     def build_preview(
@@ -134,6 +136,7 @@ class CharacterValidator:
             motivation_weights=self._normalize_motivation_weights(
                 data.get("motivation_weights")
             ),
+            emotion_baseline=self._normalize_emotion_baseline(data.get("emotion_baseline")),
         )
 
     _MOTIVATION_WEIGHT_FIELDS = frozenset(
@@ -199,6 +202,73 @@ class CharacterValidator:
             if isinstance(value[name], int | float) and not isinstance(value[name], bool)
         }
         return MotivationWeightsConfig(**kwargs)
+
+    _EMOTION_BASELINE_FIELDS = frozenset(
+        {
+            "anger",
+            "sorrow",
+            "fear",
+            "happy",
+            "love",
+            "surprised",
+            "disgust",
+            "shame",
+        }
+    )
+
+    def _validate_emotion_baseline(self, value: Any, diagnostics: list[ConfigDiagnostic]) -> None:
+        """校验 emotion_baseline：八维情绪基线，各 0~1，缺省全 0（平稳）。"""
+        if value is None:
+            return
+        if not isinstance(value, dict):
+            diagnostics.append(
+                self._error(
+                    "emotion_baseline",
+                    "Character field 'emotion_baseline' must be an object",
+                    "请写成 {happy: 0.4, ...} 形式的 key/value 对象。",
+                    code="character.emotion_baseline.type",
+                )
+            )
+            return
+        for field_name in sorted(set(value) - self._EMOTION_BASELINE_FIELDS):
+            diagnostics.append(
+                self._error(
+                    f"emotion_baseline.{field_name}",
+                    f"Unknown emotion_baseline field '{field_name}'",
+                    "情绪基线仅支持 anger/sorrow/fear/happy/love/surprised/disgust/shame 八维。",
+                    code="character.emotion_baseline.field_unknown",
+                )
+            )
+        for field_name in sorted(self._EMOTION_BASELINE_FIELDS & set(value)):
+            field_value = value[field_name]
+            if isinstance(field_value, bool) or not isinstance(field_value, int | float):
+                diagnostics.append(
+                    self._error(
+                        f"emotion_baseline.{field_name}",
+                        f"emotion_baseline field '{field_name}' must be a number",
+                        "请填写 0~1 之间的数值。",
+                        code="character.emotion_baseline.field_type",
+                    )
+                )
+            elif not 0.0 <= field_value <= 1.0:
+                diagnostics.append(
+                    self._error(
+                        f"emotion_baseline.{field_name}",
+                        f"emotion_baseline field '{field_name}' must be in [0, 1]",
+                        "情绪基线取值范围 0~1（0 为平静）。",
+                        code="character.emotion_baseline.field_range",
+                    )
+                )
+
+    def _normalize_emotion_baseline(self, value: Any) -> dict[str, float]:
+        """归一化情绪基线：仅保留合法的八维数值。"""
+        if not isinstance(value, dict):
+            return {}
+        return {
+            name: float(value[name])
+            for name in self._EMOTION_BASELINE_FIELDS & set(value)
+            if isinstance(value[name], int | float) and not isinstance(value[name], bool)
+        }
 
     def _validate_unknown_fields(
         self,

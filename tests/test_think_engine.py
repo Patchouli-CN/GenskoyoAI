@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from GensokyoAI.core.agent.emotion import Emotion
 from GensokyoAI.core.agent.think_engine import ThinkEngine
 from GensokyoAI.core.agent.types import UnifiedMessage, UnifiedResponse
 from GensokyoAI.core.config import ThinkEngineConfig
@@ -257,6 +258,53 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             assert decision2 is not None
             self.assertAlmostEqual(decision2.total_drive, 0.18, places=2)
             self.assertFalse(decision2.want_speak)
+
+        asyncio.run(run())
+
+    def test_evaluate_speaking_drive_updates_emotion_state(self):
+        """评估 JSON 中的八维情绪自评驱动 EmotionState（零新增 LLM 调用）。"""
+        async def run():
+            model_client = _FakeModelClient(
+                '{"message": "哼", "delay_seconds": 120, "reason": "烦", '
+                '"enthusiasm": 0.5, "emotion": {"anger": 0.8, "sorrow": 0.0, '
+                '"fear": 0.0, "happy": 0.0, "love": 0.0, "surprised": 0.0, '
+                '"disgust": 0.4, "shame": 0.0}, '
+                '"motivation": {"expression_drive": 0.1, "emotional_charge": 0.1, '
+                '"relational_need": 0.1, "situational_relevance": 0.1}}'
+            )
+            engine, _ = self._make_engine(model_client)
+            decision = await engine.evaluate_speaking_drive("刚才的回复", [])
+            self.assertIsNotNone(decision)
+            # alpha=0.6 混合：0 + (0.8-0)*0.6 = 0.48
+            self.assertAlmostEqual(decision.emotion.anger, 0.48, places=2)
+            self.assertIn("愤怒", engine.emotion_context_line())
+
+            # 缺 emotion 字段：不清空当前状态
+            engine2, _ = self._make_engine(_FakeModelClient(
+                '{"message": "x", "delay_seconds": 1, "reason": "", "enthusiasm": 0.5, '
+                '"motivation": {"expression_drive": 0.1, "emotional_charge": 0.1, '
+                '"relational_need": 0.1, "situational_relevance": 0.1}}'
+            ))
+            engine2.emotion_state.current = Emotion(happy=0.9)
+            await engine2.evaluate_speaking_drive("刚才的回复", [])
+            self.assertAlmostEqual(engine2.emotion_state.current.happy, 0.9, places=2)
+
+        asyncio.run(run())
+
+    def test_evaluate_speaking_drive_prompt_carries_emotion_fields(self):
+        """评估提示词包含情绪自评要求与当前情绪注入行。"""
+        async def run():
+            model_client = _FakeModelClient()
+            engine, _ = self._make_engine(model_client)
+            engine.emotion_state.update(Emotion(happy=0.8))
+            await engine.evaluate_speaking_drive("触发", [])
+            assert model_client.last_messages is not None
+            system_prompt = model_client.last_messages[0]["content"]
+            user_prompt = model_client.last_messages[1]["content"]
+            self.assertIn("报告你此刻的情绪状态", system_prompt)
+            self.assertIn("anger", system_prompt)
+            self.assertIn("你当前的情绪状态：快乐", user_prompt)
+            self.assertIn('"emotion"', user_prompt)
 
         asyncio.run(run())
 

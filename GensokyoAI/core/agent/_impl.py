@@ -32,10 +32,11 @@ from ..exceptions import AgentError
 from .action_executor import ActionExecutor
 from .action_planner import ActionPlanner
 from .composition import AgentComposition
+from .emotion import Emotion
 from .initiative_coordinator import InitiativeCoordinator
 from .lifecycle import LifecycleManager
 from .message_builder import MessageBuilder
-from .prompts import build_roleplay_system_prompt
+from .prompts import build_emotion_tone_context, build_roleplay_system_prompt
 from .response_handler import ResponseHandler
 from .runtime_context import AgentDependencies, AgentLazyComponents
 from .save_coordinator import SaveCoordinator
@@ -544,9 +545,15 @@ class Agent:
     ) -> None:
         text_input = self._extract_text_from_content(user_input)
         report = detect_prompt_injection(text_input)
+        contexts = list(system_contexts or [])
+        # 情绪语气注入：让当前心情自然渗入本轮回复（不写入会话）
+        if self._think_engine is not None and (
+            emotion_line := self._think_engine.emotion_context_line()
+        ):
+            contexts.append(build_emotion_tone_context(emotion_line))
         data: dict[str, Any] = {
             "content": user_input,
-            "system_contexts": system_contexts,
+            "system_contexts": contexts,
         }
         if request_id is not None:
             data["request_id"] = request_id
@@ -690,6 +697,12 @@ class Agent:
                 motivation_weights=(
                     self.config.character.motivation_weights
                     if self.config.character is not None
+                    else None
+                ),
+                emotion_baseline=(
+                    Emotion(**self.config.character.emotion_baseline)
+                    if self.config.character is not None
+                    and self.config.character.emotion_baseline
                     else None
                 ),
             )

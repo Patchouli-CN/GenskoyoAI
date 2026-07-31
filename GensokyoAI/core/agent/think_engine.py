@@ -26,6 +26,7 @@ from ...utils.logger import logger
 from ..config import InitiativeTimerConfig, ThinkEngineConfig
 from ..config_schema import MotivationWeightsConfig
 from ..events import Event, EventBus, SystemEvent
+from .emotion import Emotion, EmotionState
 from .model_client import ModelClient
 from .motivation_evaluator import MotivationProfile
 from .prompts import (
@@ -53,6 +54,30 @@ _SPEAKING_DRIVE_SCHEMA: dict[str, Any] = {
         "delay_seconds": {"type": "integer"},
         "reason": {"type": "string"},
         "enthusiasm": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "emotion": {
+            "type": "object",
+            "properties": {
+                "anger": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "sorrow": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "fear": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "happy": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "love": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "surprised": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "disgust": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "shame": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+            "required": [
+                "anger",
+                "sorrow",
+                "fear",
+                "happy",
+                "love",
+                "surprised",
+                "disgust",
+                "shame",
+            ],
+            "additionalProperties": False,
+        },
         "motivation": {
             "type": "object",
             "properties": {
@@ -70,7 +95,7 @@ _SPEAKING_DRIVE_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
         },
     },
-    "required": ["message", "delay_seconds", "reason", "enthusiasm", "motivation"],
+    "required": ["message", "delay_seconds", "reason", "enthusiasm", "emotion", "motivation"],
     "additionalProperties": False,
 }
 _SPEAKING_DRIVE_RESPONSE_FORMAT: dict[str, Any] = {
@@ -96,6 +121,7 @@ class SpeakingDriveDecision(Struct):
     want_speak: bool
     total_drive: float
     motivation: MotivationProfile = field(default_factory=MotivationProfile)
+    emotion: Emotion = field(default_factory=Emotion)  # 本次自评后的八维情绪状态
     message: str = ""  # 候选发言/意图摘要（超阈值时非空）
     delay_seconds: int = 120  # 建议延迟（主动定时器路径使用）
     enthusiasm: float = 0.5
@@ -115,6 +141,7 @@ class ThinkEngine:
         initiative_timer_config: InitiativeTimerConfig | None = None,
         debug_silent_output: bool = False,
         motivation_weights: MotivationWeightsConfig | None = None,
+        emotion_baseline: Emotion | None = None,
     ) -> None:
         self.semantic_memory = semantic_memory
         self.model_client = model_client
@@ -125,6 +152,9 @@ class ThinkEngine:
         self.debug_silent_output = debug_silent_output
         # 四维心情权重（角色卡 motivation_weights）；None = 通用人格基线
         self._motivation_weights = motivation_weights or MotivationWeightsConfig()
+        # 八维情绪状态机（角色卡 emotion_baseline 为初始/衰减基线）：
+        # 由对话欲评估中 LLM 顺带自评驱动（零新增调用），喂给回复语气与评估输入
+        self.emotion_state = EmotionState(emotion_baseline)
 
         # 长期思考状态
         self._running = False
@@ -135,6 +165,10 @@ class ThinkEngine:
     def update_semantic_memory(self, semantic_memory: SemanticMemoryManager) -> None:
         """会话切换后就地更新语义记忆引用（不中断长期思考循环）。"""
         self.semantic_memory = semantic_memory
+
+    def emotion_context_line(self) -> str:
+        """当前情绪状态的一行描述（全平稳时为空串，不注入）。"""
+        return self.emotion_state.context_line()
 
     # ==================== 生命周期 ====================
 
@@ -378,6 +412,7 @@ class ThinkEngine:
             context_text,
             min_delay_seconds,
             max_delay_seconds,
+            emotion_line=self.emotion_state.context_line(),
         )
 
         messages: list[dict[str, str]] = [
@@ -411,10 +446,12 @@ class ThinkEngine:
                 logger.trace(f"[ThinkEngine] 对话欲评估原始响应: {text!r}")
                 decision = self._parse_speaking_drive(text, threshold=threshold)
                 if decision is not None:
+                    emotion_line = self.emotion_state.context_line()
                     logger.debug(
                         f"[ThinkEngine] 对话欲评估: total={decision.total_drive:.2f} "
                         f"(阈值 {threshold:.2f}) want_speak={decision.want_speak}, "
                         f"motivation={decision.motivation.to_prompt_context()}"
+                        + (f", emotion={emotion_line}" if emotion_line else "")
                     )
                     return decision
 
@@ -468,6 +505,27 @@ class ThinkEngine:
                 weights=self._motivation_weights,
             )
 
+        # 八维情绪自评（缺失/畸形时不动当前状态——无自评不等于心情清零）
+        raw_emotion = data.get("emotion")
+        if isinstance(raw_emotion, dict):
+            self.emotion_state.update(
+                Emotion(
+                    **{
+                        name: _clamp01(raw_emotion.get(name))
+                        for name in (
+                            "anger",
+                            "sorrow",
+                            "fear",
+                            "happy",
+                            "love",
+                            "surprised",
+                            "disgust",
+                            "shame",
+                        )
+                    }
+                )
+            )
+
         total_drive = motivation.total_drive
         message = str(data.get("message") or "").strip()
         delay = data.get("delay_seconds")
@@ -476,6 +534,7 @@ class ThinkEngine:
             want_speak=total_drive >= threshold and bool(message),
             total_drive=total_drive,
             motivation=motivation,
+            emotion=self.emotion_state.current,
             message=message,
             delay_seconds=delay if isinstance(delay, int) and delay > 0 else 300,
             enthusiasm=_clamp01(enthusiasm) if isinstance(enthusiasm, int | float) else 0.5,

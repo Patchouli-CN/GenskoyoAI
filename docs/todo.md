@@ -235,6 +235,30 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.22 nb2 /status 系统状态指令（2026-07-31，用户点单）
+
+- `ModelClient` 新增 `_latency_samples` 滚动窗口（近 50 次模型调用耗时，
+  挂 `_finish_timing`）+ `latency_stats()`（count/avg/last/max）。
+- `RuntimeHost.get_system_status()`：按 agent_id 前缀统计开户（群/私聊/元租户），
+  在途网络操作数（`_active_network_operations`），延迟借元租户模型客户端。
+- nb2 `/status`（别名 /状态，USER 级人人可查）：开户数、处理中会话数、
+  思考延迟三行。测试：格式化、handler、host 统计、latency_stats 滚动窗。
+
+## 8.21 八维情绪状态机 emotion.py（2026-07-31，用户起骨架、AI 补全接线）
+
+- 定位：**持续情绪状态**（mood），与四维动机（瞬态「说不说」）分层；
+  八维 Ekman（anger/sorrow/fear/happy/love/surprised/disgust/shame，各 0~1）。
+- 状态机 `EmotionState`：LLM 自评按 alpha=0.6 指数混合（防单轮跳变），
+  随时间向基线半衰期衰减（默认 30min，clock 可注入测试）。
+- **零新增 LLM 调用**：情绪自评挂进对话欲评估 JSON（schema 加 emotion 对象），
+  一次评估调用同时产出四维动机 + 八维情绪；缺字段不清空当前状态。
+- 三个消费口：回复语气注入（`_publish_message_received` 追加
+  build_emotion_tone_context，全 send 路径生效）、对话欲评估输入（user prompt
+  带当前情绪行）、角色卡 `emotion_baseline`（dict 字段，校验八维 0~1，
+  Agent 启动时装配进 ThinkEngine；example.yaml 补四型示例）。
+- 测试：lerp/clamp/dominant/context_line、衰减半衰、评估驱动状态、
+  提示词字段、角色卡校验。基线：增量 150 passed。
+
 ## 8.20 RP 反模板 + 「不理」LLM 破例判定（2026-07-31，用户定稿）
 
 - 反模板：`build_roleplay_system_prompt` 追加第 7 条【禁止模板化回复】——

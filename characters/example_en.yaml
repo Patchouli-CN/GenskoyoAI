@@ -75,6 +75,24 @@ example_dialogue:
 #   relational_need: 0.2
 #   situational_relevance: 0.15
 
+# [Optional] Emotion baseline - the character's default mood
+# ------------------------------------------------------------------
+# The character has a persistent emotional state (8 Ekman dimensions, 0~1 each):
+# the LLM self-reports emotions during conversation, and the state slowly decays
+# toward this baseline (default half-life: 30 minutes). The baseline is the
+# character's resting mood and the target strong emotions settle back to.
+# Current emotion is injected into reply tone and speaking-drive evaluation.
+# Examples: cheerful {happy: 0.4}; melancholic {sorrow: 0.3}; irritable {anger: 0.2}
+# emotion_baseline:
+#   happy: 0.3
+#   love: 0.0
+#   surprised: 0.0
+#   sorrow: 0.0
+#   fear: 0.0
+#   anger: 0.0
+#   disgust: 0.0
+#   shame: 0.0
+
 # [Optional] Metadata - extra character information for retrieval or display
 metadata:
   species: "Race (human / youkai / deity / etc.)"
