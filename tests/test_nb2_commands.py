@@ -128,14 +128,24 @@ class StatusCommandTests(unittest.TestCase):
                 "tenants": {"groups": 5, "users": 3, "meta": 1, "other": 0},
                 "active_operations": 2,
                 "latency": {"count": 12, "median_ms": 3200.0, "avg_ms": 3500.0, "last_ms": 2100.0, "max_ms": 9000.0},
+                "gates": [
+                    {"name": "runtime", "max_concurrent": 16, "active": 2, "waiting": 0},
+                    {"name": "model", "max_concurrent": 8, "active": 2, "waiting": 1},
+                    {"name": "stream", "max_concurrent": 4, "active": 0, "waiting": 0},
+                ],
+                "load_level": {"level": "critical", "reason": "闸门利用率最高 100%，1 个请求排队中"},
             }
         )
         # 元租户（后台设施）不计入会话总数：5+3=8，不含 meta 的 1
+        self.assertIn("🔴 临界", text)
+        self.assertIn("1 个请求排队中", text)
         self.assertIn("5 群 / 3 私聊（共 8 个会话租户）", text)
         self.assertIn("处理中：2 个会话正在生成", text)
+        self.assertIn("runtime 2/16", text)
+        self.assertIn("model 2/8（排队 1）", text)
+        self.assertNotIn("stream", text)  # 空闲闸门不显示
         self.assertIn("中位 3.2s", text)
         self.assertIn("近 12 次内心思考", text)
-        self.assertIn("峰值 9.0s", text)
 
     def test_format_status_no_latency_samples(self):
         text = _format_status(
@@ -143,9 +153,13 @@ class StatusCommandTests(unittest.TestCase):
                 "tenants": {"groups": 0, "users": 0, "meta": 0, "other": 0},
                 "active_operations": 0,
                 "latency": {"count": 0},
+                "gates": [{"name": "runtime", "max_concurrent": 8, "active": 0, "waiting": 0}],
+                "load_level": {"level": "healthy", "reason": "运行正常"},
             }
         )
+        self.assertIn("🟢 健康", text)
         self.assertIn("思考延迟：预计中…", text)
+        self.assertIn("runtime 0/8", text)  # runtime 总闸常驻显示
 
     def test_status_handler_sends_formatted_text(self):
         async def run():

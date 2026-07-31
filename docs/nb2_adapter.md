@@ -110,7 +110,7 @@ Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力
   `VISITOR < USER < ADMIN < OWNER`：`OWNER`= `GSK_NB2_OWNER_QQ` 名单、
   `ADMIN`= QQ 群管理/群主、`USER`= 普通群成员/私聊、`VISITOR`= 身份无法核实的
   最低信任级；当前指令：`/quota`（`/额度`，USER 级，查询 Provider 余额）、
-  `/status`（`/状态`，USER 级，查看开户数/处理中会话数/内心思考延迟中位数）、
+  `/status`（`/状态`，USER 级，查看负载水位/开户数/处理中/闸门用量/内心思考延迟）、
   `/help`（`/帮助`，VISITOR 级，按调用者权限列出可用指令）。
 - **说话人归属**：群聊多对单场景下，消息正文自动带 `【群名片/昵称】` 前缀
   （注入前经 `sanitize_display_name` 净化：去换行/括号、限长 24，防群名片伪造指令），

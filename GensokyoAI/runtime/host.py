@@ -231,8 +231,10 @@ class RuntimeHost:
         return ConfigLoader().load(self._service._fallback_config_path())
 
     def get_system_status(self) -> dict[str, Any]:
-        """系统状态快照（nb2 /status 指令）：租户开户数、在途处理数、模型延迟。
+        """系统状态快照（nb2 /status 指令）：开户数、在途数、闸门用量、负载水位、延迟。
 
+        闸门用量跨 root 与全部租户服务聚合（各租户各有一套同名闸，
+        active/waiting 求和、max_concurrent 求和即系统总容量）。
         延迟统计借元租户的模型客户端（账户级共享 Provider，样本有代表性）；
         元租户未初始化时返回空延迟。
         """
@@ -252,11 +254,64 @@ class RuntimeHost:
         if client is not None:
             # 思考延迟专取 ThinkEngine 内心戏（长期思考/说话前思考/对话欲评估）
             latency = client.latency_stats(context="think_engine")
+
+        gates = self._aggregate_gate_usage()
         return {
             "tenants": tenants,
             "active_operations": self._service._active_network_operations,
             "latency": latency,
+            "gates": gates,
+            "load_level": self._compute_load_level(gates, latency),
         }
+
+    def _aggregate_gate_usage(self) -> list[dict[str, Any]]:
+        """跨 root 与全部租户服务聚合同名资源闸的用量。"""
+        gates_by_name: dict[str, dict[str, Any]] = {}
+        services = [self._service, *self._service._tenant_services.values()]
+        for service in services:
+            for gate in getattr(service, "_resource_gates", {}).values():
+                snapshot = gate.snapshot()
+                entry = gates_by_name.setdefault(
+                    snapshot["name"],
+                    {
+                        "name": snapshot["name"],
+                        "max_concurrent": 0,
+                        "active": 0,
+                        "waiting": 0,
+                    },
+                )
+                entry["max_concurrent"] += snapshot["max_concurrent"]
+                entry["active"] += snapshot["active"]
+                entry["waiting"] += snapshot["waiting"]
+        return list(gates_by_name.values())
+
+    def _compute_load_level(
+        self, gates: list[dict[str, Any]], latency: dict[str, Any]
+    ) -> dict[str, str]:
+        """负载水位：healthy / warning / critical / unavailable（附一句原因）。
+
+        临界：任一闸门满载或有排队；警告：最高利用率 ≥60% 或思考延迟中位 >15s；
+        不可用：Runtime 正在排空（shutdown 进行中）。
+        """
+        if getattr(self._service, "_draining", False):
+            return {"level": "unavailable", "reason": "Runtime 正在排空关闭"}
+        worst = 0.0
+        queued = 0
+        for gate in gates:
+            if gate["max_concurrent"] > 0:
+                worst = max(worst, gate["active"] / gate["max_concurrent"])
+            queued += gate["waiting"]
+        if queued > 0 or worst >= 0.9:
+            reason = f"闸门利用率最高 {worst:.0%}"
+            if queued:
+                reason += f"，{queued} 个请求排队中"
+            return {"level": "critical", "reason": reason}
+        median_ms = latency.get("median_ms", 0)
+        if worst >= 0.6:
+            return {"level": "warning", "reason": f"闸门利用率最高 {worst:.0%}"}
+        if median_ms > 15000:
+            return {"level": "warning", "reason": f"思考延迟偏高（中位 {median_ms / 1000:.1f}s）"}
+        return {"level": "healthy", "reason": "运行正常"}
 
     async def get_quota(self, character: str) -> dict[str, Any] | None:
         """查询 Provider 账户额度（账户级；借元租户的模型客户端，不支持返回 None）。"""

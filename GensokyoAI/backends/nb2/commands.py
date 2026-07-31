@@ -96,16 +96,36 @@ async def cmd_quota(ctx: CommandContext) -> CommandResult:
     return CommandResult.success("quota", text)
 
 
+_LOAD_LEVEL_DISPLAY = {
+    "healthy": "🟢 健康",
+    "warning": "🟡 警告",
+    "critical": "🔴 临界",
+    "unavailable": "⚫ 不可用",
+}
+
+
 def _format_status(status: dict[str, Any]) -> str:
-    """格式化系统状态（开户数 / 处理中 / 思考延迟）。"""
+    """格式化系统状态（负载水位 / 开户数 / 处理中 / 思考延迟 / 闸门用量）。"""
+    level = status.get("load_level") or {}
+    level_text = _LOAD_LEVEL_DISPLAY.get(level.get("level", ""), level.get("level", "未知"))
+    lines = [f"系统状态：{level_text}（{level.get('reason', '—')}）"]
+
     tenants = status["tenants"]
     # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解
     total = tenants["groups"] + tenants["users"] + tenants["other"]
-    lines = [
-        "系统状态：",
-        f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）",
-        f"处理中：{status['active_operations']} 个会话正在生成",
-    ]
+    lines.append(f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）")
+    lines.append(f"处理中：{status['active_operations']} 个会话正在生成")
+
+    # 闸门用量：runtime 总闸常驻，其余只显示非空闲的（active/waiting > 0）
+    gate_parts = []
+    for gate in status.get("gates", []):
+        if gate["name"] == "runtime" or gate["active"] or gate["waiting"]:
+            waiting = f"（排队 {gate['waiting']}）" if gate["waiting"] else ""
+            gate_parts.append(
+                f"{gate['name']} {gate['active']}/{gate['max_concurrent']}{waiting}"
+            )
+    lines.append(f"闸门：{' · '.join(gate_parts) if gate_parts else '全部空闲'}")
+
     latency = status.get("latency") or {}
     if latency.get("count"):
         lines.append(

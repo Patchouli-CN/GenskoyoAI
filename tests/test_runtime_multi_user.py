@@ -268,3 +268,37 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         assert status["tenants"] == {"groups": 2, "users": 1, "meta": 1, "other": 0}
         assert status["active_operations"] == 3
         assert status["latency"] == {"count": 0}  # 元租户未装配 Agent → 空延迟
+        # 闸门跨 root + 4 租户聚合：runtime 总容量 = 5 × 模板默认 4
+        runtime_gate = next(g for g in status["gates"] if g["name"] == "runtime")
+        assert runtime_gate["max_concurrent"] == 5 * 4
+        assert status["load_level"] == {"level": "healthy", "reason": "运行正常"}
+
+
+def test_host_load_level_transitions() -> None:
+    """负载水位：满载/排队 → critical，利用率 ≥60% → warning，排空 → unavailable。"""
+    from GensokyoAI.runtime.host import RuntimeHost
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        service = RuntimeService(Path(temp_dir))
+        host = RuntimeHost(service=service)
+
+        # warning：最高利用率 2/4 = 50% → healthy；3/4 = 75% → warning
+        gates = [{"name": "model", "max_concurrent": 4, "active": 3, "waiting": 0}]
+        assert host._compute_load_level(gates, {"count": 0})["level"] == "warning"
+
+        # critical：满载 / 有排队
+        gates = [{"name": "model", "max_concurrent": 4, "active": 4, "waiting": 0}]
+        assert host._compute_load_level(gates, {"count": 0})["level"] == "critical"
+        gates = [{"name": "model", "max_concurrent": 4, "active": 2, "waiting": 1}]
+        result = host._compute_load_level(gates, {"count": 0})
+        assert result["level"] == "critical"
+        assert "排队" in result["reason"]
+
+        # warning：思考延迟超 15s
+        result = host._compute_load_level([], {"count": 3, "median_ms": 20000})
+        assert result["level"] == "warning"
+        assert "延迟" in result["reason"]
+
+        # unavailable：排空
+        service._draining = True
+        assert host._compute_load_level([], {"count": 0})["level"] == "unavailable"

@@ -235,6 +235,16 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.31 /status 负载水位与闸门用量（2026-07-31，用户点单）
+
+- `RuntimeHost.get_system_status` 扩展：`gates`（跨 root 与全部租户服务聚合同名
+  资源闸：active/waiting 求和、max_concurrent 求和即系统总容量）+ `load_level`
+  （水位计算：healthy/warning/critical/unavailable——满载或排队 → 临界、
+  利用率 ≥60% 或思考延迟中位 >15s → 警告、Runtime 排空 → 不可用）。
+- /status 新格式：首行负载水位（🟢/🟡/🔴/⚫ + 原因），闸门行只显示 runtime 总闸
+  与非空闲闸（`model 2/8（排队 1）`），空闲时显示「全部空闲」。
+- 测试：聚闸容量、水位四态转移、格式输出。基线：增量 27 passed。
+
 ## 8.30 文档过时点清扫（2026-07-31，用户点单）
 
 - 对照 §8.27-8.29 变更全面核查：README/README_en（记忆段改述为「定期蒸馏 + 自动
