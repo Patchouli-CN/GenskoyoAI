@@ -903,10 +903,6 @@ class TopicAwareStore:
 
         return {"nodes": nodes, "edges": edges}
 
-    def clear_cache(self) -> None:
-        """清空关键词索引缓存"""
-        self._keyword_index.clear()
-
     # ==================== 属性 ====================
 
     @property

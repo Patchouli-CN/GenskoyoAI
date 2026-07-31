@@ -263,6 +263,9 @@ class ModelClient:
         now = self._now()
         timing.end_time = now
         timing.duration_ms = self._elapsed_ms(timing.start_time, now)
+        # __new__ 构造（测试）等绕过 __init__ 的实例也能安全记录
+        if not hasattr(self, "_latency_samples"):
+            self._latency_samples = deque(maxlen=50)
         self._latency_samples.append((timing.context, timing.duration_ms))
         return timing
 
@@ -274,7 +277,7 @@ class ModelClient:
         """
         samples = [
             duration
-            for sample_context, duration in self._latency_samples
+            for sample_context, duration in getattr(self, "_latency_samples", ())
             if context is None or sample_context == context
         ]
         if not samples:

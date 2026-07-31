@@ -90,20 +90,5 @@ def set_exechook():
     sys.excepthook = sys_excepthook
 
 
-def get_stack_trace(vokedepth: int = 1) -> str:
-    """
-    获取堆栈跟踪信息
-    """
-    # 获取当前调用栈信息的前两层
-    stack = traceback.extract_stack(limit=vokedepth)
-    stack_info = "Stack Trace:\n"
-    for frame in stack[: -vokedepth + 1]:
-        filename = frame.filename
-        line = frame.lineno
-        funcname = frame.name
-        stack_info += f"  at {funcname} in ({filename}:{line})\n"
-    return stack_info
-
-
 if __name__ == "__main__":
     set_exechook()

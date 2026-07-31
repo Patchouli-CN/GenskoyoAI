@@ -23,7 +23,6 @@ from ..event_listeners import (
     CoreListeners,
     ErrorListeners,
     MemoryServiceListeners,
-    MetricsListeners,
     PersistenceListeners,
     SceneServiceListeners,
 )
@@ -157,7 +156,6 @@ class Agent:
         self.core_listeners = CoreListeners(self, self.event_bus)
         self.memory_service_listeners = MemoryServiceListeners(self, self.event_bus)
         self.scene_service_listeners = SceneServiceListeners(self, self.event_bus)
-        self.metrics_listeners = MetricsListeners(self.event_bus)
         self.error_listeners = ErrorListeners(self.event_bus)
         self.persistence_listeners = PersistenceListeners(self, self.event_bus)
         logger.debug("所有事件监听器已注册")
@@ -973,10 +971,3 @@ class Agent:
         manager = BackgroundManager(max_workers=2, max_queue_size=50)
         manager.register_persistence_worker(PersistenceWorker(self.session_manager.persistence))
         return manager
-
-    @property
-    def metrics(self) -> dict:
-        return {
-            "event_bus": self.event_bus.stats,
-            "app": self.metrics_listeners.metrics if hasattr(self, "metrics_listeners") else {},
-        }

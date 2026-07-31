@@ -14,7 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from ...commands import CommandContext, CommandExecutor, CommandResult, CommandStatus, CommandType
+from ...commands import CommandContext, CommandExecutor, CommandResult, CommandStatus
 from ...core.agent import Agent
 from ...core.events import Event, EventPriority, SystemEvent
 from ...utils.formatters import format_datetime, format_session_id
@@ -566,10 +566,6 @@ class ConsoleBackend(BaseBackend):
         """打印错误消息"""
         self._print_system_message(f"✗ {message}", style="error")
 
-    def _print_info_message(self, message: str) -> None:
-        """打印信息消息"""
-        self._print_system_message(f"ℹ {message}", style="info")
-
     def _print_tool_call_indicator(self, tool_info: dict) -> None:
         """打印工具调用指示器"""
         if (message := tool_info.get("message")) and hasattr(message, "tool_calls"):
@@ -717,22 +713,6 @@ class ConsoleBackendBuilder:
     def with_color_theme(self, theme: dict[str, str]) -> ConsoleBackendBuilder:
         for element, color in theme.items():
             self._backend.set_color(element, color)
-        return self
-
-    def register_command(
-        self,
-        name: str,
-        handler: Callable,
-        aliases: list[str] | None = None,
-        description: str = "",
-    ) -> ConsoleBackendBuilder:
-        """注册自定义命令"""
-        self._backend.cmd_executor.parser.register_tag(
-            name, aliases, CommandType.CUSTOM, description, handler
-        )
-        self._backend.cmd_executor.parser.register_prefix(
-            name, aliases, CommandType.CUSTOM, description, handler
-        )
         return self
 
     def build(self) -> ConsoleBackend:

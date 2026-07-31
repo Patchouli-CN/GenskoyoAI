@@ -1,10 +1,8 @@
 """事件监听器 - 响应系统事件"""
 
 import asyncio
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from ..utils.helpers import utc_now
 from ..utils.logger import logger
 from .events import Event, EventBus, SystemEvent
 
@@ -35,7 +33,6 @@ class CoreListeners:
         bus.subscribe(SystemEvent.MESSAGE_SENT, self.on_message_sent)
 
         # 记忆事件
-        bus.subscribe(SystemEvent.MEMORY_WORKING_ADDED, self.on_working_memory_added)
         bus.subscribe(SystemEvent.MEMORY_EPISODIC_COMPRESSED, self.on_episodic_compressed)
 
         # 工具事件
@@ -123,19 +120,6 @@ class CoreListeners:
             logger.debug(f"记录并发送响应: {response[:60]}...")
 
     # ==================== 记忆事件 ====================
-
-    async def on_working_memory_added(self, event: Event) -> None:
-        role = event.data.get("role")
-        content = event.data.get("content", "")
-
-        if role == "assistant" and len(content) > 50:
-            self.event_bus.publish(
-                Event(
-                    type=SystemEvent.MEMORY_SEMANTIC_ADDED,
-                    source="core.listeners",
-                    data={"content": content, "importance": 0.5},
-                )
-            )
 
     async def on_episodic_compressed(self, event: Event) -> None:
         episode = event.data.get("episode")
@@ -463,47 +447,6 @@ class SceneServiceListeners:
             logger.error(f"场景服务: 持久化当前场景失败 - {e}")
 
 
-class MetricsListeners:
-    """指标收集监听器"""
-
-    def __init__(self, event_bus: EventBus):
-        self.event_bus = event_bus
-        self._metrics = {
-            "messages_sent": 0,
-            "messages_received": 0,
-            "tool_calls": 0,
-            "memories_added": 0,
-            "errors": 0,
-        }
-        self._register()
-
-    def _register(self) -> None:
-        self.event_bus.subscribe(SystemEvent.MESSAGE_RECEIVED, self._async_inc_received)
-        self.event_bus.subscribe(SystemEvent.MESSAGE_SENT, self._async_inc_sent)
-        self.event_bus.subscribe(SystemEvent.TOOL_CALL_COMPLETED, self._async_inc_tool)
-        self.event_bus.subscribe(SystemEvent.MEMORY_SEMANTIC_ADDED, self._async_inc_memory)
-        self.event_bus.subscribe(SystemEvent.ERROR_OCCURRED, self._async_inc_error)
-
-    async def _async_inc_received(self, event: Event) -> None:
-        self._metrics["messages_received"] += 1
-
-    async def _async_inc_sent(self, event: Event) -> None:
-        self._metrics["messages_sent"] += 1
-
-    async def _async_inc_tool(self, event: Event) -> None:
-        self._metrics["tool_calls"] += 1
-
-    async def _async_inc_memory(self, event: Event) -> None:
-        self._metrics["memories_added"] += 1
-
-    async def _async_inc_error(self, event: Event) -> None:
-        self._metrics["errors"] += 1
-
-    @property
-    def metrics(self) -> dict:
-        return self._metrics.copy()
-
-
 class ErrorListeners:
     """错误事件监听器"""
 
@@ -593,13 +536,6 @@ class ErrorListeners:
             "recent": self._last_errors.copy(),
             "total": sum(self._error_counts.values()),
         }
-
-    def has_recent_502(self, within_seconds: int = 60) -> bool:
-        cutoff = utc_now() - timedelta(seconds=within_seconds)
-        for err in self._last_errors:
-            if err.get("status_code") == "502" and err["timestamp"] > cutoff:
-                return True
-        return False
 
 
 class PersistenceListeners:

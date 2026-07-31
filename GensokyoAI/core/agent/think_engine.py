@@ -342,12 +342,6 @@ class ThinkEngine:
         except Exception as e:
             logger.error(f"长期思考失败: {e}")
 
-    def trigger_think_now(self) -> None:
-        """立即触发一次长期思考"""
-        if self._running:
-            asyncio.create_task(self._long_term_think())
-            logger.debug(f"🧠 [ThinkEngine] {self.character_name} 手动触发长期思考")
-
     # ==================== 短期思考（回复后主动决策）====================
 
     # ==================== 说话前思考（定时器到期前）====================

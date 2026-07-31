@@ -3,8 +3,6 @@
 # GensokyoAI\tools\registry.py
 
 import importlib
-import importlib.util
-import pkgutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -47,22 +45,6 @@ class ToolRegistry:
             raise ValueError(f"工具注册失败: {tool_name}")
         self._tools[tool_name] = definition
 
-    def register_module(self, module_path: Path) -> None:
-        """注册模块中的所有工具"""
-        spec = importlib.util.spec_from_file_location(module_path.stem, module_path)
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            logger.debug(f"加载模块: {module_path}")
-
-    def register_package(self, package_path: Path) -> None:
-        """注册包中的所有工具"""
-        for _, name, _ in pkgutil.iter_modules([str(package_path)]):
-            try:
-                importlib.import_module(f"tools.builtin.{name}")
-            except ImportError as e:
-                logger.warning(f"导入模块 {name} 失败: {e}")
-
     def get(self, name: str) -> ToolDefinition | None:
         """获取工具（仅查本实例注册表）。
 
@@ -74,10 +56,6 @@ class ToolRegistry:
     def list(self) -> list[ToolDefinition]:
         """列出所有工具"""
         return list(self._tools.values())
-
-    def get_schemas(self) -> list[dict]:
-        """获取所有工具的 OpenAI schema"""
-        return [tool.to_openai_schema() for tool in self._tools.values()]
 
     def unregister(self, name: str) -> bool:
         """注销工具"""

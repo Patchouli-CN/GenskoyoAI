@@ -6,7 +6,6 @@ from ...core.events import Event, SystemEvent
 from ...utils.logger import logger
 from ..base import tool
 from ..tool_context import current_event_bus as get_event_bus
-from ..tool_context import set_event_bus as set_event_bus  # 遗留兼容再导出
 
 
 @tool(parallel_safe=False)  # 写状态：记忆写入，同一 Actor 内串行

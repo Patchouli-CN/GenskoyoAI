@@ -56,18 +56,6 @@ async def get_client_session(
     return _session
 
 
-def get_connector_info() -> dict[str, Any] | None:
-    """获取当前连接池状态信息（用于监控和调试）。"""
-    if _connector is None:
-        return None
-    return {
-        "limit": _connector.limit,
-        "limit_per_host": _connector.limit_per_host,
-        "size": len(_connector._conns),  # 当前连接数
-        "force_close": _connector._force_close,
-    }
-
-
 async def close_client_session() -> None:
     """关闭全局 ClientSession 和 DNS 解析器，释放所有资源。
 

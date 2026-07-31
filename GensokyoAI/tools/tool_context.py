@@ -87,13 +87,3 @@ def bind_event_bus(event_bus: EventBus | None) -> Iterator[None]:
 
     with bind_tool_context(ToolRuntimeContext(event_bus=event_bus)):
         yield
-
-
-def set_event_bus(event_bus: EventBus | None) -> None:
-    """遗留兼容入口：直接设置当前上下文的事件总线（不自动恢复）。
-
-    仅为兼容早期直接调用 ``set_event_bus`` 的代码而保留；正常调用链应依赖
-    ``ToolExecutor`` 的 :func:`bind_tool_context` 按调用注入。
-    """
-
-    _tool_context_var.set(ToolRuntimeContext(event_bus=event_bus))

@@ -315,12 +315,3 @@ class BackgroundManager:
     def stats(self) -> dict:
         """获取统计信息"""
         return self._stats.copy()
-
-    def clear_queues(self) -> None:
-        """清空所有队列"""
-        while not self._task_queue.empty():
-            try:
-                self._task_queue.get_nowait()
-                self._task_queue.task_done()
-            except asyncio.QueueEmpty:
-                break

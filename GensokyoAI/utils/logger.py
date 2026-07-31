@@ -179,25 +179,10 @@ def setup_logging(
         root_logger.setLevel(std_logging.DEBUG)
 
 
-def get_logger():
-    """获取 logger 实例"""
-    return logger
-
-
-def disable_standard_logging_intercept():
-    """禁用标准 logging 拦截"""
-    root_logger = std_logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        if isinstance(handler, LoguruHandler):
-            root_logger.removeHandler(handler)
-
-
 # 为了兼容性，保留原有的 logger 导出
 __all__ = [
     "logger",
     "setup_logging",
-    "get_logger",
-    "disable_standard_logging_intercept",
     "LoguruHandler",
 ]
 

@@ -14,46 +14,6 @@ if TYPE_CHECKING:
     from ..config import ModelConfig, WebSearchToolConfig
 
 
-class MessageOperation:
-    """消息流式操作器；每个操作方法返回新的实例，不修改原对象。"""
-
-    def __init__(self, messages: list[dict]):
-        self._messages = messages
-
-    def exclude(self, **conditions) -> MessageOperation:
-        """万能排除器"""
-
-        def matches(msg):
-            for key, value in conditions.items():
-                if key == "has":
-                    if value not in msg:
-                        return False
-                elif key == "has_not":
-                    if value in msg:
-                        return False
-                else:
-                    if msg.get(key) != value:
-                        return False
-            return True
-
-        return MessageOperation([m for m in self._messages if not matches(m)])
-
-    def filter(self, predicate) -> MessageOperation:
-        return MessageOperation([m for m in self._messages if predicate(m)])
-
-    def filter_role(self, *roles: str) -> MessageOperation:
-        return MessageOperation([m for m in self._messages if m.get("role") in roles])
-
-    def exclude_role(self, *roles: str) -> MessageOperation:
-        return MessageOperation([m for m in self._messages if m.get("role") not in roles])
-
-    def take(self, n: int) -> MessageOperation:
-        return MessageOperation(self._messages[-n:])
-
-    def get(self) -> list[dict]:
-        return self._messages
-
-
 class MessageBuilder:
     """
     消息构建器 - 构建发送给模型的消息列表
@@ -329,8 +289,3 @@ class MessageBuilder:
             system_prompt: 新的系统提示词
         """
         self._system_prompt = system_prompt
-
-    @staticmethod
-    def operate_on(messages: list[dict]) -> MessageOperation:
-        """创建一个消息操作链"""
-        return MessageOperation(messages)

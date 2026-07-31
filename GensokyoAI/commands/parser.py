@@ -15,7 +15,6 @@ class CommandType(Enum):
     CHAT = auto()  # 聊天命令 (think, whisper)
     PROMPT = auto()  # 提示词命令 (know, meta, attention)
     CUSTOM = auto()  # 自定义命令
-    NONE = auto()  # 不是命令
 
 
 class TagDefinition:
@@ -48,9 +47,6 @@ class ParsedCommand(Struct):
     content: str = ""
     args: list[str] = field(default_factory=list)
     raw: str = ""
-
-    def get_text(self) -> str:
-        return self.content or " ".join(self.args)
 
 
 class CommandParser:
@@ -88,21 +84,6 @@ class CommandParser:
         for n in tag.all_names:
             self._prefix_commands[n.lower()] = tag
         return self
-
-    def unregister(self, name: str) -> bool:
-        """注销命令"""
-        name = name.lower()
-        removed = False
-        if name in self._tags:
-            del self._tags[name]
-            removed = True
-        if name in self._prefix_commands:
-            del self._prefix_commands[name]
-            removed = True
-        return removed
-
-    def get_tag(self, name: str) -> TagDefinition | None:
-        return self._tags.get(name.lower())
 
     def parse(self, text: str) -> list[ParsedCommand]:
         """解析文本中的所有命令"""
@@ -149,11 +130,6 @@ class CommandParser:
 
         return commands
 
-    def parse_first(self, text: str) -> ParsedCommand | None:
-        """解析第一个命令"""
-        commands = self.parse(text)
-        return commands[0] if commands else None
-
     def extract_clean_text(self, text: str) -> str:
         """提取纯文本（移除所有命令标签）"""
         # 移除标签
@@ -167,15 +143,3 @@ class CommandParser:
             text = "\n".join(lines)
 
         return text.strip()
-
-    def has_prompt_commands(self, text: str) -> bool:
-        """是否包含提示词命令"""
-        return any(cmd.type == CommandType.PROMPT for cmd in self.parse(text))
-
-    def extract_prompt_context(self, text: str) -> str:
-        """提取提示词上下文"""
-        context_parts = []
-        for cmd in self.parse(text):
-            if cmd.type == CommandType.PROMPT:
-                context_parts.append(f"【{cmd.name.upper()}】\n{cmd.content}")
-        return "\n\n".join(context_parts)

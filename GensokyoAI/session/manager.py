@@ -57,22 +57,6 @@ class SessionManager:
         logger.info(f"创建会话: {session.session_id}")
         return session
 
-    async def create_session_async(self) -> SessionContext:
-        """创建新会话（异步）"""
-        session = SessionContext(character_id=self.character_id)
-        self._sessions[session.session_id] = session
-        self._working_memories[session.session_id] = WorkingMemoryManager(
-            max_turns=self._working_max_turns
-        )
-        self._current_session_id = session.session_id
-
-        # 异步保存
-        await self._persistence.save_session_async(session)
-        await self._persistence.async_save_message(session.session_id, [])
-
-        logger.info(f"异步创建会话: {session.session_id}")
-        return session
-
     def get_session(self, session_id: str) -> SessionContext | None:
         """获取会话"""
         return self._sessions.get(session_id)

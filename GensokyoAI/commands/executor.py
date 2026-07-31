@@ -131,9 +131,3 @@ class CommandExecutor:
         if cmd_type is None:
             return commands
         return [cmd for cmd in commands if cmd.type == cmd_type]
-
-    def has_prompt_commands(self, text: str) -> bool:
-        return self.parser.has_prompt_commands(text)
-
-    def extract_prompt_context(self, text: str) -> str:
-        return self.parser.extract_prompt_context(text)

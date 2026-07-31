@@ -423,15 +423,6 @@ class SessionPersistence:
         data = self._read_session_file(path)
         return SessionContext.from_dict(data["session"])
 
-    async def load_session_async(self, character_id: str, session_id: str) -> SessionContext | None:
-        """加载会话（异步 - 使用 ayafileio）"""
-        path = self._get_session_path(character_id, session_id)
-        if not path.exists():
-            return None
-
-        data = await self._read_session_file_async(path)
-        return SessionContext.from_dict(data["session"])
-
     def list_sessions(self, character_id: str) -> list[SessionContext]:
         """列出所有会话（同步）"""
         sessions = []
@@ -440,19 +431,6 @@ class SessionPersistence:
             for file in char_path.glob("*.json"):
                 try:
                     data = self._read_session_file(file)
-                    sessions.append(SessionContext.from_dict(data["session"]))
-                except Exception as e:
-                    logger.warning(f"加载会话失败 {file}: {e}")
-        return sessions
-
-    async def list_sessions_async(self, character_id: str) -> list[SessionContext]:
-        """列出所有会话（异步 - 使用 ayafileio）"""
-        sessions = []
-        char_path = self.base_path / sanitize_path_id(character_id)
-        if char_path.exists():
-            for file in char_path.glob("*.json"):
-                try:
-                    data = await self._read_session_file_async(file)
                     sessions.append(SessionContext.from_dict(data["session"]))
                 except Exception as e:
                     logger.warning(f"加载会话失败 {file}: {e}")
