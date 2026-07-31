@@ -1,33 +1,35 @@
-"""nb2 bot 指令系统：四级权限模型与指令注册表。
+"""nb2 bot 指令：框架 commands 体系注册（本地注册表 + 四级权限）。
 
-nonebot 无关的纯逻辑层（可单测）：指令以 BotCommand 注册，声明所需权限级；
-插件层只负责取消息、解析群成员角色，然后按 `can_execute` 放行。
-新增指令 = 在 COMMANDS 里加一行。
+指令解析、执行、权限闸门与 Minecraft 风格执行日志统一走框架
+`CommandExecutor`（见 plugin._dispatch_command）；本模块只声明指令本身。
+本地注册表 NB2_COMMANDS 不写入框架全局注册表——避免与 console 的同名
+指令（如 /help）在共享进程里互相覆盖；新增指令 = 加一个 @command 函数。
+
+handler 约定：签名带 `ctx`（框架 CommandContext）；QQ 侧依赖（宿主/配置/
+发消息回调）经 ctx.metadata 传入；返回 CommandResult（message 进执行日志，
+QQ 回复由 handler 自己经 send 回调发送）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from enum import IntEnum
 from typing import Any
 
-from ...runtime.host import RuntimeHost
+from ...commands import (
+    CommandContext,
+    CommandDefinition,
+    CommandResult,
+    PermissionLevel,
+    command,
+)
 
-
-class PermissionLevel(IntEnum):
-    """四级权限：数值越大权限越高；指令放行要求 用户等级 >= 指令等级。"""
-
-    VISITOR = 0  # 无法核实身份（名片查询失败）——最低信任级
-    USER = 1  # 普通群成员 / 私聊用户
-    ADMIN = 2  # QQ 群管理 / 群主
-    OWNER = 3  # bot 主人（GSK_NB2_OWNER_QQ）
+# nb2 指令本地注册表（CommandExecutor(registry=...) 消费）
+NB2_COMMANDS: dict[str, CommandDefinition] = {}
 
 
 def resolve_level(
     user_qq: int | None, owner_qq: frozenset[int], member_role: str | None
 ) -> PermissionLevel:
-    """解析用户权限等级。
+    """QQ 身份 → 四级权限。
 
     `member_role`：QQ 群成员角色（owner/admin/member）；私聊由调用方传 "member"；
     传 None 表示无法核实身份，落到 VISITOR。
@@ -39,33 +41,6 @@ def resolve_level(
     if member_role == "member":
         return PermissionLevel.USER
     return PermissionLevel.VISITOR
-
-
-@dataclass(frozen=True)
-class CommandContext:
-    """指令执行上下文：宿主、配置、调用者与发消息回调。"""
-
-    host: RuntimeHost
-    config: Any
-    member_qq: int | None
-    level: PermissionLevel
-    send: Callable[[str], Awaitable[None]]
-
-
-@dataclass(frozen=True)
-class BotCommand:
-    """一条 bot 指令：名称、所需权限、说明（/help 展示）、处理器、别名。"""
-
-    name: str
-    permission: PermissionLevel
-    description: str
-    handler: Callable[[CommandContext], Awaitable[None]]
-    aliases: tuple[str, ...] = ()
-
-
-def can_execute(command: BotCommand, level: PermissionLevel) -> bool:
-    """权限判定：用户等级 >= 指令所需等级。"""
-    return level >= command.permission
 
 
 def _format_quota(data: dict[str, Any] | None) -> str:
@@ -85,37 +60,48 @@ def _format_quota(data: dict[str, Any] | None) -> str:
     return f"额度信息：{data}"
 
 
-async def _handle_quota(ctx: CommandContext) -> None:
-    try:
-        data = await ctx.host.get_quota(ctx.config.character)
-    except Exception:
-        await ctx.send("额度查询失败了……稍后再试吧。")
-        return
-    await ctx.send(_format_quota(data))
-
-
-async def _handle_help(ctx: CommandContext) -> None:
-    lines = ["可用指令："]
-    for command in COMMANDS:
-        if not can_execute(command, ctx.level):
-            continue
-        names = " / ".join(f"/{alias}" for alias in (command.name, *command.aliases))
-        lines.append(f"{names} - {command.description}")
-    await ctx.send("\n".join(lines))
-
-
-COMMANDS: tuple[BotCommand, ...] = (
-    BotCommand("help", PermissionLevel.VISITOR, "显示可用指令列表", _handle_help, aliases=("帮助",)),
-    BotCommand(
-        "quota", PermissionLevel.USER, "查询当前 Provider 账户额度", _handle_quota, aliases=("额度",)
-    ),
+@command(
+    name="help",
+    aliases=["帮助"],
+    description="显示可用指令列表",
+    permission=PermissionLevel.VISITOR,
+    registry=NB2_COMMANDS,
 )
+async def cmd_help(ctx: CommandContext) -> CommandResult:
+    visible = [cmd for cmd in _unique_commands() if cmd.permission <= ctx.permission]
+    lines = ["可用指令："]
+    for cmd in visible:
+        names = " / ".join(f"/{alias}" for alias in (cmd.name, *cmd.aliases))
+        lines.append(f"{names} - {cmd.description}")
+    await ctx.metadata["send"]("\n".join(lines))
+    return CommandResult.success("help", f"列出 {len(visible)} 条可用指令")
 
-_ALIAS_INDEX: dict[str, BotCommand] = {
-    alias: command for command in COMMANDS for alias in (command.name, *command.aliases)
-}
+
+@command(
+    name="quota",
+    aliases=["额度"],
+    description="查询当前 Provider 账户额度",
+    permission=PermissionLevel.USER,
+    registry=NB2_COMMANDS,
+)
+async def cmd_quota(ctx: CommandContext) -> CommandResult:
+    host = ctx.metadata["host"]
+    try:
+        data = await host.get_quota(ctx.metadata["config"].character)
+    except Exception:
+        await ctx.metadata["send"]("额度查询失败了……稍后再试吧。")
+        return CommandResult.failure("quota", "Provider 额度接口异常")
+    text = _format_quota(data)
+    await ctx.metadata["send"](text)
+    return CommandResult.success("quota", text)
 
 
-def find_command(name: str) -> BotCommand | None:
-    """按名称或别名查指令；未注册返回 None。"""
-    return _ALIAS_INDEX.get(name.lower())
+def _unique_commands() -> list[CommandDefinition]:
+    """本地注册表去重（别名共享同一 CommandDefinition），按注册顺序。"""
+    seen: set[str] = set()
+    result = []
+    for cmd in NB2_COMMANDS.values():
+        if cmd.name not in seen:
+            seen.add(cmd.name)
+            result.append(cmd)
+    return result

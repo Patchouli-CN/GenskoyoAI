@@ -11,13 +11,35 @@ from .result import CommandResult, CommandStatus
 class CommandExecutor:
     """命令执行器"""
 
-    def __init__(self, mode: str = "smart"):
+    def __init__(
+        self,
+        mode: str = "smart",
+        registry: dict[str, CommandDefinition] | None = None,
+    ):
         self.parser = CommandParser(mode=mode)
+        # 本地注册表（适配器隔离用）；None = 框架全局注册表
+        self._registry = registry
         self._sync_parser_tags()
+
+    def _iter_commands(self) -> list[CommandDefinition]:
+        if self._registry is None:
+            return list_commands()
+        seen: set[str] = set()
+        result = []
+        for cmd in self._registry.values():
+            if cmd.name not in seen:
+                seen.add(cmd.name)
+                result.append(cmd)
+        return result
+
+    def _get_command(self, name: str) -> CommandDefinition | None:
+        if self._registry is not None:
+            return self._registry.get(name.lower())
+        return get_command(name)
 
     def _sync_parser_tags(self) -> None:
         """同步命令定义到解析器（直接传递，无需转换）"""
-        for cmd in list_commands():
+        for cmd in self._iter_commands():
             self.parser.register_tag(cmd.name, cmd.aliases, cmd.type, cmd.description)
             self.parser.register_prefix(cmd.name, cmd.aliases, cmd.type, cmd.description)
 
@@ -48,10 +70,17 @@ class CommandExecutor:
         parsed: ParsedCommand,
         context: CommandContext,
     ) -> CommandResult:
-        cmd_def = get_command(parsed.name)
+        cmd_def = self._get_command(parsed.name)
 
         if not cmd_def:
             return CommandResult.no_handler(parsed.name)
+
+        # 四级权限闸门：调用方等级不足直接失败（日志审计留在执行器，是否告知用户由调用方决定）
+        if context.permission < cmd_def.permission:
+            return CommandResult.failure(
+                parsed.name,
+                f"权限不足：/{parsed.name} 需要 {cmd_def.permission.name} 及以上权限",
+            )
 
         try:
             args = cmd_def.parse_args(parsed.content)
@@ -98,7 +127,10 @@ class CommandExecutor:
             logger.warning(f"[{context.source.upper()}] Command '{parsed.name}' unknown")
 
     def list_commands(self, cmd_type: CommandType | None = None) -> list[CommandDefinition]:
-        return list_commands(cmd_type)
+        commands = self._iter_commands()
+        if cmd_type is None:
+            return commands
+        return [cmd for cmd in commands if cmd.type == cmd_type]
 
     def has_prompt_commands(self, text: str) -> bool:
         return self.parser.has_prompt_commands(text)

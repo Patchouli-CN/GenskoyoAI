@@ -3,9 +3,10 @@
 # GensokyoAI/commands/__init__.py
 
 from .context import CommandContext
-from .decorators import command, get_command, list_commands
+from .decorators import CommandDefinition, command, get_command, list_commands
 from .executor import CommandExecutor
 from .parser import CommandParser, CommandType, ParsedCommand
+from .permission import PermissionLevel
 from .result import CommandResult, CommandStatus
 
 __all__ = [
@@ -15,8 +16,10 @@ __all__ = [
     "command",
     "CommandExecutor",
     "CommandContext",
+    "CommandDefinition",
     "CommandResult",
     "CommandStatus",
+    "PermissionLevel",
     "get_command",
     "list_commands",
 ]

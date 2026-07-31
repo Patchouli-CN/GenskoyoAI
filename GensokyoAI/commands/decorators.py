@@ -7,6 +7,7 @@ from typing import get_type_hints
 
 from ..utils.logger import logger
 from .parser import CommandType  # 直接导入
+from .permission import PermissionLevel
 
 # 全局命令注册表
 _COMMAND_REGISTRY: dict[str, CommandDefinition] = {}
@@ -23,12 +24,14 @@ class CommandDefinition:
         aliases: list[str] | None = None,
         description: str = "",
         usage: str = "",
+        permission: PermissionLevel = PermissionLevel.OWNER,
     ):
         self.name = name
         self.handler = handler
         self.type = cmd_type
         self.aliases = aliases or []
         self.description = description
+        self.permission = permission
         self._sig = inspect.signature(handler)
         self._type_hints = get_type_hints(handler)
         self._is_async = inspect.iscoroutinefunction(handler)
@@ -92,8 +95,15 @@ def command(
     aliases: list[str] | None = None,
     description: str = "",
     usage: str = "",
+    permission: PermissionLevel = PermissionLevel.OWNER,
+    registry: dict[str, CommandDefinition] | None = None,
 ):
-    """命令装饰器"""
+    """命令装饰器
+
+    permission：所需权限级，默认 OWNER（未声明即仅主人可用，开放需显式降级）。
+    registry：自定义注册表（默认全局注册表）——适配器用本地注册表可避免
+    与全局注册表里的同名命令互相覆盖。
+    """
 
     def decorator(func: Callable) -> Callable:
         cmd_name = name or func.__name__.replace("cmd_", "")
@@ -105,11 +115,13 @@ def command(
             aliases=aliases,
             description=description,
             usage=usage,
+            permission=permission,
         )
 
+        target = _COMMAND_REGISTRY if registry is None else registry
         for n in cmd_def.all_names:
-            _COMMAND_REGISTRY[n.lower()] = cmd_def
-            logger.debug(f"注册命令: {n} (类型: {cmd_type.name})")
+            target[n.lower()] = cmd_def
+            logger.debug(f"注册命令: {n} (类型: {cmd_type.name}, 权限: {permission.name})")
 
         return func
 

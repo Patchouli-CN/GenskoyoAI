@@ -1,4 +1,4 @@
-"""nb2 指令系统测试：四级权限模型、别名索引、/help 与 /quota 处理器。"""
+"""nb2 指令测试：权限解析、本地注册表、/help 与 /quota 处理器、执行器对接。"""
 
 import asyncio
 import unittest
@@ -6,12 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from GensokyoAI.backends.nb2.commands import (
-    CommandContext,
-    PermissionLevel,
-    can_execute,
-    find_command,
+    NB2_COMMANDS,
+    _format_quota,
+    cmd_help,
+    cmd_quota,
     resolve_level,
 )
+from GensokyoAI.commands import CommandContext, CommandExecutor, CommandStatus, PermissionLevel
 from GensokyoAI.runtime.host import RuntimeHost
 
 
@@ -23,17 +24,23 @@ class _Sender:
         self.messages.append(text)
 
 
-def _ctx(level: PermissionLevel, send, host: RuntimeHost | None = None) -> CommandContext:
+def _ctx(
+    level: PermissionLevel, send, host: RuntimeHost | None = None
+) -> CommandContext:
     return CommandContext(
-        host=host or RuntimeHost(),
-        config=SimpleNamespace(character="KirisameMarisa"),
-        member_qq=123,
-        level=level,
-        send=send,
+        source="nb2",
+        issuer="tester(123)",
+        permission=level,
+        metadata={
+            "host": host or RuntimeHost(),
+            "config": SimpleNamespace(character="KirisameMarisa"),
+            "member_qq": 123,
+            "send": send,
+        },
     )
 
 
-class PermissionLevelTests(unittest.TestCase):
+class ResolveLevelTests(unittest.TestCase):
     def test_owner_list_resolves_owner(self):
         self.assertEqual(resolve_level(123, frozenset({123}), None), PermissionLevel.OWNER)
         self.assertEqual(resolve_level(123, frozenset({999}), None), PermissionLevel.VISITOR)
@@ -50,34 +57,31 @@ class PermissionLevelTests(unittest.TestCase):
         self.assertEqual(resolve_level(123, frozenset({123}), "member"), PermissionLevel.OWNER)
 
 
-class CommandRegistryTests(unittest.TestCase):
-    def test_alias_index(self):
-        self.assertIs(find_command("quota"), find_command("额度"))
-        self.assertIs(find_command("help"), find_command("帮助"))
-        self.assertIsNone(find_command("rm"))
+class LocalRegistryTests(unittest.TestCase):
+    def test_commands_registered_with_aliases_and_permissions(self):
+        self.assertIs(NB2_COMMANDS["quota"], NB2_COMMANDS["额度"])
+        self.assertIs(NB2_COMMANDS["help"], NB2_COMMANDS["帮助"])
+        self.assertEqual(NB2_COMMANDS["quota"].permission, PermissionLevel.USER)
+        self.assertEqual(NB2_COMMANDS["help"].permission, PermissionLevel.VISITOR)
 
-    def test_can_execute_threshold(self):
-        quota = find_command("quota")
-        assert quota is not None
-        self.assertTrue(can_execute(quota, PermissionLevel.USER))
-        self.assertTrue(can_execute(quota, PermissionLevel.OWNER))
-        self.assertFalse(can_execute(quota, PermissionLevel.VISITOR))
-        help_cmd = find_command("help")
-        assert help_cmd is not None
-        self.assertTrue(can_execute(help_cmd, PermissionLevel.VISITOR))
+    def test_local_registry_does_not_pollute_global(self):
+        from GensokyoAI.commands import get_command
+
+        # nb2 指令只进本地注册表；框架全局注册表里的同名指令不被覆盖
+        self.assertIsNot(get_command("help"), NB2_COMMANDS["help"])
 
 
 class HelpHandlerTests(unittest.TestCase):
     def test_help_lists_only_permitted_commands(self):
         async def run():
             sender = _Sender()
-            await find_command("help").handler(_ctx(PermissionLevel.VISITOR, sender))
+            await cmd_help(_ctx(PermissionLevel.VISITOR, sender))
             self.assertEqual(len(sender.messages), 1)
             self.assertIn("/help", sender.messages[0])
             self.assertNotIn("quota", sender.messages[0])  # VISITOR 看不到 USER 级指令
 
             sender2 = _Sender()
-            await find_command("help").handler(_ctx(PermissionLevel.USER, sender2))
+            await cmd_help(_ctx(PermissionLevel.USER, sender2))
             self.assertIn("/quota", sender2.messages[0])
 
         asyncio.run(run())
@@ -95,7 +99,7 @@ class QuotaHandlerTests(unittest.TestCase):
                 }
             )
             sender = _Sender()
-            await find_command("quota").handler(_ctx(PermissionLevel.USER, sender, host=host))
+            await cmd_quota(_ctx(PermissionLevel.USER, sender, host=host))
             self.assertEqual(sender.messages, ["当前额度：¥49.59（现金 ¥3.00，代金券 ¥46.59）"])
 
         asyncio.run(run())
@@ -105,8 +109,50 @@ class QuotaHandlerTests(unittest.TestCase):
             host = RuntimeHost()
             host.get_quota = AsyncMock(return_value=None)
             sender = _Sender()
-            await find_command("quota").handler(_ctx(PermissionLevel.USER, sender, host=host))
+            await cmd_quota(_ctx(PermissionLevel.USER, sender, host=host))
             self.assertEqual(sender.messages, ["当前 Provider 不支持额度查询。"])
+
+        asyncio.run(run())
+
+    def test_format_quota_fallback(self):
+        self.assertEqual(_format_quota(None), "当前 Provider 不支持额度查询。")
+
+
+class ExecutorIntegrationTests(unittest.TestCase):
+    """插件同款 CommandExecutor：权限闸门与执行日志由框架统一负责。"""
+
+    def test_executor_enforces_permission_and_runs_handler(self):
+        async def run():
+            executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
+            # VISITOR 执行 USER 级 /quota：拒绝，handler 不发送
+            denied_sender = _Sender()
+            results, _ = await executor.execute(
+                "/quota", _ctx(PermissionLevel.VISITOR, denied_sender)
+            )
+            self.assertEqual(results[0].status, CommandStatus.FAILURE)
+            self.assertIn("权限不足", results[0].message)
+            self.assertEqual(denied_sender.messages, [])
+
+            # 同指令换 OWNER：放行并发送
+            ok_sender = _Sender()
+            host = RuntimeHost()
+            host.get_quota = AsyncMock(return_value=None)
+            results, _ = await executor.execute(
+                "/quota", _ctx(PermissionLevel.OWNER, ok_sender, host=host)
+            )
+            self.assertEqual(results[0].status, CommandStatus.SUCCESS)
+            self.assertEqual(ok_sender.messages, ["当前 Provider 不支持额度查询。"])
+
+        asyncio.run(run())
+
+    def test_executor_ignores_unregistered_command_silently(self):
+        async def run():
+            executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
+            sender = _Sender()
+            results, clean = await executor.execute("/rm -rf", _ctx(PermissionLevel.OWNER, sender))
+            self.assertEqual(results, [])  # 未注册指令：解析为空，静默
+            self.assertEqual(clean, "")
+            self.assertEqual(sender.messages, [])
 
         asyncio.run(run())
 

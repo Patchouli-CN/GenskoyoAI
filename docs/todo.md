@@ -235,6 +235,32 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.14 nb2 指令对接框架 commands 体系 + 框架四级权限（2026-07-31，用户定稿）
+
+- 起因：nb2 指令分发是自建管线，没有框架 executor 的「issued command」执行日志；
+  用户要求 nb2 对接框架 command 子模块，并把四级权限下沉到框架（未声明默认 OWNER）。
+- 框架 `GensokyoAI/commands/`：
+  - 新 `permission.py`：`PermissionLevel`（VISITOR0<USER1<ADMIN2<OWNER3，IntEnum）。
+  - `@command(..., permission=..., registry=...)`：权限默认 OWNER（未声明即仅主人，
+    开放需显式降级）；`registry` 可指定本地注册表（适配器隔离，避免与全局同名命令
+    互相覆盖——console 与 nb2 都有 /help，共享进程/测试会话里必须隔离）。
+  - `CommandContext.permission` 默认 OWNER（console 等本地后端向后兼容、行为不变）。
+  - `CommandExecutor(registry=...)`：本地注册表查命令/同步 parser；`_execute_single`
+    内置权限闸门，不足返回 failure「权限不足」（审计日志在执行器，是否告知用户由调用方定）。
+- nb2：`commands.py` 重写为框架注册（NB2_COMMANDS 本地注册表；/help VISITOR、
+  /quota USER；resolve_level 保留为 QQ 身份→四级映射）；plugin `_dispatch_command`
+  改为构造框架 CommandContext（source="nb2"、issuer=昵称(QQ)、permission=解析级、
+  metadata 带 host/send/config）后交给 CommandExecutor——未注册指令解析为空静默，
+  权限不足对用户静默、日志有 issued+failed 审计。QQ 回复仍由 handler 经 send 发送，
+  result.message 只进日志。
+- 测试：tests/test_command_executor.py 新（默认 OWNER、闸门、本地注册表隔离、
+  Minecraft 日志行）；tests/test_nb2_commands.py 重写。基线：690 passed, 3 subtests passed。
+
+## 8.13 租户日志标签（2026-07-31，用户提议）——**已 revert（89ffe67）**
+
+> 教训：loguru 全局 patcher 会被 nonebot.init 的 `logger.configure(patcher=...)`
+> 覆盖，导致格式键缺失 KeyError。正确做法（若重做）：per-sink format 函数内补默认值。
+
 ## 8.12 租户上限 bug 修复：LRU 休眠驱逐（2026-07-31，用户报 bug）
 
 - 起因：nb2 跑一天后新群/新私聊全部 `agent.limit_exceeded`——旧的

@@ -26,6 +26,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
+from ...commands import CommandContext, CommandExecutor
 from ...core.agent.prompts import (
     build_member_impression_prompt,
     build_repeat_annoyance_context,
@@ -34,12 +35,7 @@ from ...core.agent.prompts import (
 from ...runtime.host import RuntimeHost, RuntimeRpcError
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
-from .commands import (
-    CommandContext,
-    can_execute,
-    find_command,
-    resolve_level,
-)
+from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
 from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
@@ -57,6 +53,9 @@ _repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
+
+# 指令执行器（框架 commands 体系）：本地注册表，解析/权限/执行/日志统一
+_command_executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
 
 _REPLY_SEGMENT_DELAY_SECONDS = 0.8  # 分段发送间隔，避免消息刷屏抖动
 
@@ -291,35 +290,33 @@ async def _fetch_member_role(bot: Bot, event: MessageEvent) -> str | None:
 async def _dispatch_command(
     text: str, event: MessageEvent, bot: Bot, matcher: type[Matcher]
 ) -> None:
-    """bot 指令分发：查表 → 四级权限判定 → 执行；未注册或无权限静默忽略。"""
-    name = text[1:].strip().split(maxsplit=1)[0].lower()
-    command = find_command(name)
-    if command is None:
-        return
+    """bot 指令分发：框架 CommandExecutor 统一解析/权限闸门/执行（自带执行日志）。
+
+    权限不足与未注册指令对用户静默（不提示指令存在），执行细节全部在日志里。
+    """
     role = await _fetch_member_role(bot, event)
     level = resolve_level(event.user_id, _config.owner_qq, role)
-    if not can_execute(command, level):
-        logger.warning(
-            f"[nb2] 用户 {event.user_id}（{level.name}）尝试 /{command.name}"
-            f"（需 {command.permission.name}），已静默拒绝"
-        )
-        return
+    if isinstance(event, GroupMessageEvent):
+        raw_name = event.sender.card or event.sender.nickname or str(event.user_id)
+    else:
+        raw_name = event.sender.nickname or str(event.user_id)
+    sender = sanitize_display_name(raw_name)
 
     async def send(content: str) -> None:
         await matcher.send(MessageSegment.text(content))
 
     ctx = CommandContext(
-        host=_require_host(),
-        config=_config,
-        member_qq=event.user_id,
-        level=level,
-        send=send,
+        source="nb2",
+        issuer=f"{sender}({event.user_id})",
+        permission=level,
+        metadata={
+            "host": _require_host(),
+            "config": _config,
+            "member_qq": event.user_id,
+            "send": send,
+        },
     )
-    try:
-        await command.handler(ctx)
-    except Exception:
-        logger.exception(f"[nb2] 指令 /{command.name} 执行失败")
-        await matcher.send(MessageSegment.text("指令执行出了点问题……"))
+    await _command_executor.execute(text, ctx)
 
 
 def _lock_for(key: str) -> asyncio.Lock:

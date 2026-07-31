@@ -6,6 +6,7 @@ from msgspec import Struct
 
 from ..backends.base import BaseBackend
 from ..core.agent import Agent
+from .permission import PermissionLevel
 
 # 泛型变量
 T = TypeVar("T", bound="BaseBackend")
@@ -21,6 +22,9 @@ class CommandContext[T: "BaseBackend"](Struct, frozen=False):
     source: str = "console"
     issuer: str = "Console"
     metadata: dict = {}
+    # 调用方权限级（默认 OWNER：本地后端即主人，向后兼容；
+    # 网络适配器应按平台身份显式给出，无法核实给 VISITOR）
+    permission: PermissionLevel = PermissionLevel.OWNER
 
     @property
     def backend_inst(self) -> T:
