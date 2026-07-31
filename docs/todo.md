@@ -235,6 +235,17 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.18 nb2 引用原文进上下文（2026-07-31，用户点单 backlog）
+
+- 起因：A 引用 B 的话 @bot 问「你认识她吗」，角色看不到被引用的内容只能瞎猜
+  （reply 段此前被 _extract_group_text 整个丢弃）。
+- 修复：reply 段经 get_msg 取原消息，拼成「（引用 昵称：…）」插入文本原位；
+  纯文本截断 120 字（_QUOTED_TEXT_MAX_CHARS）；1200「消息为空」等失败静默跳过
+  （引用上下文是增强不是必需）。与 to_me() 的回复检查同一接口，NapCat 侧有缓存。
+- 开关 `GSK_NB2_QUOTE_CONTEXT`（默认开）；默认 extra_prompt 补标记说明
+  （「（引用 昵称：…）是说话人引用回复的上一条消息内容」）；启动日志加一行。
+- 测试：quote_context 默认值与 env 解析。基线：增量 46 passed（nb2）。
+
 ## 8.17 四维心情权重进角色卡（2026-07-31，用户点单 backlog）
 
 - 角色卡新字段 `motivation_weights`（可选）：expression_drive / emotional_charge /

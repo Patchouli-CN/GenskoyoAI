@@ -27,6 +27,7 @@ DEFAULT_EXTRA_PROMPT = (
     "不要用 *星号* 或括号描写动作、表情、心理活动；不要用「」等台词引号，直接写说的话；"
     "一次回复最多三句话。"
     "群聊消息开头的【昵称】是说话人标记，让你分清谁在说话（私聊没有这个标记）；"
+    "（引用 昵称：…）是说话人引用回复的上一条消息内容；"
     "你可以用昵称称呼对方，但自己的回复不要带【】标记。"
 )
 
@@ -46,6 +47,7 @@ class Nb2Config:
     strip_rp_style: bool = True  # 发送前清洗 RP 风格标记（*动作*、「」引号），不依赖模型配合
     sender_label: bool = True  # 群聊消息注入【昵称】说话人标记（多对单会话的归属）
     member_memory: bool = True  # 群友印象：首轮交谈后生成第一印象，之后随消息注入
+    quote_context: bool = True  # 引用回复时取原消息拼成（引用 昵称：…），让角色看到被引用的内容
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -75,4 +77,5 @@ class Nb2Config:
             strip_rp_style=_parse_bool(get("GSK_NB2_STRIP_RP_STYLE"), cls.strip_rp_style),
             sender_label=_parse_bool(get("GSK_NB2_SENDER_LABEL"), cls.sender_label),
             member_memory=_parse_bool(get("GSK_NB2_MEMBER_MEMORY"), cls.member_memory),
+            quote_context=_parse_bool(get("GSK_NB2_QUOTE_CONTEXT"), cls.quote_context),
         )

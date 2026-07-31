@@ -103,12 +103,43 @@ async def _resolve_member_name(bot: Bot, group_id: int, qq: str) -> str:
     return name
 
 
+_QUOTED_TEXT_MAX_CHARS = 120  # 引用原文截断长度（防长文灌进上下文烧 token）
+
+
+async def _fetch_quoted_text(bot: Bot, message_id: str) -> str | None:
+    """取引用消息的「发送者：纯文本」（截断）；查不到/为空返回 None。
+
+    与 to_me() 的回复检查查的是同一个 get_msg 接口（NapCat 侧有缓存，代价低）；
+    1200「消息为空」等失败静默跳过——引用上下文是增强而非必需。
+    """
+    try:
+        info = await bot.get_msg(message_id=int(message_id))
+    except Exception as error:
+        logger.debug(f"[nb2] 引用消息查询失败（{message_id}）: {error}")
+        return None
+    sender = info.get("sender") or {}
+    name = sanitize_display_name(
+        str(sender.get("card") or sender.get("nickname") or "某人")
+    )
+    raw = info.get("message")
+    text = Message(raw).extract_plain_text() if isinstance(raw, list) else str(raw or "")
+    text = " ".join(text.split())[:_QUOTED_TEXT_MAX_CHARS].strip()
+    if not text:
+        return None
+    return f"{name}：{text}"
+
+
 async def _extract_group_text(bot: Bot, event: GroupMessageEvent) -> str:
-    """逐段提取群消息文本：at 段转译为 @昵称（@bot 自身的段丢弃），其余非文本段忽略。"""
+    """逐段提取群消息文本：at 段转译为 @昵称（@bot 自身的段丢弃），
+    reply 段取引用原文拼成（引用 昵称：…），其余非文本段忽略。"""
     parts: list[str] = []
     for segment in event.get_message():
         if segment.type == "text":
             parts.append(str(segment.data.get("text", "")))
+        elif segment.type == "reply" and _config.quote_context:
+            quoted = await _fetch_quoted_text(bot, str(segment.data.get("id", "")))
+            if quoted:
+                parts.append(f"（引用 {quoted}）")
         elif segment.type == "at":
             qq = str(segment.data.get("qq", ""))
             if not qq or qq == str(event.self_id):
@@ -206,6 +237,7 @@ async def _on_startup() -> None:
         f"分段回复={'开' if _config.split_reply else '关'}, "
         f"说话人标记={'开' if _config.sender_label else '关'}, "
         f"群友印象={'开' if _config.member_memory else '关'}, "
+        f"引用上下文={'开' if _config.quote_context else '关'}, "
         f"复读防护={repeat_guard_desc}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )

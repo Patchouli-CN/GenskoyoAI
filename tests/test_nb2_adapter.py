@@ -126,6 +126,7 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertEqual(config.extra_prompt, DEFAULT_EXTRA_PROMPT)
         self.assertTrue(config.split_reply)
         self.assertTrue(config.strip_rp_style)
+        self.assertTrue(config.quote_context)
 
     def test_parse_from_env(self):
         env = {
@@ -159,6 +160,10 @@ class Nb2ConfigTests(unittest.TestCase):
         self.assertEqual(config.owner_qq, frozenset({123, 456}))
         # 默认空名单：指令全部禁用（fail-closed）
         self.assertEqual(Nb2Config.from_env({}.get).owner_qq, frozenset())
+
+    def test_quote_context_bool_parsing(self):
+        self.assertFalse(Nb2Config.from_env({"GSK_NB2_QUOTE_CONTEXT": "0"}.get).quote_context)
+        self.assertTrue(Nb2Config.from_env({"GSK_NB2_QUOTE_CONTEXT": "yes"}.get).quote_context)
 
 
 class SplitReplySegmentsTests(unittest.TestCase):
