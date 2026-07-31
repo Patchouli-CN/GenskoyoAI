@@ -235,6 +235,40 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.27 全项目结构优化（2026-07-31，用户「代码太大感觉屎山」）
+
+- 审查：4 个 explore 子代理分区（runtime/core/backends/world-memory）+ 主审逐条复核。
+- 已落地（全部全绿 push）：
+  - 死代码清除（-501 行，23 文件）：MessageOperation、MetricsListeners 链、
+    Lifecycle 死方法、parser/executor 死方法、utils 死函数、session/background/
+    topic_store 死接口、tool_context 兼容壳、console 死方法。
+  - service.py 去重：租户初始化共享尾部（_check_tenant_admin_gate/
+    _get_or_create_tenant_service）、幂等键校验归一、_resolve_target_session
+    消灭 5 处会话解析、_is_tenant_method/_requires_explicit_session 改读 rpc 常量单源。
+  - World 编排块抽取为 runtime/service_world.py（WorldOpsMixin，-457 行，
+    dispatch getattr 语义不变、调用方零改动；mixin 属性访问按文件定向关 pyright
+    reportAttributeAccessIssue，其余诊断保留）。
+  - 零散：config_merge choose 工厂（11 闭包）、character_validator 权重/基线
+    校验参数化、nb2 store JSON 公共函数、world/_llm_json 三文件共用、提示词归位
+    （开场场景/主动兜底 cue 入 prompts.py）、cli 配色常量、删键清单单源。
+  - providers：update_config 下沉 BaseProvider（_build_client 钩子，删 6 份逐字
+    override）；五个 provider 提取 _build_call_kwargs/_build_content_config
+    （chat/chat_stream 参数组装各归一处，~140 行重复消除；注意 options 归一化
+    保留在公开方法顶部，下游诊断还要用）。
+- 结果：service.py 3523→3018；全仓净减约 1100 行；721 passed 全绿，ruff/pyright 干净。
+- 暂缓（下轮或待决策）：租户块整体抽 tenancy.py（host/tests 直戳 _tenant_services，
+  需改 ~10 处）、http_adapter WS 区域拆分、world.py 装配区抽 assembly.py、
+  三套 JSON 容错存储合并（session/world/topic_store 微差需保留）、session 与
+  persistence 的 sync/async 双胞胎合并、model_client 错误尾巴/embedding 双生、
+  providers 深层共享（OpenAIClientBase/embeddings 下沉，注意 supports_embeddings
+  的类型判断依赖）、config_env 表驱动、InitiativeScheduler 与 InitiativeTimerManager
+  统一（架构决策）、REMEMBER/RECALL/THINK 动作子系统存废（词汇表级，需作者拍板）、
+  ProviderDefinition.capabilities 与实例声明双源漂移（注册表缺 STRUCTURED_OUTPUT）。
+- 存疑复核结论：service._lock 包 LLM 生成=承重不动；PersistenceListeners._session
+  缓存恒 None（:673 上报 session_id 永 None）疑似潜伏 bug，待单独修；
+  world 模式 /know /meta /attention 疑似静默失效（prompt context 未注入 world 回合），
+  待单独修。
+
 ## 8.26 /status 思考延迟口径优化（2026-07-31，用户点单）
 
 - `ModelClient.chat` 新增 `call_context` 调用方标签（写入 ModelCallTiming.context）；
