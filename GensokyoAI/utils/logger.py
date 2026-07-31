@@ -38,20 +38,6 @@ def _third_party_noise_filter(record) -> bool:
 # 移除默认配置
 logger.remove()
 
-
-def _tenant_label_patcher(record) -> None:
-    """把 logger.contextualize(tenant=...) 注入的租户 id 转为消息前缀标签。
-
-    多租户 Runtime（如 nb2 适配器：每群/每私聊一个租户 Agent）关闭或运行时，
-    各租户日志的角色名完全相同、肉眼无法区分；租户上下文内的日志行统一
-    带上 [agent_id] 前缀，非租户上下文为空（日志格式不变）。
-    """
-    tenant = record["extra"].get("tenant")
-    record["extra"]["tenant_label"] = f"[{tenant}] " if tenant else ""
-
-
-logger.configure(extra={"tenant": None}, patcher=_tenant_label_patcher)
-
 # 保存 handler IDs 以便后续管理
 _handlers = {"console": None, "file": None}
 
@@ -138,13 +124,13 @@ def setup_logging(
     if log_format is None:
         log_format = (
             "[{thread.name:^12}] {time:HH:mm:ss} | {level:<8} | "
-            "{name}.{function}:{line:03d} | {extra[tenant_label]}{message}"
+            "{name}.{function}:{line:03d} | {message}"
         )
 
     if log_format_console is None:
         log_format_console = (
             "<level>[{thread.name:^12}] {time:HH:mm:ss} | {level:<8} | "
-            "{name}.{function}:{line:03d} | {extra[tenant_label]}{message}</level>"
+            "{name}.{function}:{line:03d} | {message}</level>"
         )
 
     # 添加控制台 handler

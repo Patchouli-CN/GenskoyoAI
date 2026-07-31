@@ -235,17 +235,6 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
-## 8.13 租户日志标签（2026-07-31，用户提议）
-
-- 起因：多租户同时关闭时，各租户 Agent 的关闭日志角色名完全相同，肉眼无法区分。
-- 机制：loguru `contextualize` + patcher——`utils/logger.py` 注册
-  `_tenant_label_patcher`，把 `logger.contextualize(tenant=...)` 注入的租户 id
-  转为消息前缀 `[agent_id] `；非租户上下文为空串，日志格式完全不变。
-- 接线：`runtime/service.py` 的 `_tenant_log_context` 装饰器，加在租户
-  `RuntimeService.handle` 与 `shutdown` 上——租户内所有日志（含后台异步保存、
-  ThinkEngine/定时器/后台管理器停止）统一带标签；根服务不受影响。
-- 测试：patcher 行为 + 装饰器打标各一例。基线：683 passed, 3 subtests passed。
-
 ## 8.12 租户上限 bug 修复：LRU 休眠驱逐（2026-07-31，用户报 bug）
 
 - 起因：nb2 跑一天后新群/新私聊全部 `agent.limit_exceeded`——旧的

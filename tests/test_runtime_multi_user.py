@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -251,54 +250,3 @@ def test_tenant_agent_limit_reads_config_default() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         service = RuntimeService(Path(temp_dir))
         assert service._tenant_agent_limit() == 32
-
-
-def _capture_tenant_labels(lines: list[str]) -> int:
-    """挂一个临时 loguru sink 捕获「租户标签|消息」行，返回 handler id。"""
-    from GensokyoAI.utils.logger import logger
-
-    return logger.add(
-        lambda message: lines.append(str(message)),
-        format="{extra[tenant_label]}|{message}",
-        level="DEBUG",
-    )
-
-
-def test_tenant_label_patcher_prefixes_only_tenant_context() -> None:
-    """contextualize(tenant=...) 内的日志带 [agent_id] 前缀，之外格式不变。"""
-    from GensokyoAI.utils.logger import logger
-
-    lines: list[str] = []
-    handler_id = _capture_tenant_labels(lines)
-    try:
-        with logger.contextualize(tenant="qq-group-1"):
-            logger.info("inside")
-        logger.info("outside")
-    finally:
-        logger.remove(handler_id)
-    assert lines == ["[qq-group-1] |inside\n", "|outside\n"]
-
-
-def test_tenant_log_context_decorator_labels_tenant_method_logs() -> None:
-    """_tenant_log_context：租户方法执行期间的日志自动带 agent_id 标签。"""
-    from GensokyoAI.runtime.service import _tenant_log_context
-    from GensokyoAI.utils.logger import logger
-
-    @_tenant_log_context
-    async def _sample(self) -> str:
-        logger.info("tenant work")
-        return "done"
-
-    async def run() -> None:
-        lines: list[str] = []
-        handler_id = _capture_tenant_labels(lines)
-        try:
-            tenant_self = SimpleNamespace(_tenant_key=("alice", "qq-group-9"))
-            assert await _sample(tenant_self) == "done"
-            root_self = SimpleNamespace(_tenant_key=None)
-            await _sample(root_self)
-        finally:
-            logger.remove(handler_id)
-        assert lines == ["[qq-group-9] |tenant work\n", "|tenant work\n"]
-
-    asyncio.run(run())
