@@ -23,7 +23,7 @@ from ..types import (
 from .openai_provider import OpenAIProvider
 
 if TYPE_CHECKING:
-    from ...config import ModelConfig
+    pass
 
 
 class DeepSeekProvider(OpenAIProvider):
@@ -333,11 +333,4 @@ class DeepSeekProvider(OpenAIProvider):
             model=response.model or "",
             done=True,
             thinking=reasoning_content,
-        )
-
-    def update_config(self, config: ModelConfig) -> None:
-        """更新配置并重建客户端。"""
-        super().update_config(config)
-        logger.info(
-            f"DeepSeekProvider 配置已更新，base_url: {config.base_url or self.DEFAULT_BASE_URL}"
         )

@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+from ....utils.logger import logger
 from ....utils.request_utils import merge_headers
 from ..types import ProviderCapability
 from .auth_utils import TokenRefreshManager
@@ -203,7 +204,13 @@ class BaseProvider(ABC):
             f"{self.__class__.__name__} 未实现 embeddings_batch，请使用 embeddings 单条调用"
         )
 
+    def _build_client(self) -> Any:
+        """构建/重建 SDK 客户端（子类按需覆盖；默认无客户端概念）。"""
+        return None
+
     def update_config(self, config: ModelConfig) -> None:
-        """更新配置"""
+        """更新配置并重建客户端（客户端重建委托 `_build_client`）。"""
         self.config = config
         self._token_manager = TokenRefreshManager(config.auth) if config.auth else None
+        self._client = self._build_client()
+        logger.info(f"{type(self).__name__} 配置已更新")

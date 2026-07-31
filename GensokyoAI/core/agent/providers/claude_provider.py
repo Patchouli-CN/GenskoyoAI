@@ -323,12 +323,6 @@ class ClaudeProvider(BaseProvider):
         """Claude 不支持 embeddings"""
         raise NotImplementedError("Anthropic Claude 不提供 embeddings API")
 
-    def update_config(self, config: ModelConfig) -> None:
-        """更新配置并重建客户端"""
-        super().update_config(config)
-        self._client = self._build_client()
-        logger.info("ClaudeProvider 配置已更新")
-
     # ==================== 转换工具方法 ====================
 
     @staticmethod

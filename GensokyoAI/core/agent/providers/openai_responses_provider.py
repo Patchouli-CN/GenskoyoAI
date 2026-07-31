@@ -470,12 +470,6 @@ class OpenAIResponsesProvider(BaseProvider):
             model=model,
         )
 
-    def update_config(self, config: ModelConfig) -> None:
-        """更新配置并重建客户端"""
-        super().update_config(config)
-        self._client = self._build_client()
-        logger.info(f"OpenAIResponsesProvider 配置已更新，base_url: {config.base_url}")
-
     # ==================== 转换方法 ====================
 
     @staticmethod

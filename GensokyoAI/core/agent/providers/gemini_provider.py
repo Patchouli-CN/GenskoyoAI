@@ -288,12 +288,6 @@ class GeminiProvider(BaseProvider):
             model=model,
         )
 
-    def update_config(self, config: ModelConfig) -> None:
-        """更新配置并重建客户端"""
-        super().update_config(config)
-        self._client = self._build_client()
-        logger.info("GeminiProvider 配置已更新")
-
     # ==================== 转换工具方法 ====================
 
     @staticmethod
