@@ -54,12 +54,14 @@ from GensokyoAI.runtime.resource_control import (
     resource_scope,
 )
 from GensokyoAI.runtime.rpc import (
+    _NETWORK_RESOURCE_LEGACY_METHODS,
+    _NETWORK_RESOURCE_PREFIXES,
     NETWORK_IDEMPOTENCY_METHODS,
     NETWORK_REVISION_METHODS,
-    NETWORK_SESSION_METHODS,
     RpcError,
     dispatch_rpc,
     legacy_rpc_methods,
+    network_rpc_requirements,
     rpc_method_specs,
     rpc_methods,
     runtime_error_to_dict,
@@ -243,19 +245,27 @@ class RuntimeService:
             result = await service.handle(method, params)
         return self._attach_resource_ids(result, principal.user_id, agent_id)
 
-    async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _check_tenant_admin_gate(
+        self, params: dict[str, Any], *, technical: str, user_message: str
+    ) -> None:
+        """非 admin 网络调用者禁止注入自定义配置/路径参数（agent/world init 同一道闸门）。"""
         principal = current_principal()
         if not principal.has_role("admin") and any(
             params.get(name) is not None for name in _TENANT_ADMIN_ONLY_PARAMS
         ):
             raise RpcError(
-                "Custom Agent paths and model overrides require the admin role",
+                technical,
                 code="authorization.forbidden",
-                user_message="普通聊天身份只能从服务端角色目录初始化 Agent。",
+                user_message=user_message,
                 recoverable=False,
                 details={"required_role": "admin"},
             )
-        agent_id = params.pop("agent_id", None) or str(uuid4())
+
+    async def _get_or_create_tenant_service(
+        self, user_id: str, agent_id_raw: Any
+    ) -> tuple[RuntimeService, str, tuple[str, str]]:
+        """agent_id 归一化 + 租户服务 get-or-create（上限 + LRU 驱逐 + storage 分配）。"""
+        agent_id = agent_id_raw or str(uuid4())
         if not isinstance(agent_id, str) or not agent_id.strip():
             raise ValueError("Runtime agent_id must be a non-empty string")
         if len(agent_id.strip()) > 128:
@@ -281,6 +291,17 @@ class RuntimeService:
                 storage_root=storage_root,
             )
             self._tenant_services[key] = service
+        return service, agent_id, key
+
+    async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._check_tenant_admin_gate(
+            params,
+            technical="Custom Agent paths and model overrides require the admin role",
+            user_message="普通聊天身份只能从服务端角色目录初始化 Agent。",
+        )
+        service, agent_id, key = await self._get_or_create_tenant_service(
+            user_id, params.pop("agent_id", None)
+        )
         result = await service.handle("agent.init", params)
         self._tenant_last_active[key] = time.monotonic()
         self._save_tenant_manifest(user_id, agent_id, service)
@@ -288,43 +309,14 @@ class RuntimeService:
 
     async def _init_tenant_world(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """网络路径 world.init：World 状态按 (user_id, agent_id) 租户隔离。"""
-        principal = current_principal()
-        if not principal.has_role("admin") and any(
-            params.get(name) is not None for name in _TENANT_ADMIN_ONLY_PARAMS
-        ):
-            raise RpcError(
-                "Custom World config requires the admin role",
-                code="authorization.forbidden",
-                user_message="普通聊天身份只能从服务端默认配置装配 World。",
-                recoverable=False,
-                details={"required_role": "admin"},
-            )
-        agent_id = params.pop("agent_id", None) or str(uuid4())
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError("Runtime agent_id must be a non-empty string")
-        if len(agent_id.strip()) > 128:
-            raise ValueError("Runtime agent_id must not exceed 128 characters")
-        agent_id = agent_id.strip()
-        key = (user_id, agent_id)
-        service = self._tenant_services.get(key)
-        if service is None:
-            owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
-            limit = self._tenant_agent_limit()
-            if owned_count >= limit and not await self._evict_idle_tenant(user_id):
-                raise RpcError(
-                    "Runtime per-user Agent limit exceeded",
-                    code="agent.limit_exceeded",
-                    user_message="当前用户创建的 Agent 数量已达到上限。",
-                    recoverable=True,
-                    details={"maximum": limit},
-                )
-            storage_root = self._tenant_storage_root(user_id, agent_id)
-            service = RuntimeService(
-                self.state.root_dir,
-                tenant_key=key,
-                storage_root=storage_root,
-            )
-            self._tenant_services[key] = service
+        self._check_tenant_admin_gate(
+            params,
+            technical="Custom World config requires the admin role",
+            user_message="普通聊天身份只能从服务端默认配置装配 World。",
+        )
+        service, agent_id, key = await self._get_or_create_tenant_service(
+            user_id, params.pop("agent_id", None)
+        )
         result = await service.handle("world.init", params)
         self._tenant_last_active[key] = time.monotonic()
         self._save_tenant_manifest(user_id, agent_id, service)
@@ -488,36 +480,14 @@ class RuntimeService:
 
     @staticmethod
     def _is_tenant_method(method: str) -> bool:
-        return method.startswith(
-            (
-                "agent.",
-                "session.",
-                "memory.",
-                "scene.",
-                "initiative_timer.",
-                "model.",
-                "media.",
-                "message.",
-                "world.",
-            )
-        ) or method in {
-            "send_message",
-            "send_message_stream",
-            "create_session",
-            "list_sessions",
-            "current_session",
-            "resume_session",
-            "delete_session",
-            "export_session",
-            "rename_session",
-            "rollback_session",
-        }
+        # 常量单一事实源在 rpc.py（网络资源前缀与 legacy 方法名），勿在此另写一份
+        return method.startswith(_NETWORK_RESOURCE_PREFIXES) or method in (
+            _NETWORK_RESOURCE_LEGACY_METHODS
+        )
 
     @staticmethod
     def _requires_explicit_session(method: str) -> bool:
-        return method.startswith(("memory.", "scene.", "initiative_timer.")) or method in (
-            NETWORK_SESSION_METHODS
-        )
+        return "session_id" in network_rpc_requirements(method)
 
     @staticmethod
     def _requires_expected_revision(method: str) -> bool:
@@ -1204,23 +1174,33 @@ class RuntimeService:
                 "remaining_sessions": remaining_sessions,
             }
 
-    async def export_session(self, session_id: str | None = None) -> dict[str, Any]:
-        agent = self._require_agent()
-        manager = agent.session_manager
+    @staticmethod
+    def _resolve_target_session(
+        manager: Any, session_id: str | None, action: str
+    ) -> tuple[Any, Any]:
+        """解析目标会话（session_id 缺省取当前会话），返回 (session, current)。
+
+        action 仅用于错误文案（"No active session to {action}"）。
+        """
         current = manager.get_current_session()
         target_session_id = session_id or (current.session_id if current else None)
         if not target_session_id:
-            raise ValueError("No active session to export")
-
-        if current and current.session_id == target_session_id:
-            await manager.save_current_async()
-
+            raise ValueError(f"No active session to {action}")
         session = manager.get_session(target_session_id)
         if session is None:
             raise ValueError(f"Session does not exist: {target_session_id}")
+        return session, current
 
-        messages = await manager.persistence.load_messages_async(target_session_id)
-        is_current = bool(current and current.session_id == target_session_id)
+    async def export_session(self, session_id: str | None = None) -> dict[str, Any]:
+        agent = self._require_agent()
+        manager = agent.session_manager
+        session, current = self._resolve_target_session(manager, session_id, "export")
+
+        if current and current.session_id == session.session_id:
+            await manager.save_current_async()
+
+        messages = await manager.persistence.load_messages_async(session.session_id)
+        is_current = bool(current and current.session_id == session.session_id)
         character_name = agent.config.character.name if agent.config.character else None
         return {
             "format": SESSION_EXPORT_FORMAT,
@@ -1256,16 +1236,10 @@ class RuntimeService:
 
         agent = self._require_agent()
         manager = agent.session_manager
-        current = manager.get_current_session()
-        target_session_id = session_id or (current.session_id if current else None)
-        if not target_session_id:
-            raise ValueError("No active session to rename")
+        session, _ = self._resolve_target_session(manager, session_id, "rename")
 
         async with self._lock:
-            session = manager.get_session(target_session_id)
-            if session is None:
-                raise ValueError(f"Session does not exist: {target_session_id}")
-            self._assert_session_revision(manager, target_session_id, expected_revision)
+            self._assert_session_revision(manager, session.session_id, expected_revision)
             session.metadata["title"] = normalized_title
             session.revision += 1
             session.touch()
@@ -1281,17 +1255,10 @@ class RuntimeService:
         """Return one stable page of editable messages for a session."""
         agent = self._require_agent()
         manager = agent.session_manager
-        current = manager.get_current_session()
-        target_session_id = session_id or (current.session_id if current else None)
-        if not target_session_id:
-            raise ValueError("No active session to read messages")
-
-        session = manager.get_session(target_session_id)
-        if session is None:
-            raise ValueError(f"Session does not exist: {target_session_id}")
+        session, _ = self._resolve_target_session(manager, session_id, "read messages")
 
         limit = self._validate_page_limit(limit, maximum=500)
-        messages = manager.persistence.load_messages(target_session_id)
+        messages = manager.persistence.load_messages(session.session_id)
         start = self._cursor_start(
             [str(message.get("message_id", "")) for message in messages],
             cursor,
@@ -1315,25 +1282,18 @@ class RuntimeService:
         """Replace all messages in a session after frontend-side edits."""
         agent = self._require_agent()
         manager = agent.session_manager
-        current = manager.get_current_session()
-        target_session_id = session_id or (current.session_id if current else None)
-        if not target_session_id:
-            raise ValueError("No active session to replace messages")
-
-        session = manager.get_session(target_session_id)
-        if session is None:
-            raise ValueError(f"Session does not exist: {target_session_id}")
+        session, _ = self._resolve_target_session(manager, session_id, "replace messages")
 
         normalized_messages = [
             self._resolve_persisted_message(message)
             for message in self._normalize_session_messages(messages)
         ]
         async with self._lock:
-            self._assert_session_revision(manager, target_session_id, expected_revision)
-            if not manager.replace_messages(target_session_id, normalized_messages):
-                raise ValueError(f"Session does not exist: {target_session_id}")
-            updated_session = manager.get_session(target_session_id) or session
-            updated_messages = manager.persistence.load_messages(target_session_id)
+            self._assert_session_revision(manager, session.session_id, expected_revision)
+            if not manager.replace_messages(session.session_id, normalized_messages):
+                raise ValueError(f"Session does not exist: {session.session_id}")
+            updated_session = manager.get_session(session.session_id) or session
+            updated_messages = manager.persistence.load_messages(session.session_id)
             return {
                 "replaced": True,
                 **self._session_messages_payload(manager, updated_session, updated_messages),
@@ -1356,14 +1316,10 @@ class RuntimeService:
         ):
             agent = await self._ensure_started()
             manager = agent.session_manager
-            current = manager.get_current_session()
-            target_session_id = session_id or (current.session_id if current else None)
-            if not target_session_id:
-                raise ValueError("No active session to regenerate messages")
-
-            session = manager.get_session(target_session_id)
-            if session is None:
-                raise ValueError(f"Session does not exist: {target_session_id}")
+            session, current = self._resolve_target_session(
+                manager, session_id, "regenerate messages"
+            )
+            target_session_id = session.session_id
             self._assert_session_revision(manager, target_session_id, expected_revision)
 
             original_messages = manager.persistence.load_messages(target_session_id)
@@ -3180,9 +3136,7 @@ class RuntimeService:
     ) -> dict[str, Any] | None:
         if idempotency_key is None:
             return None
-        key = idempotency_key.strip()
-        if not key or len(key) > 128:
-            raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        key = self._normalize_idempotency_key(idempotency_key)
         replay = self._lookup_operation_replay(
             session_id, key, request_fingerprint=request_fingerprint
         )
@@ -3436,9 +3390,7 @@ class RuntimeService:
     ) -> dict[str, Any]:
         if not session_id:
             return {}
-        key = idempotency_key.strip() if idempotency_key else None
-        if key is not None and (not key or len(key) > 128):
-            raise ValueError("Runtime idempotency_key must contain 1 to 128 characters")
+        key = self._normalize_idempotency_key(idempotency_key) if idempotency_key else None
         manager = agent.session_manager
         messages = manager.get_working_memory(session_id).get_context()
         assistant_index = next(
