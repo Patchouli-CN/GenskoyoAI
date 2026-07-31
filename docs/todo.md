@@ -235,6 +235,26 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.11 复读烦躁模型（2026-07-31，用户定稿，未提交）
+
+- 起因：群友反复刷「转」「停」等无意义内容，角色每条都认真回复，很 bot 且烧 token。
+- 机制（接入层状态机，纯内存、零 token）：`backends/nb2/repeat_guard.py` 的
+  `RepeatGuard` 按 (会话, 用户) 追踪——与近期消息窗口判重（归一化后相同或
+  difflib 相似度 ≥ similarity）连击 +1，正常发言清零；连击 ≥ warn_streak 注入
+  厌烦上下文（角色回复转冷淡），≥ mute_streak 注入「最后一句话」上下文
+  （角色当面表态不理他，符合性格），随后进入 mute_minutes 冷却：期间该用户
+  消息在适配器侧静默丢弃、不进 Runtime（零 token）；冷却结束自动消气从零计数。
+- 阈值在**全局配置** `repeat_guard` 节（RepeatGuardConfig：enabled/similarity/
+  history_size/warn_streak/mute_streak/mute_minutes，warn > mute 校验报错）；
+  nb2 经 `RuntimeHost.get_app_config()` 读取（优先已装配租户配置，否则兜底链现加载）。
+- 厌烦/告别文案不走罐头文本：prompts.py 的 `build_repeat_annoyance_context` /
+  `build_repeat_farewell_context` 注入 system_contexts，由角色用性格表达；
+  私聊同样生效（按 QQ 号分桶）。
+- 设计说明：心情四维模型只门控主动发言，被动回复本就不经它，所以烦躁判定
+  放在接入层（发送者身份只存在于接入层）——这与「心情模型」是同一意图的
+  不同落点，勿把判重挪进 Runtime。
+- 测试：tests/test_repeat_guard.py（状态机全转移、隔离、归一化、配置解析/校验/模板加载）。
+
 ## 8.10 nb2 指令系统四级权限模型（2026-07-30，未提交）
 
 - `backends/nb2/commands.py`：`PermissionLevel`（VISITOR=0 < USER=1 < ADMIN=2 < OWNER=3，

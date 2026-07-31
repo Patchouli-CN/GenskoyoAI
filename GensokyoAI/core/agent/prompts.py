@@ -347,3 +347,28 @@ def build_member_impression_prompt(
 - 写下 TA 给你的感觉、你们聊到的事、你以后想怎么称呼或对待 TA；
 - 不要动作描写、不要引号、不要解释你在做什么；
 - 只输出这段备注本身。"""
+
+
+def build_repeat_annoyance_context(member_label: str, streak: int) -> str:
+    """复读厌烦注入（解析方：无，随本轮消息注入 system_contexts，不写入会话）。
+
+    连击达到 warn_streak 后每轮注入；角色用自己的性格把「烦了」表达出来。
+    """
+    return (
+        f"【群内动态】{member_label} 已经连续刷了很多次类似的话（第 {streak} 次），"
+        "你开始感到厌烦了：回复可以更冷淡、简短、敷衍，或直接表达不想继续这个话题"
+        "（符合你的性格）。"
+    )
+
+
+def build_repeat_farewell_context(member_label: str) -> str:
+    """复读「最后一句话」注入（解析方：无，随本轮消息注入 system_contexts）。
+
+    连击达到 mute_streak：本轮之后适配器将进入冷却、不再把此人的消息送进来，
+    所以这句话就是当面表态的「不理你」。
+    """
+    return (
+        f"【群内动态】{member_label} 反复刷类似的话已经让你烦透了，你决定暂时不理他。"
+        "用一两句话表达你的不耐烦或厌倦（符合你的性格）；"
+        "说完之后的一段时间里你将不再回应他。"
+    )

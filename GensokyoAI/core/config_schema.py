@@ -143,6 +143,22 @@ class InitiativeTimerConfig(Struct):
     drive_threshold: float = 0.6  # total_drive（0~1 加权）超过该值即主动发言
 
 
+class RepeatGuardConfig(Struct):
+    """复读烦躁模型：同一用户连续复读/刷屏时，角色逐渐厌烦直至暂时不理。
+
+    判重与连击计数在接入层（如 nb2 QQ 适配器）按发送者进行——发送者身份只
+    存在于接入层；Runtime/Agent 只消费注入的厌烦上下文。被「不理」期间的
+    消息在适配器侧直接丢弃，不进 Runtime，零 token 消耗。
+    """
+
+    enabled: bool = True
+    similarity: float = 0.75  # 与近期消息相似度 ≥ 该值判为复读（0~1）
+    history_size: int = 5  # 每用户参与判重的近期消息条数
+    warn_streak: int = 3  # 连续复读达到该次数：注入厌烦情绪，回复转冷淡
+    mute_streak: int = 5  # 连续复读达到该次数：角色最后一句话表态，随后进入「不理」冷却
+    mute_minutes: int = 10  # 「不理」冷却时长（分钟），期间该用户消息直接忽略
+
+
 class WebSearchAPIConfig(Struct):
     """自有 Web search API Provider 配置。"""
 
@@ -371,6 +387,7 @@ class AppConfig(Struct):
     session: SessionConfig = field(default_factory=SessionConfig)
     think_engine: ThinkEngineConfig = field(default_factory=ThinkEngineConfig)
     initiative_timer: InitiativeTimerConfig = field(default_factory=InitiativeTimerConfig)
+    repeat_guard: RepeatGuardConfig = field(default_factory=RepeatGuardConfig)
     resource_control: ResourceControlConfig = field(default_factory=ResourceControlConfig)
     world: WorldConfig = field(default_factory=WorldConfig)
 

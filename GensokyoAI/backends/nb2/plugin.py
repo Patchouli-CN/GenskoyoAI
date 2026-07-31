@@ -26,7 +26,11 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
-from ...core.agent.prompts import build_member_impression_prompt
+from ...core.agent.prompts import (
+    build_member_impression_prompt,
+    build_repeat_annoyance_context,
+    build_repeat_farewell_context,
+)
 from ...runtime.host import RuntimeHost, RuntimeRpcError
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
@@ -37,6 +41,7 @@ from .commands import (
     resolve_level,
 )
 from .config import Nb2Config
+from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
 
 _config = Nb2Config.from_env()
@@ -48,6 +53,7 @@ _initialized: set[str] = set()  # 本进程内已成功 ensure_agent 的 agent_i
 _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ号)
 _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
 _impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（防并发重复生成）
+_repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按全局配置构建）
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
@@ -181,9 +187,19 @@ _driver = get_driver()
 
 @_driver.on_startup
 async def _on_startup() -> None:
+    host = _require_host()
     if _config.member_memory:
         # 让角色可以自行更新群友印象（注入当前及后续租户的工具注册表）
-        await _require_host().register_adapter_tool(update_member_impression)
+        await host.register_adapter_tool(update_member_impression)
+    global _repeat_guard
+    guard_config = host.get_app_config().repeat_guard
+    if guard_config.enabled:
+        _repeat_guard = RepeatGuard.from_config(guard_config)
+    repeat_guard_desc = (
+        f"开（厌烦 {_repeat_guard.warn_streak}/不理 {_repeat_guard.mute_streak} 连击）"
+        if _repeat_guard
+        else "关"
+    )
     logger.info(
         f"[nb2] 适配器已加载: 角色={_config.character}, "
         f"主动发言={'开' if _config.initiative else '关'}, "
@@ -191,6 +207,7 @@ async def _on_startup() -> None:
         f"分段回复={'开' if _config.split_reply else '关'}, "
         f"说话人标记={'开' if _config.sender_label else '关'}, "
         f"群友印象={'开' if _config.member_memory else '关'}, "
+        f"复读防护={repeat_guard_desc}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -355,6 +372,16 @@ async def _chat(
     text = text.strip()
     if not text or text.startswith("/"):
         return  # 忽略纯表情/图片消息与未登记的指令文本（指令已在 handler 层分发）
+    verdict = None
+    if _repeat_guard is not None and member_qq is not None:
+        verdict = _repeat_guard.check(key, member_qq, text)
+        if verdict.verdict is RepeatVerdict.MUTED:
+            # 「不理」冷却中：静默丢弃，不进 Runtime（零 token），模拟真人已读不回
+            logger.info(
+                f"[nb2] {agent_id} 的 {member_name or member_qq} 处于「不理」冷却"
+                f"（剩 {verdict.remaining_seconds:.0f} 秒），消息已忽略"
+            )
+            return
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
@@ -363,6 +390,14 @@ async def _chat(
         impression = _members.get(member_qq)
         if impression:
             contexts.append(f"【你对 {member_name} 的印象】\n{impression}")
+    if verdict is not None:
+        member_label = member_name or str(member_qq)
+        if verdict.verdict is RepeatVerdict.ANNOYED:
+            # 厌烦区：角色回复自然转冷淡（由性格决定怎么表达）
+            contexts.append(build_repeat_annoyance_context(member_label, verdict.streak))
+        elif verdict.verdict is RepeatVerdict.FAREWELL:
+            # 最后一句话：本轮表态后进入「不理」冷却
+            contexts.append(build_repeat_farewell_context(member_label))
     reply = ""
     async with _lock_for(key):
         try:

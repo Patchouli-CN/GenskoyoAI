@@ -15,6 +15,7 @@ from .config_schema import (
     LogLevel,
     MemoryConfig,
     ModelConfig,
+    RepeatGuardConfig,
     ResourceControlConfig,
     SceneConfig,
     SessionConfig,
@@ -232,6 +233,8 @@ class ConfigValidator:
             self._validate_think_engine_data(data.get("think_engine") or {}, diagnostics)
         if "initiative_timer" in data:
             self._validate_initiative_timer_data(data.get("initiative_timer") or {}, diagnostics)
+        if "repeat_guard" in data:
+            self._validate_repeat_guard_data(data.get("repeat_guard") or {}, diagnostics)
         if "resource_control" in data:
             self._validate_resource_control_data(data.get("resource_control") or {}, diagnostics)
         if "world" in data:
@@ -1219,6 +1222,48 @@ class ConfigValidator:
                 )
             )
 
+    def _validate_repeat_guard_data(self, data: Any, diagnostics: list[ConfigDiagnostic]) -> None:
+        self._validate_object("repeat_guard", data, diagnostics)
+        if not isinstance(data, dict):
+            return
+        self._validate_unknown_fields(
+            "repeat_guard", data, self._struct_field_names(RepeatGuardConfig), diagnostics
+        )
+        self._validate_numeric_range(
+            "repeat_guard.similarity",
+            data.get("similarity"),
+            diagnostics,
+            minimum=0,
+            maximum=1,
+        )
+        self._validate_numeric_range(
+            "repeat_guard.history_size", data.get("history_size"), diagnostics, minimum=1
+        )
+        self._validate_numeric_range(
+            "repeat_guard.warn_streak", data.get("warn_streak"), diagnostics, minimum=1
+        )
+        self._validate_numeric_range(
+            "repeat_guard.mute_streak", data.get("mute_streak"), diagnostics, minimum=1
+        )
+        self._validate_numeric_range(
+            "repeat_guard.mute_minutes", data.get("mute_minutes"), diagnostics, minimum=1
+        )
+        warn_streak = data.get("warn_streak")
+        mute_streak = data.get("mute_streak")
+        if (
+            isinstance(warn_streak, (int, float))
+            and isinstance(mute_streak, (int, float))
+            and warn_streak > mute_streak
+        ):
+            diagnostics.append(
+                self._error(
+                    "repeat_guard.mute_streak",
+                    "mute_streak must be >= warn_streak",
+                    "「不理」阈值应不小于厌烦阈值，否则角色还没来得及冷淡就直接不理人了。",
+                    code="config.range.cross_field",
+                )
+            )
+
     @staticmethod
     def _validate_hesitation_delay_seconds(value: Any, diagnostics: list[ConfigDiagnostic]) -> None:
         if value is None:
@@ -1539,6 +1584,7 @@ class ConfigValidator:
             "session",
             "think_engine",
             "initiative_timer",
+            "repeat_guard",
             "resource_control",
             "world",
             "character",

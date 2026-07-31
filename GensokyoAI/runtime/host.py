@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ..core.config import ConfigLoader
+from ..core.config_schema import AppConfig
 from ..utils.logger import logger
 from .auth import RuntimePrincipal, reset_current_principal, set_current_principal
 from .resource_control import ResourceLimitError
@@ -215,6 +217,18 @@ class RuntimeHost:
             return
         for func, name, parallel_safe in self._adapter_tools:
             agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
+
+    def get_app_config(self) -> AppConfig:
+        """读取全局 AppConfig（优先取已装配租户 Agent 的配置，否则按兜底链现加载）。
+
+        供适配器读取全局配置节（如 repeat_guard 复读烦躁阈值）；
+        同一进程内所有租户共享同一份全局配置文件。
+        """
+        for service in self._service._tenant_services.values():
+            agent = service.state.agent
+            if agent is not None:
+                return agent.config
+        return ConfigLoader().load(self._service._fallback_config_path())
 
     async def get_quota(self, character: str) -> dict[str, Any] | None:
         """查询 Provider 账户额度（账户级；借元租户的模型客户端，不支持返回 None）。"""

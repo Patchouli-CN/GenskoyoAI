@@ -203,6 +203,18 @@ initiative_timer:
   # 旧的 fallback_* 强制兜底链、hesitation_* 犹豫链与 drive_* 累积键已删除（旧键仅警告迁移）。
   drive_threshold: 0.6              # total_drive（0~1 加权）超过该值即主动发言
 
+# 复读烦躁模型（§8.11）：同一用户连续复读/刷屏时，角色逐渐厌烦直至暂时不理。
+# 判重与连击计数在接入层（如 nb2 QQ 适配器）按发送者进行——被「不理」期间的消息
+# 在适配器侧直接丢弃，不进 Runtime，零 token 消耗；厌烦区与「最后一句话」都以
+# 注入上下文的方式交给角色用符合性格的语气表达。
+repeat_guard:
+  enabled: true
+  similarity: 0.75        # 与近期消息相似度 ≥ 该值判为复读（0~1）
+  history_size: 5         # 每用户参与判重的近期消息条数
+  warn_streak: 3          # 连续复读达到该次数：注入厌烦情绪，回复转冷淡
+  mute_streak: 5          # 连续复读达到该次数：角色最后一句话表态，随后进入「不理」冷却
+  mute_minutes: 10        # 「不理」冷却时长（分钟），期间该用户消息直接忽略
+
 # 工具配置
 tool:
   enabled: true
