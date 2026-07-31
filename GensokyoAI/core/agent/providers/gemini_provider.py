@@ -157,6 +157,7 @@ class GeminiProvider(BaseProvider):
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 Gemini API"""
+        options = options or {}
         genai_types = self._load_genai_types()
         config, gemini_contents = self._build_content_config(
             messages, tools, options, genai_types
