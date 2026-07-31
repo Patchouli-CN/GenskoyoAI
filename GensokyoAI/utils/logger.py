@@ -57,13 +57,18 @@ class LoguruHandler(std_logging.Handler):
         # 关闭噪音：Ctrl+C / 服务停机时，uvicorn 各 logger（run_asgi / send / error…）
         # 会把 KeyboardInterrupt / CancelledError 以「Exception in ASGI application」
         # 刷整段堆栈——这两个异常在 uvicorn 里只会是关闭信号与任务取消的下游，直接丢弃
-        exc_type = record.exc_info[0] if record.exc_info else None
-        if (
-            record.name.split(".")[0] == "uvicorn"
-            and exc_type is not None
-            and issubclass(exc_type, (KeyboardInterrupt, asyncio.CancelledError))
-        ):
-            return
+        if record.name.split(".")[0] == "uvicorn":
+            exc_type = record.exc_info[0] if record.exc_info else None
+            if exc_type is not None and issubclass(
+                exc_type, (KeyboardInterrupt, asyncio.CancelledError)
+            ):
+                return
+            # 变体：traceback 以纯文本记入（无 exc_info），同样只在关闭级联中出现
+            message = record.getMessage()
+            if message.startswith("Traceback") and (
+                "KeyboardInterrupt" in message or "asyncio.exceptions.CancelledError" in message
+            ):
+                return
 
         # 把其他库的 DEBUG 降级为我们的 TRACE，避免标准库 DEBUG 刷屏
         if record.levelno == std_logging.DEBUG:
