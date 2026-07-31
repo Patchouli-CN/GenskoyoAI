@@ -286,8 +286,10 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             self.assertEqual(thought, "重新组织后的重点")
             self.assertIsNotNone(model_client.last_messages)
             assert model_client.last_messages is not None
-            self.assertIn("待表达意图摘要", model_client.last_messages[0]["content"])
+            self.assertIn("你想说的内容", model_client.last_messages[0]["content"])
             self.assertIn("想补充一点", model_client.last_messages[0]["content"])
+            # 防回归：提示词不得再引入机制词汇（会漏进发给用户的话）
+            self.assertNotIn("主动定时器到点", model_client.last_messages[0]["content"])
 
         asyncio.run(run())
 

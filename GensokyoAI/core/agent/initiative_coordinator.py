@@ -176,7 +176,7 @@ class InitiativeCoordinator:
         messages.append(
             {
                 "role": "user",
-                "content": "（没有新用户输入，这是你自己决定要说的话，请按照上面的摘要和内部思考自然地主动开口。）",
+                "content": "（此刻没有新的用户消息。把上面想好的内容，用你自己的口吻自然地说出来——就像你刚好想到了、随口开口那样。）",
             }
         )
         max_tokens = agent.config.think_engine.initiative_max_tokens

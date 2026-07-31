@@ -235,6 +235,23 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.15 主动消息提示词去机制化（2026-07-31，用户报「暴露内部」）
+
+- 起因：QQ 主动消息漏出「……也罢，既然主动开口的时机到了——」——说话前思考
+  的元叙述被学进了发送文本。根因链：`build_pre_speak_thought_prompt` 用
+  「主动定时器到点了」机械框架起笔 → 思考文本自带机制词汇 → 逐字注入
+  `build_initiative_message_context` → 生成时复述进用户可见消息。
+- 修复（全链路提示词去机制词汇，纯 prompts 改动）：
+  - pre_speak_thought：去掉「主动定时器到点」框架，改为「你之前就想找用户说点
+    什么，现在觉得是时候开口了」；明令思考中不得出现「定时器/主动开口/主动发言/
+    时机到了/系统」等幕后词汇（思考会参与后续生成）。
+  - initiative_message_context：标题改「自然开口」；摘要/思考标注「参考，不要
+    原样复述」；明令第一句不要承接内部思考过渡（「也罢」「既然……」之类）。
+  - speaking_drive：message 字段禁「主动开口/主动发言」元描述词汇。
+  - 合成 user 兜底消息（initiative_coordinator）同步去「主动开口」措辞。
+- 测试：test_think_engine 同步新文案 + 防回归断言（不得再现「主动定时器到点」）。
+  基线：690 passed, 3 subtests passed。
+
 ## 8.14 nb2 指令对接框架 commands 体系 + 框架四级权限（2026-07-31，用户定稿）
 
 - 起因：nb2 指令分发是自建管线，没有框架 executor 的「issued command」执行日志；
