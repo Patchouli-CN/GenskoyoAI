@@ -32,6 +32,7 @@ from .motivation_evaluator import MotivationProfile
 from .prompts import (
     build_emotion_tone_context,
     build_long_term_think_prompt,
+    build_memory_distill_prompt,
     build_pre_speak_thought_prompt,
     build_speaking_drive_prompts,
 )
@@ -39,6 +40,7 @@ from .types import DECISION_MIN_MAX_TOKENS, ProviderCapability
 
 # 决策 JSON 解析相关（从原 InitiativeTimer 迁移）
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+_JSON_ARRAY_PATTERN = re.compile(r"\[.*\]", re.DOTALL)
 
 # 决策/思考类调用的 max_tokens 下限统一走 types.DECISION_MIN_MAX_TOKENS：
 # thinking 模型的内部思考会消耗 max_tokens 预算（实测 kimi-k2.5 在 300 时
@@ -156,6 +158,8 @@ class ThinkEngine:
         # 八维情绪状态机（角色卡 emotion_baseline 为初始/衰减基线）：
         # 由对话欲评估中 LLM 顺带自评驱动（零新增调用），喂给回复语气与评估输入
         self.emotion_state = EmotionState(emotion_baseline)
+        # 定期记忆蒸馏的轮次计数（§8.29）
+        self._distill_pending_turns = 0
 
         # 长期思考状态
         self._running = False
@@ -166,6 +170,7 @@ class ThinkEngine:
     def update_semantic_memory(self, semantic_memory: SemanticMemoryManager) -> None:
         """会话切换后就地更新语义记忆引用（不中断长期思考循环）。"""
         self.semantic_memory = semantic_memory
+        self._distill_pending_turns = 0  # 换会话重新计蒸馏轮次
 
     def emotion_context_line(self) -> str:
         """当前情绪状态的一行描述（全平稳时为空串，不注入）。"""
@@ -341,6 +346,114 @@ class ThinkEngine:
 
         except Exception as e:
             logger.error(f"长期思考失败: {e}")
+
+    # ==================== 定期记忆蒸馏（§8.29） ====================
+
+    def note_turn_for_distillation(self, recent_messages: list[dict[str, Any]]) -> None:
+        """每完成一轮回复计一次；达到 memory.distill_turns 时后台蒸馏一次。
+
+        确定性周期触发（替代已删除的 AI 主动记忆工具）；
+        调用方以主动机制总闸隔离元租户与 World Actor。
+        """
+        memory_config = getattr(self.semantic_memory, "config", None)
+        if not getattr(memory_config, "distill_enabled", False):
+            return
+        self._distill_pending_turns += 1
+        if self._distill_pending_turns < getattr(memory_config, "distill_turns", 10):
+            return
+        self._distill_pending_turns = 0
+        asyncio.create_task(self.distill_memories(recent_messages))
+
+    async def distill_memories(self, recent_messages: list[dict[str, Any]]) -> int:
+        """从近期工作记忆提炼「珍贵记忆」写入语义记忆；返回写入条数。"""
+        lines = []
+        for item in recent_messages:
+            role = item.get("role")
+            content = item.get("content")
+            if role not in {"user", "assistant"} or not isinstance(content, str):
+                continue
+            label = "User" if role == "user" else f"({self.character_name})"
+            lines.append(f"{label}: {content.strip()}")
+        if not lines:
+            return 0
+        conversation = "\n".join(lines)[-4000:]
+        prompt = build_memory_distill_prompt(self.character_name, conversation)
+        try:
+            max_tok = max(300, _DECISION_MIN_MAX_TOKENS)
+            response = await self.model_client.chat(
+                messages=[{"role": "system", "content": prompt}],
+                options={
+                    "temperature": 0.4,
+                    "num_predict": max_tok,
+                    "max_tokens": max_tok,
+                },
+                call_context="think_engine",
+            )
+            content = response.message.content
+            text = content.strip() if isinstance(content, str) else ""
+        except Exception as error:
+            logger.error(f"[ThinkEngine] 记忆蒸馏调用失败: {error}")
+            return 0
+
+        items = self._parse_distill_items(text)
+        written = 0
+        for item in items:
+            try:
+                await self.semantic_memory.add_async(
+                    content=item["content"],
+                    importance=item["importance"],
+                    emotional_valence=item["emotional_valence"],
+                    topic_name=item.get("topic"),
+                )
+                written += 1
+            except Exception as error:
+                logger.warning(f"[ThinkEngine] 蒸馏记忆写入失败: {error}")
+        if written:
+            logger.info(f"[ThinkEngine] 定期蒸馏完成：写入 {written} 条珍贵记忆")
+        else:
+            logger.debug("[ThinkEngine] 定期蒸馏：本轮没有值得记住的内容")
+        return written
+
+    @staticmethod
+    def _parse_distill_items(text: str) -> list[dict[str, Any]]:
+        """解析蒸馏 JSON 数组（最多 3 条；畸形一律为空）。"""
+        match = _JSON_ARRAY_PATTERN.search(text)
+        raw = match.group(0) if match else text
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning(f"[ThinkEngine] 蒸馏结果 JSON 解析失败: {raw[:120]!r}")
+            return []
+        if not isinstance(data, list):
+            return []
+
+        items = []
+        for entry in data[:3]:
+            if not isinstance(entry, dict):
+                continue
+            content = str(entry.get("content") or "").strip()
+            if not content:
+                continue
+            raw_importance = entry.get("importance")
+            importance = (
+                max(0.0, min(1.0, float(raw_importance) / 10.0))
+                if isinstance(raw_importance, int | float) and not isinstance(raw_importance, bool)
+                else 0.5
+            )
+            valence = entry.get("emotional_valence")
+            items.append(
+                {
+                    "content": content,
+                    "importance": importance,
+                    "emotional_valence": (
+                        max(-1.0, min(1.0, float(valence)))
+                        if isinstance(valence, int | float) and not isinstance(valence, bool)
+                        else 0.0
+                    ),
+                    "topic": str(entry.get("topic") or "").strip() or None,
+                }
+            )
+        return items
 
     # ==================== 短期思考（回复后主动决策）====================
 

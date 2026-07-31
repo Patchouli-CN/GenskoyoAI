@@ -202,6 +202,33 @@ def build_emotion_tone_context(emotion_line: str, tendency: str = "") -> str:
     return "\n".join(parts)
 
 
+def build_memory_distill_prompt(character_name: str, conversation_text: str) -> str:
+    """定期记忆蒸馏提示词（解析方：think_engine.distill_memories，JSON 数组契约）。
+
+    输出契约：原始 JSON 数组，0~3 项，每项
+    {"content": str, "importance": 1~10, "emotional_valence": -1~1, "topic": str(可选)}；
+    没有值得记的输出 []。改字段必须两边同步。
+    """
+    return f"""你是 {character_name}。定期回顾自己最近的对话，把真正值得长期记住的东西沉淀下来。
+
+【最近对话】
+{conversation_text}
+
+请提炼 0~3 条「珍贵记忆」——只记这些：
+- 用户透露的重要事实（偏好、习惯、忌讳、身份、承诺）
+- 关系中的关键变化（约定、矛盾、重要委托）
+- 对你有情感重量的事件（开心的、难过的、在意的）
+
+不要记：日常寒暄、你自己说过的话、一次性琐事、从上下文直接就能看到的东西。
+每条记忆用你 {character_name} 的第一人称写一句简短的话；
+importance 填 1~10 的整数，emotional_valence 填 -1.0~1.0；
+没有值得记的，输出空数组 []。
+
+只输出一个原始 JSON 数组，每项形如
+{{"content": "一句话记忆", "importance": 5, "emotional_valence": 0.0, "topic": "话题名（可省略）"}}
+不要输出 Markdown 代码块、解释或任何前后缀。"""
+
+
 def build_initiative_continue_cue() -> str:
     """主动消息生成的兜底 user 消息（解析方：无，让模型在工作记忆末尾继续）。"""
     return (

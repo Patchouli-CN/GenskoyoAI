@@ -105,6 +105,10 @@ class MemoryConfig(Struct):
     auto_memory_enabled: bool = True
     # 自动记忆模型；None = 跟随主模型。当前无消费方（预留字段）。
     auto_memory_model: str | None = None
+    # 定期记忆蒸馏（§8.29）：每 distill_turns 轮对话后，从近期工作记忆自动
+    # 提炼「珍贵记忆」写入语义记忆（确定性触发，替代已删除的 AI 主动记忆工具）
+    distill_enabled: bool = True
+    distill_turns: int = 10
 
     topic_generation: TopicGenerationConfig = field(default_factory=TopicGenerationConfig)
 

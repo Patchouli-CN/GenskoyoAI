@@ -642,6 +642,9 @@ class ConfigValidator:
             minimum=0,
             maximum=1,
         )
+        self._validate_numeric_range(
+            "memory.distill_turns", data.get("distill_turns"), diagnostics, minimum=1
+        )
         topic_generation = data.get("topic_generation")
         if topic_generation is not None:
             self._validate_object("memory.topic_generation", topic_generation, diagnostics)

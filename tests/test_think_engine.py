@@ -170,6 +170,104 @@ class ThinkEngineWalkTests(unittest.TestCase):
         asyncio.run(run())
 
 
+class ThinkEngineDistillTests(unittest.TestCase):
+    """定期记忆蒸馏（§8.29）：轮次计数触发 + JSON 解析写入。"""
+
+    def _make_engine(self, model_client, semantic_memory):
+
+        return ThinkEngine(
+            semantic_memory=semantic_memory,
+            model_client=model_client,
+            event_bus=EventBus(enable_trace=False),
+            character_name="西行寺幽幽子",
+            config=ThinkEngineConfig(),
+        )
+
+    def _fake_memory(self, enabled=True, turns=2):
+        from types import SimpleNamespace
+
+        class _FakeMemory:
+            def __init__(self):
+                self.config = SimpleNamespace(
+                    distill_enabled=enabled, distill_turns=turns
+                )
+                self.added = []
+                self.store = SimpleNamespace(get_all_topics=lambda: [])
+
+            async def add_async(self, content, importance, emotional_valence, topic_name=None):
+                self.added.append(
+                    {
+                        "content": content,
+                        "importance": importance,
+                        "emotional_valence": emotional_valence,
+                        "topic_name": topic_name,
+                    }
+                )
+                return SimpleNamespace(id="t1", name=topic_name or "话题", message_ids=["m1"])
+
+        return _FakeMemory()
+
+    def test_note_turn_fires_at_threshold_and_writes(self):
+        async def run():
+            model_client = _FakeModelClient(
+                '[{"content": "User 爱吃樱饼", "importance": 8, '
+                '"emotional_valence": 0.6, "topic": "偏好"}]'
+            )
+            memory = self._fake_memory(enabled=True, turns=2)
+            engine = self._make_engine(model_client, memory)
+            recent = [{"role": "user", "content": "我喜欢樱饼"}]
+
+            engine.note_turn_for_distillation(recent)  # 1/2：不触发
+            self.assertEqual(memory.added, [])
+            self.assertEqual(engine._distill_pending_turns, 1)
+
+            engine.note_turn_for_distillation(recent)  # 2/2：后台触发
+            self.assertEqual(engine._distill_pending_turns, 0)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(len(memory.added), 1)
+            self.assertEqual(memory.added[0]["importance"], 0.8)
+            self.assertEqual(memory.added[0]["emotional_valence"], 0.6)
+            self.assertEqual(memory.added[0]["topic_name"], "偏好")
+
+        asyncio.run(run())
+
+    def test_note_turn_disabled_by_config(self):
+        memory = self._fake_memory(enabled=False, turns=1)
+        engine = self._make_engine(_FakeModelClient("[]"), memory)
+        engine.note_turn_for_distillation([{"role": "user", "content": "x"}])
+        self.assertEqual(engine._distill_pending_turns, 0)
+        self.assertEqual(memory.added, [])
+
+    def test_distill_empty_and_invalid_json_write_nothing(self):
+        async def run():
+            for content in ("[]", "这不是 JSON", "{}"):
+                memory = self._fake_memory()
+                engine = self._make_engine(_FakeModelClient(content), memory)
+                written = await engine.distill_memories([{"role": "user", "content": "x"}])
+                self.assertEqual(written, 0)
+                self.assertEqual(memory.added, [])
+
+        asyncio.run(run())
+
+    def test_distill_caps_at_three_and_skips_blank(self):
+        async def run():
+            memory = self._fake_memory()
+            engine = self._make_engine(
+                _FakeModelClient(
+                    '[{"content": "a", "importance": 1}, {"content": ""}, '
+                    '{"content": "b"}, {"content": "c"}, {"content": "d"}]'
+                ),
+                memory,
+            )
+            written = await engine.distill_memories([{"role": "user", "content": "x"}])
+            # 先截取前 3 条原始项 [a, "", b]，再过滤空项 → 写入 a、b 两条
+            self.assertEqual(written, 2)
+            self.assertEqual([item["content"] for item in memory.added], ["a", "b"])
+
+        asyncio.run(run())
+
+
 class ThinkEngineDecisionTests(unittest.TestCase):
     def _make_engine(self, model_client: _FakeModelClient):
         config = ThinkEngineConfig()

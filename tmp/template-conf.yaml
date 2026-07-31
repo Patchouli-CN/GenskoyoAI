@@ -166,6 +166,8 @@ memory:
   semantic_similarity_threshold: 0.7
   auto_memory_enabled: true
   auto_memory_model: null        # 自动记忆模型；null = 跟随主模型（当前无消费方，预留）
+  distill_enabled: true          # 定期记忆蒸馏：每 distill_turns 轮对话后自动提炼珍贵记忆写入语义记忆
+  distill_turns: 10
   
   # 话题生成配置
   topic_generation:

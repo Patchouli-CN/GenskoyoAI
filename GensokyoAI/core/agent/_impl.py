@@ -885,6 +885,16 @@ class Agent:
                 # World Actor 不各自持有定时器（对话主循环在 World 侧）
                 if self._manage_initiative_timer:
                     asyncio.create_task(self._initiative_coordinator.schedule_bg(full_response))
+                # 定期记忆蒸馏（§8.29）：挂在主动机制总闸上——
+                # 元租户（enabled=False）与 World Actor（manage=False）天然不触发
+                if (
+                    self._manage_initiative_timer
+                    and self.config.initiative_timer.enabled
+                    and self._think_engine is not None
+                ):
+                    self._think_engine.note_turn_for_distillation(
+                        self.working_memory.get_recent(12)
+                    )
 
             # 🔑 无论如何都要把控制权还给用户（过期请求由 id 校验忽略）
             if self._action_executor:

@@ -253,6 +253,11 @@ class ConfigMerger:
                 if override.auto_memory_model is not None
                 else base.auto_memory_model,
             ),
+            distill_enabled=choose("distill_enabled", override.distill_enabled),
+            distill_turns=choose(
+                "distill_turns",
+                override.distill_turns if override.distill_turns != 10 else base.distill_turns,
+            ),
             topic_generation=self._merge_topic_generation(
                 base.topic_generation,
                 override.topic_generation,
