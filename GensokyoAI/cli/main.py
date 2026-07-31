@@ -45,6 +45,19 @@ def parse_args():
     return parser.parse_args()
 
 
+# 控制台与 World 控制台共用的配色主题
+_COLOR_THEME = {
+    "user": "bold #f5e6d3",
+    "assistant": "bold #ffb7c5",
+    "system": "dim #c9b1d4",
+    "error": "bold #c41e3a",
+    "success": "bold #98d8a8",
+    "info": "#a4cde0",
+    "cmd": "bold #d4a0d4",
+    "prompt": "bold #ffe4a0",
+}
+
+
 def _ensure_local_config() -> Path:
     """首次启动：从发行模板生成本地配置（用户只改它，不碰 tmp/ 模板）。"""
     config_dir = Path("config")
@@ -159,18 +172,7 @@ async def main():
     backend = (
         ConsoleBackendBuilder(agent)
         .with_stream_mode(not args.no_stream)
-        .with_color_theme(
-            {
-                "user": "bold #f5e6d3",
-                "assistant": "bold #ffb7c5",
-                "system": "dim #c9b1d4",
-                "error": "bold #c41e3a",
-                "success": "bold #98d8a8",
-                "info": "#a4cde0",
-                "cmd": "bold #d4a0d4",
-                "prompt": "bold #ffe4a0",
-            }
-        )
+        .with_color_theme(_COLOR_THEME)
         .build()
     )
 
@@ -239,18 +241,7 @@ async def _run_world(args, config) -> None:
     backend = (
         WorldConsoleBackendBuilder(world)
         .with_stream_mode(not args.no_stream)
-        .with_color_theme(
-            {
-                "user": "bold #f5e6d3",
-                "assistant": "bold #ffb7c5",
-                "system": "dim #c9b1d4",
-                "error": "bold #c41e3a",
-                "success": "bold #98d8a8",
-                "info": "#a4cde0",
-                "cmd": "bold #d4a0d4",
-                "prompt": "bold #ffe4a0",
-            }
-        )
+        .with_color_theme(_COLOR_THEME)
         .build()
     )
 

@@ -16,7 +16,7 @@ from ..events import Event, SystemEvent
 from ..exceptions import AgentError
 from .actions import ActionFactory
 from .initiative_timer import InitiativeTimerManager
-from .prompts import build_initiative_message_context
+from .prompts import build_initiative_continue_cue, build_initiative_message_context
 
 if TYPE_CHECKING:
     from ._impl import Agent
@@ -187,12 +187,7 @@ class InitiativeCoordinator:
         system_contexts = await agent._prepend_scene_context(system_contexts)
         messages = agent.message_builder.build("", system_contexts)
         # 工作记忆末尾是助手自己的上一条回复，必须补一条 user 消息让模型继续生成下一句
-        messages.append(
-            {
-                "role": "user",
-                "content": "（此刻没有新的用户消息。把上面想好的内容，用你自己的口吻自然地说出来——就像你刚好想到了、随口开口那样。）",
-            }
-        )
+        messages.append({"role": "user", "content": build_initiative_continue_cue()})
         max_tokens = agent.config.think_engine.initiative_max_tokens
         initiative_options: dict[str, Any] = {
             "temperature": agent.config.think_engine.initiative_temperature,

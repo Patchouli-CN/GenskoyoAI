@@ -10,15 +10,14 @@ Director phase=initiative 基于触发**当下**的场景与在场角色决定�
 
 from __future__ import annotations
 
-import json
 import re
 from typing import TYPE_CHECKING, Any
 
 from ..core.agent.prompts import build_world_initiative_prompts
-from ..core.agent.types import ProviderCapability
 from ..core.dialogue_loop import InitiativePlan
 from ..core.initiative_scheduler import InitiativeScheduler
 from ..utils.logger import logger
+from ._llm_json import extract_json_object, supports_structured_output
 
 if TYPE_CHECKING:
     from .world import GensokyoWorld
@@ -153,14 +152,8 @@ class WorldInitiativeLoop:
         return self._parse_plan(text)
 
     def _parse_plan(self, text: str) -> InitiativePlan | None:
-        match = _JSON_OBJECT_PATTERN.search(text)
-        raw = match.group(0) if match else text
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            logger.warning(f"[WorldInitiative] 规划 JSON 解析失败: {error}")
-            return None
-        if not isinstance(data, dict):
+        data = extract_json_object(text, log_prefix="[WorldInitiative] 规划")
+        if data is None:
             return None
         summary = data.get("summary")
         enthusiasm = data.get("enthusiasm")
@@ -176,10 +169,4 @@ class WorldInitiativeLoop:
         )
 
     def _supports_structured_output(self) -> bool:
-        supports = getattr(self._world._model_client, "supports", None)
-        if callable(supports):
-            try:
-                return bool(supports(ProviderCapability.STRUCTURED_OUTPUT))
-            except Exception as error:
-                logger.warning(f"[WorldInitiative] 结构化输出能力判断失败: {error}")
-        return False
+        return supports_structured_output(self._world._model_client, log_prefix="[WorldInitiative]")

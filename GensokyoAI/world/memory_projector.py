@@ -11,19 +11,16 @@
 
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
 from msgspec import Struct
 
 from ..core.agent.model_client import ModelClient
 from ..core.agent.prompts import build_memory_projection_prompts
-from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
+from ..core.agent.types import DECISION_MIN_MAX_TOKENS
 from ..utils.logger import logger
+from ._llm_json import clamp_number, extract_json_object, supports_structured_output
 from .types import ActorBrief
-
-_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 _PROJECTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -172,15 +169,7 @@ class WorldMemoryProjector:
 
     @staticmethod
     def _parse_json(text: str) -> dict[str, Any] | None:
-        match = _JSON_OBJECT_PATTERN.search(text)
-        raw = match.group(0) if match else text
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            preview = raw.replace("\r", "\\r").replace("\n", "\\n")[:300]
-            logger.error(f"[WorldMemoryProjector] JSON 解析失败: {error}; raw={preview!r}")
-            return None
-        return data if isinstance(data, dict) else None
+        return extract_json_object(text, log_prefix="[WorldMemoryProjector]")
 
     def _validate(
         self, data: dict[str, Any], participants: list[ActorBrief]
@@ -217,9 +206,7 @@ class WorldMemoryProjector:
 
     @staticmethod
     def _clamp(raw: Any, low: float, high: float, default: float) -> float:
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            return default
-        return max(low, min(high, float(raw)))
+        return clamp_number(raw, low, high, default)
 
     # ==================== 降级 ====================
 
@@ -241,10 +228,4 @@ class WorldMemoryProjector:
         ]
 
     def _supports_structured_output(self) -> bool:
-        supports = getattr(self._model_client, "supports", None)
-        if callable(supports):
-            try:
-                return bool(supports(ProviderCapability.STRUCTURED_OUTPUT))
-            except Exception as error:
-                logger.warning(f"[WorldMemoryProjector] 结构化输出能力判断失败: {error}")
-        return False
+        return supports_structured_output(self._model_client, log_prefix="[WorldMemoryProjector]")

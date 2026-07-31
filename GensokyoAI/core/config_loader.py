@@ -28,7 +28,11 @@ from .config_schema import (
     WorldPersistenceConfig,
     WorldTranscriptConfig,
 )
-from .config_validator import ConfigDiagnostic, ConfigValidator
+from .config_validator import (
+    _REMOVED_INITIATIVE_FALLBACK_KEYS,
+    ConfigDiagnostic,
+    ConfigValidator,
+)
 
 # 角色配置缓存（LRU 简化版）：path -> (mtime, config)
 _character_config_cache: dict[Path, tuple[float, CharacterConfig]] = {}
@@ -163,29 +167,10 @@ class ConfigLoader(ConfigMerger):
 
         if "initiative_timer" in data:
             initiative_timer_data = dict(data["initiative_timer"] or {})
-            # 已删除的配置键：读取时丢弃（校验层另有迁移警告），
+            # 已删除的配置键：读取时丢弃（校验层另有迁移警告，清单单源在
+            # config_validator._REMOVED_INITIATIVE_FALLBACK_KEYS），
             # 避免旧配置在 Struct 构造时报未知参数
-            for removed_key in (
-                # 强制 fallback 链（阶段 7 删除）
-                "fallback_on_no_schedule",
-                "fallback_delay_seconds",
-                "fallback_summary",
-                "fallback_reason",
-                # hesitation 犹豫链与对话欲累积器（2026-07-30 用户定稿删除：
-                # 对话欲改为 ThinkEngine 四维打分 + 阈值二元判断，无累积无犹豫）
-                "hesitation_enabled",
-                "hesitation_max_rounds",
-                "hesitation_delay_seconds",
-                "drive_enabled",
-                "drive_turn_increment",
-                "drive_motivation_boost",
-                "drive_emotion_boost",
-                "drive_scene_boost",
-                "drive_silence_rate_per_minute",
-                "drive_vent_factor",
-                "mood_half_life_positive_minutes",
-                "mood_half_life_negative_minutes",
-            ):
+            for removed_key in _REMOVED_INITIATIVE_FALLBACK_KEYS:
                 initiative_timer_data.pop(removed_key, None)
             config.initiative_timer = InitiativeTimerConfig(**initiative_timer_data)
             self._provided_fields[id(config.initiative_timer)] = set(initiative_timer_data.keys())

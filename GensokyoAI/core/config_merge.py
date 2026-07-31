@@ -1,5 +1,6 @@
 """配置合并逻辑。"""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +28,11 @@ class ConfigMerger:
     def __init__(self) -> None:
         self._provided_fields: dict[int, set[str]] = {}
 
-    def _merge(self, base: AppConfig, override: AppConfig) -> AppConfig:
-        """兼容旧测试和内部调用的合并入口。"""
-        return self.merge(base, override)
+    def _chooser(self, base: Any, override: Any) -> Callable[[str, Any], Any]:
+        """生成 choose 闭包：override 显式提供字段优先，否则取 base 值。
 
-    def merge(self, base: AppConfig, override: AppConfig) -> AppConfig:
-        """合并配置 - override 优先"""
-        result = AppConfig()
+        provided 为 None（无显式记录）时统一回落调用方给的 legacy 表达式。
+        """
         provided = self._provided_fields.get(id(override))
 
         def choose(field_name: str, legacy_value: Any) -> Any:
@@ -44,6 +43,17 @@ class ConfigMerger:
                     else getattr(base, field_name)
                 )
             return legacy_value
+
+        return choose
+
+    def _merge(self, base: AppConfig, override: AppConfig) -> AppConfig:
+        """兼容旧测试和内部调用的合并入口。"""
+        return self.merge(base, override)
+
+    def merge(self, base: AppConfig, override: AppConfig) -> AppConfig:
+        """合并配置 - override 优先"""
+        result = AppConfig()
+        choose = self._chooser(base, override)
 
         # 日志配置 - override 优先
         result.log_level = choose(
@@ -90,16 +100,7 @@ class ConfigMerger:
         从 YAML 加载的配置会保留字段出现信息，避免用默认值猜测用户是否有意覆盖；
         对直接构造的 ModelConfig 仍保留旧的默认值回退策略以兼容现有调用。
         """
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return ModelConfig(
             provider=choose(
@@ -187,16 +188,7 @@ class ConfigMerger:
 
     def _merge_embedding(self, base: EmbeddingConfig, override: EmbeddingConfig) -> EmbeddingConfig:
         """合并 Embedding 配置 - override 优先。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return EmbeddingConfig(
             provider=choose("provider", override.provider or base.provider),
@@ -216,16 +208,7 @@ class ConfigMerger:
 
     def _merge_memory(self, base: MemoryConfig, override: MemoryConfig) -> MemoryConfig:
         """合并记忆配置 - override 优先。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return MemoryConfig(
             working_max_turns=choose(
@@ -282,16 +265,7 @@ class ConfigMerger:
         override: TopicGenerationConfig,
     ) -> TopicGenerationConfig:
         """合并话题生成配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return TopicGenerationConfig(
             name_max_length=choose(
@@ -327,16 +301,7 @@ class ConfigMerger:
         override: WebSearchAPIConfig,
     ) -> WebSearchAPIConfig:
         """合并 Web search API Provider 配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return WebSearchAPIConfig(
             endpoint=choose("endpoint", override.endpoint or base.endpoint),
@@ -387,16 +352,7 @@ class ConfigMerger:
         override: WebSearchToolConfig,
     ) -> WebSearchToolConfig:
         """合并自有 Web search 工具配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         default_user_agent = WebSearchToolConfig().user_agent
         return WebSearchToolConfig(
@@ -456,16 +412,7 @@ class ConfigMerger:
 
     def _merge_tool(self, base: ToolConfig, override: ToolConfig) -> ToolConfig:
         """合并工具配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return ToolConfig(
             enabled=choose(
@@ -555,16 +502,7 @@ class ConfigMerger:
         override: ResourceControlConfig,
     ) -> ResourceControlConfig:
         """合并 Runtime 资源控制配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         defaults = ResourceControlConfig()
         return ResourceControlConfig(
@@ -666,16 +604,7 @@ class ConfigMerger:
         override: InitiativeTimerConfig,
     ) -> InitiativeTimerConfig:
         """合并主动定时器配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         defaults = InitiativeTimerConfig()
         return InitiativeTimerConfig(
@@ -742,16 +671,7 @@ class ConfigMerger:
         self, base: ThinkEngineConfig, override: ThinkEngineConfig
     ) -> ThinkEngineConfig:
         """合并思考引擎配置。"""
-        provided = self._provided_fields.get(id(override))
-
-        def choose(field_name: str, legacy_value: Any) -> Any:
-            if provided is not None:
-                return (
-                    getattr(override, field_name)
-                    if field_name in provided
-                    else getattr(base, field_name)
-                )
-            return legacy_value
+        choose = self._chooser(base, override)
 
         return ThinkEngineConfig(
             enabled=choose(

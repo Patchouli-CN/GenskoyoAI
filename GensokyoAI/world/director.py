@@ -14,16 +14,15 @@
 
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
 from ..core.agent.model_client import ModelClient
 from ..core.agent.prompts import build_director_decision_prompts
-from ..core.agent.types import DECISION_MIN_MAX_TOKENS, ProviderCapability
+from ..core.agent.types import DECISION_MIN_MAX_TOKENS
 from ..core.config import WorldDirectorConfig
 from ..core.events import Event, EventBus, SystemEvent
 from ..utils.logger import logger
+from ._llm_json import clamp01_number, extract_json_object, supports_structured_output
 from .types import (
     USER_OCCUPANT_ID,
     DirectorAction,
@@ -31,8 +30,6 @@ from .types import (
     DirectorDecision,
     DirectorPhase,
 )
-
-_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 _DIRECTOR_DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -296,16 +293,8 @@ class Director:
     @staticmethod
     def _parse_decision_json(text: str) -> dict[str, Any] | None:
         """提取并解析决策 JSON；action 不在枚举内同样视为解析失败。"""
-        match = _JSON_OBJECT_PATTERN.search(text)
-        raw = match.group(0) if match else text
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as error:
-            preview = raw.replace("\r", "\\r").replace("\n", "\\n")[:300]
-            logger.error(f"[Director] 决策 JSON 解析失败: {error}; raw={preview!r}")
-            return None
-        if not isinstance(data, dict):
-            logger.error(f"[Director] 决策 JSON 不是对象: {type(data).__name__}")
+        data = extract_json_object(text, log_prefix="[Director] 决策")
+        if data is None:
             return None
         action = data.get("action")
         if not isinstance(action, str) or action not in {item.value for item in DirectorAction}:
@@ -316,18 +305,10 @@ class Director:
     @staticmethod
     def _parse_confidence(raw: Any) -> float:
         """解析置信度并钳制到 [0, 1]；缺失或非法一律 0.0。"""
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            return 0.0
-        return max(0.0, min(1.0, float(raw)))
+        return clamp01_number(raw)
 
     def _supports_structured_output(self) -> bool:
-        supports = getattr(self._model_client, "supports", None)
-        if callable(supports):
-            try:
-                return bool(supports(ProviderCapability.STRUCTURED_OUTPUT))
-            except Exception as error:
-                logger.warning(f"[Director] 结构化输出能力判断失败: {error}")
-        return False
+        return supports_structured_output(self._model_client, log_prefix="[Director]")
 
     def _publish_decision(self, context: DirectorContext, decision: DirectorDecision) -> None:
         """发布决策事件（debug 可见 reason）；事件发布失败不影响决策返回。"""

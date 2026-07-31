@@ -202,6 +202,24 @@ def build_emotion_tone_context(emotion_line: str, tendency: str = "") -> str:
     return "\n".join(parts)
 
 
+def build_initiative_continue_cue() -> str:
+    """主动消息生成的兜底 user 消息（解析方：无，让模型在工作记忆末尾继续）。"""
+    return (
+        "（此刻没有新的用户消息。把上面想好的内容，用你自己的口吻自然地说出来"
+        "——就像你刚好想到了、随口开口那样。）"
+    )
+
+
+def build_begin_scene_context() -> str:
+    """开场场景注入（解析方：无，引导模型以角色视角主动开场）。"""
+    return (
+        "【角色开场场景】当前没有用户主动说话。你正在忙自己的事。"
+        "请直接叙述你当前正在做的事、所处的状态或感受，"
+        "不要假设有人来拜访你，不要打招呼、不要说欢迎、不要自我介绍。"
+        "保持你的性格和说话习惯。"
+    )
+
+
 # ==================== 主动消息生成（InitiativeCoordinator） ====================
 
 

@@ -16,6 +16,7 @@ from rich.text import Text
 
 from ...commands import CommandContext, CommandExecutor, CommandResult, CommandStatus
 from ...core.agent import Agent
+from ...core.agent.prompts import build_begin_scene_context
 from ...core.events import Event, EventPriority, SystemEvent
 from ...utils.formatters import format_datetime, format_session_id
 from ...utils.helpers import safe_get
@@ -181,12 +182,7 @@ class ConsoleBackend(BaseBackend):
         elif action:
             self.console.print(f"[dim]（场景：{action}）[/]")
 
-        system_contexts = [
-            "【角色开场场景】当前没有用户主动说话。你正在忙自己的事。"
-            "请直接叙述你当前正在做的事、所处的状态或感受，"
-            "不要假设有人来拜访你，不要打招呼、不要说欢迎、不要自我介绍。"
-            "保持你的性格和说话习惯。"
-        ]
+        system_contexts = [build_begin_scene_context()]
 
         # 开场动作作为角色视角的当前状态；无动作时给一句中性提示
         opening = f"（{action}）" if action else "（你正做着自己的事。）"

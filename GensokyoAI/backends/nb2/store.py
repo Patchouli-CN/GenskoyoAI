@@ -16,6 +16,20 @@ from typing import Any
 from ...utils.logger import logger
 
 
+def _read_json_dict(path: Path) -> dict:
+    """读取 JSON dict 文件；不存在返回空，损坏抛给调用方决定（各自记日志降级）。"""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return raw if isinstance(raw, dict) else {}
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """tmp 文件 + 原子替换落盘（防中途断电留半个文件）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 class SessionStore:
     """同步 JSON 映射表：键为 "group:<群号>" / "user:<QQ号>"。"""
 
@@ -51,22 +65,16 @@ class SessionStore:
 
     def _load(self) -> None:
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = _read_json_dict(self._path)
         except FileNotFoundError:
             return
         except (OSError, json.JSONDecodeError) as error:
             logger.warning(f"[nb2] 会话映射文件损坏，已从空表重新开始: {error}")
             return
-        if isinstance(raw, dict):
-            self._entries = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+        self._entries = {str(k): v for k, v in raw.items() if isinstance(v, dict)}
 
     def _save_locked(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp_path.write_text(
-            json.dumps(self._entries, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        os.replace(tmp_path, self._path)
+        _atomic_write_json(self._path, self._entries)
 
 
 class MemberStore:
@@ -82,14 +90,13 @@ class MemberStore:
         self._lock = threading.Lock()
         self._entries: dict[str, str] = {}
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = _read_json_dict(self._path)
         except FileNotFoundError:
             return
         except (OSError, json.JSONDecodeError) as error:
             logger.warning(f"[nb2] 群友印象文件损坏，已从空表重新开始: {error}")
             return
-        if isinstance(raw, dict):
-            self._entries = {str(k): str(v) for k, v in raw.items() if isinstance(v, str)}
+        self._entries = {str(k): str(v) for k, v in raw.items() if isinstance(v, str)}
 
     def get(self, qq_id: int) -> str | None:
         """按 qq_id 查印象；精确 key 未知时按 ``_{qq_id}`` 后缀匹配。"""
@@ -120,9 +127,4 @@ class MemberStore:
         return False
 
     def _save_locked(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp_path.write_text(
-            json.dumps(self._entries, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        os.replace(tmp_path, self._path)
+        _atomic_write_json(self._path, self._entries)
