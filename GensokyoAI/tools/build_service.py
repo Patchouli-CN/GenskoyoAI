@@ -51,7 +51,6 @@ class ToolBuildService:
     _MODULE_TOOL_PREFIXES: dict[str, tuple[str, ...]] = {
         "time": ("get_current_time", "get_current_dateinfo"),
         "moon": ("get_moon_phase",),
-        "memory": ("remember", "recall", "update_memory"),
         "system": ("get_system_info",),
         "web_search": ("web_search",),
         "scene": ("scene_switch", "get_current_scene"),

@@ -59,10 +59,6 @@ class ActionExecutor:
                 await self._execute_initiative_speak(event)
             case "WAIT":
                 await self._execute_wait(event)
-            case "REMEMBER":
-                await self._execute_remember(event)
-            case "RECALL":
-                await self._execute_recall(event)
             case _:
                 logger.debug(f"⚡ [ActionExecutor] 未知行动: {action_type}")
 
@@ -157,40 +153,6 @@ class ActionExecutor:
         if self._response_future and not self._response_future.done():
             self._response_future.set_result("")
             self._cleanup_response()
-
-    async def _execute_remember(self, event: Event) -> None:
-        """执行 REMEMBER - 调用记忆工具"""
-        action_data = event.data.get("action", {})
-        self.event_bus.publish(
-            Event(
-                type=SystemEvent.MEMORY_SEMANTIC_ADDED,
-                source="action_executor",
-                data={
-                    "content": action_data.get("content", ""),
-                    "importance": action_data.get("params", {}).get("importance", 0.5) / 10.0,
-                    "topic_name": action_data.get("params", {}).get("topic"),
-                },
-            )
-        )
-
-    async def _execute_recall(self, event: Event) -> None:
-        """执行 RECALL - 回忆"""
-        action_data = event.data.get("action", {})
-        keyword = action_data.get("content", "")
-
-        response = await self.event_bus.request(
-            Event(
-                type=SystemEvent.MEMORY_SEMANTIC_RECALLED,
-                source="action_executor",
-                data={"keyword": keyword},
-            ),
-            timeout=5.0,
-        )
-
-        if response:
-            self.event_bus.publish(
-                Event(type=SystemEvent.MESSAGE_SENT, source="agent", data={"content": response})
-            )
 
     # ==================== 流式响应支持 ====================
 

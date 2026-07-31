@@ -22,7 +22,6 @@ from ..config import AppConfig, ConfigLoader
 from ..event_listeners import (
     CoreListeners,
     ErrorListeners,
-    MemoryServiceListeners,
     PersistenceListeners,
     SceneServiceListeners,
 )
@@ -154,7 +153,6 @@ class Agent:
 
     def _init_event_listeners(self) -> None:
         self.core_listeners = CoreListeners(self, self.event_bus)
-        self.memory_service_listeners = MemoryServiceListeners(self, self.event_bus)
         self.scene_service_listeners = SceneServiceListeners(self, self.event_bus)
         self.error_listeners = ErrorListeners(self.event_bus)
         self.persistence_listeners = PersistenceListeners(self, self.event_bus)

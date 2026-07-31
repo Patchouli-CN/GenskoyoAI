@@ -235,6 +235,22 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.28 记忆工具与 REMEMBER/RECALL/THINK 动作子系统删除（2026-07-31，用户拍板）
+
+- 用户决定：记忆工具「AI 主动记住」在实测中见啥记啥、语义记忆全变噪音，删除；
+  死动作子系统（§8.27 挂起项）一并删除。**读取侧保留**：已有语义记忆仍经
+  message_builder.get_relevant_context 自动注入提示词，memory.search RPC 与
+  World 记忆投影（add_async 直调）不受影响；semantic store/topic graph 变只读存量。
+- 删除面：tools/tool_builtin/memory_tool.py（remember/recall/update_memory 三工具）、
+  MemoryServiceListeners（工具事件的唯一消费方，随之失效）、
+  ActionType.THINK/REMEMBER/RECALL + ActionFactory.remember/recall +
+  ActionExecutor 两个 case 与 _execute_remember/_execute_recall、
+  build_service._MODULE_TOOL_PREFIXES 的 memory 条目。
+- 配置：local.yaml builtin_tools「memory」→「web_search」（顺带修正：web_search
+  工具必须在名单内才注入模型——此前 §8.23 实测走的是 service 直调，未验证注入链）；
+  模板 builtin_tools 去掉「memory」。
+- 测试：删 3 个 listener 用例 + 1 个 remember 用例。基线：717 passed, 3 subtests passed。
+
 ## 8.27 全项目结构优化（2026-07-31，用户「代码太大感觉屎山」）
 
 - 审查：4 个 explore 子代理分区（runtime/core/backends/world-memory）+ 主审逐条复核。

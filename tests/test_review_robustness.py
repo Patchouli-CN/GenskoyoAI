@@ -38,8 +38,6 @@ from GensokyoAI.memory.topic_store import TopicAwareStore
 from GensokyoAI.memory.types import Topic
 from GensokyoAI.tools.executor import ToolExecutor
 from GensokyoAI.tools.registry import ToolRegistry
-from GensokyoAI.tools.tool_builtin.memory_tool import remember
-from GensokyoAI.tools.tool_context import bind_event_bus
 
 
 def _chunk(content: str) -> StreamChunk:
@@ -370,20 +368,6 @@ class ToolRobustnessTests(unittest.TestCase):
         self.assertIsNone(registry2.get("test_iso_tool"))
         self.assertTrue(registry1.unregister("test_iso_tool"))
         self.assertIsNone(registry1.get("test_iso_tool"))
-
-    def test_remember_reports_failure_when_bus_unresponsive(self):
-        class _FakeBus:
-            async def request(self, event, timeout=None):
-                return None
-
-        async def scenario():
-            with bind_event_bus(_FakeBus()):
-                return await remember(content="测试内容", importance=5)
-
-        text = asyncio.run(scenario())
-        self.assertIn("失败", text)
-        self.assertNotIn("记住了～", text)
-
 
 class EventRobustnessTests(unittest.TestCase):
     """事件层：请求 id 全量 uuid、flush_critical 不被普通事件截断。"""

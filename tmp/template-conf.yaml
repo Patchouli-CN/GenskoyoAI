@@ -219,7 +219,7 @@ repeat_guard:
 # 工具配置
 tool:
   enabled: true
-  builtin_tools: ["time", "moon", "memory", "system"] # 内置工具白名单；可加入 "web_search" 开启自有联网搜索工具注入
+  builtin_tools: ["time", "moon", "system"] # 内置工具白名单；可加入 "web_search" 开启自有联网搜索工具注入
   custom_tools_path: null
   web_search:
     enabled: false           # 自有 web_search 工具总开关；默认关闭，避免隐私和成本风险

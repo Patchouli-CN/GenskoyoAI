@@ -17,9 +17,6 @@ class ActionType(Enum):
 
     SPEAK = auto()  # 说话
     INITIATIVE_SPEAK = auto()  # 主动说话
-    THINK = auto()  # 静默思考
-    REMEMBER = auto()  # 记住某事
-    RECALL = auto()  # 回忆某事
     WAIT = auto()  # 等待
 
 
@@ -76,16 +73,3 @@ class ActionFactory:
     @staticmethod
     def wait(reason: str = "没什么想说的") -> Action:
         return Action(type=ActionType.WAIT, priority=ActionPriority.LOW, reason=reason)
-
-    @staticmethod
-    def remember(content: str, importance: int = 5, topic: str = "") -> Action:
-        return Action(
-            type=ActionType.REMEMBER,
-            content=content,
-            params={"importance": importance, "topic": topic},
-            reason="需要记住这个信息",
-        )
-
-    @staticmethod
-    def recall(keyword: str) -> Action:
-        return Action(type=ActionType.RECALL, content=keyword, reason=f"回忆 '{keyword}'")

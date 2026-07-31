@@ -4,11 +4,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
 
 from GensokyoAI.core.config import MemoryConfig
-from GensokyoAI.core.event_listeners import MemoryServiceListeners
-from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.memory.semantic import SemanticMemoryManager
 from GensokyoAI.memory.topic_store import TopicAwareStore
 from GensokyoAI.memory.types import TopicMemoryType
@@ -171,85 +168,6 @@ class SemanticMemoryManagerSearchTests(unittest.TestCase):
         self.assertEqual(results[0]["diagnostics"]["embedding_fallback"], True)
         self.assertEqual(results[0]["diagnostics"]["embedding_used"], False)
         self.assertIn("embedding down", results[0]["diagnostics"]["embedding_error"])
-
-
-class MemoryServiceListenersPublicApiTests(unittest.TestCase):
-    def test_memory_add_listener_returns_review_metadata(self):
-        event_bus = EventBus(enable_trace=False)
-        event_bus.respond = MagicMock()
-        agent = SimpleNamespace(semantic_memory=SimpleNamespace())
-        listener = MemoryServiceListeners(agent, event_bus)  # type: ignore[arg-type]
-        listener._do_memory_add = AsyncMock()
-        event = Event(
-            type=SystemEvent.MEMORY_SEMANTIC_ADDED,
-            source="tool.remember",
-            data={
-                "content": "新记忆",
-                "topic_name": "设定",
-                "importance": 0.8,
-                "requires_review": True,
-                "metadata": {"source": "test"},
-            },
-        )
-
-        asyncio.run(listener.on_memory_add_request(event))
-
-        response = event_bus.respond.call_args.args[1]
-        self.assertEqual(response["status"], "processing")
-        self.assertEqual(response["topic_name"], "设定")
-        self.assertEqual(response["importance"], 0.8)
-        self.assertTrue(response["requires_review"])
-        self.assertEqual(response["metadata"], {"source": "test"})
-
-    def test_memory_update_listener_uses_store_public_update_api(self):
-        event_bus = EventBus(enable_trace=False)
-        event_bus.respond = MagicMock()
-        topic = SimpleNamespace(name="设定", id="topic-1", message_ids=["memory-1"])
-        store = SimpleNamespace(update_topic_memory=AsyncMock(return_value=topic))
-        semantic_memory = SimpleNamespace(store=store)
-        agent = SimpleNamespace(semantic_memory=semantic_memory)
-        listener = MemoryServiceListeners(agent, event_bus)  # type: ignore[arg-type]
-        event = Event(
-            type=SystemEvent.MEMORY_SEMANTIC_UPDATED,
-            source="tool.update_memory",
-            data={"topic_name": "设定", "new_content": "新设定", "reason": "测试"},
-        )
-
-        asyncio.run(listener.on_memory_update_request(event))
-
-        store.update_topic_memory.assert_called_once_with("设定", "新设定")
-        event_bus.respond.assert_called_once_with(
-            event,
-            {
-                "topic_name": "设定",
-                "topic_id": "topic-1",
-                "memory_id": "memory-1",
-                "importance": 0.7,
-                "reason": "测试",
-                "source": "tool.update_memory",
-                "requires_review": False,
-                "metadata": {},
-                "updated": True,
-            },
-        )
-
-    def test_memory_update_listener_responds_none_for_missing_topic(self):
-        event_bus = EventBus(enable_trace=False)
-        event_bus.respond = MagicMock()
-        store = SimpleNamespace(update_topic_memory=AsyncMock(return_value=None))
-        semantic_memory = SimpleNamespace(store=store)
-        agent = SimpleNamespace(semantic_memory=semantic_memory)
-        listener = MemoryServiceListeners(agent, event_bus)  # type: ignore[arg-type]
-        event = Event(
-            type=SystemEvent.MEMORY_SEMANTIC_UPDATED,
-            source="tool.update_memory",
-            data={"topic_name": "不存在", "new_content": "新设定"},
-        )
-
-        asyncio.run(listener.on_memory_update_request(event))
-
-        store.update_topic_memory.assert_called_once_with("不存在", "新设定")
-        event_bus.respond.assert_called_once_with(event, None)
 
 
 if __name__ == "__main__":
