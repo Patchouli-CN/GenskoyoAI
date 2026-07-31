@@ -17,17 +17,15 @@
 | **情景记忆** | 历史对话的压缩摘要 | 模型自动摘要，关键事件提取 |
 | **语义记忆** | 长期知识存储和检索 | 话题感知存储 + 遗忘曲线，默认不依赖向量数据库 |
 
-### 记忆管理工具
+### 记忆管理
 
-> **设计哲学**：饰演角色的模型实体管理自身记忆才贴合真实社会个体。
+> **设计哲学**：长期记忆应当由系统定期沉淀，而不是依赖模型自觉去记。
 
-在工具调用启用、且所选模型支持并选择调用工具时，角色可以主动管理自己的记忆：
-
-- **`remember` 工具**：AI 自主判断何时记住重要信息。
-- **`recall` 工具**：AI 需要时主动检索相关记忆。
-- **话题感知存储**：自动将记忆归类到话题，建立关联图谱。
+- **定期记忆蒸馏**：每 `memory.distill_turns` 轮对话后，ThinkEngine 自动从近期工作记忆提炼「珍贵记忆」（事实/偏好/关系变化/有情感重量的事件）写入语义记忆——确定性周期触发，一次短 JSON 调用，可用 `memory.distill_enabled` 关闭。
+- **自动检索注入**：生成回复前按关键词检索相关记忆注入提示词，角色自然想起过去，无需主动调用工具。
+- **话题感知存储**：自动将记忆归类到话题，建立关联图谱，供长期思考的随机游走使用。
 - **遗忘曲线**：基于重要性、情感效价和访问频率的记忆权重调整机制。
-- **`update_memory` 工具**：当旧信息过时或不准确时，可以更新已有记忆。
+- **World 记忆投影**：多角色模式下，每段剧情结束自动为每个在场角色各写一份「自己视角」的记忆。
 
 ### 静默思考引擎（ThinkEngine）
 
@@ -46,10 +44,7 @@
 |---------|------|
 | **SPEAK** | 回应用户消息 |
 | **INITIATIVE_SPEAK** | 主动发起对话 |
-| **THINK** | 静默思考（内部） |
-| **REMEMBER** | 主动记住某事 |
-| **RECALL** | 主动回忆 |
-| **WAIT** | 什么都不做 |
+| **WAIT** | 什么都不做（沉默也是一种行动） |
 
 ### 会话管理
 
@@ -66,8 +61,8 @@
 - `get_current_dateinfo`：获取日期和曜日（七曜日！）。
 - `get_moon_phase`：获取月相。
 - `get_system_info`：获取系统信息。
-- `remember` / `recall`：自主记忆管理。
-- `update_memory`：更新已有记忆。
+- `web_search`：联网搜索（需在 `tool.builtin_tools` 中加入 `web_search` 并启用 `tool.web_search`）。
+- `scene_switch` / `get_current_scene`：场景切换与查询（需启用场景系统）。
 
 工具调用已统一适配多 Provider：OpenAI / DeepSeek / OpenAI Responses / Ollama / Claude / Gemini 会转换为各自官方要求的工具调用格式。DeepSeek 使用独立 Provider 处理 thinking mode 下工具调用所需的 `reasoning_content` 回传；Claude 使用官方 Messages API 的 `tool_use` / `tool_result` content block，不使用 OpenAI 风格的 `role: tool`。
 

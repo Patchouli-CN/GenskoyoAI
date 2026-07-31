@@ -235,6 +235,34 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.30 文档过时点清扫（2026-07-31，用户点单）
+
+- 对照 §8.27-8.29 变更全面核查：README/README_en（记忆段改述为「定期蒸馏 + 自动
+  检索注入」）、project_design 双语（记忆管理节重写、行动规划表删 THINK/REMEMBER/
+  RECALL、内置工具清单更新）、user_guide 双语（builtin_tools 去 memory、补
+  emotion_baseline 字段、补 tenant_max_agents_per_user）、QUICKSTART（builtin_tools
+  去 memory）、gsk-ai-multi-character（parallel_safe 工具行去 remember/update_memory）、
+  nb2_adapter（指令补 /status、新增引用原文与复读防护行为说明、配置表补
+  GSK_NB2_QUOTE_CONTEXT）、runtime_api（租户上限 LRU 语义补充）。
+- 保留：docs/todo.md 历史 §5.x-§8.x 流水（历史档案不改写）、docs/changelog.md。
+
+## 8.29 定期记忆蒸馏（2026-07-31，用户点单「AI 主动写没用了就做定期提取」）
+
+- 背景：§8.28 删除 AI 主动记忆工具后，单角色语义记忆只剩读取侧（存量注入/检索），
+  没有写入路径；World 侧有记忆投影，单角色没有。用户定稿：做成定期从工作记忆提取。
+- 机制（ThinkEngine 决策区新增）：`_impl` 回复完成后 `note_turn_for_distillation`
+  计数，达到 `memory.distill_turns`（默认 10）后台执行 `distill_memories`——
+  一次短 JSON 调用（`build_memory_distill_prompt`，角色第一人称提炼 0~3 条
+  「事实/偏好/关系变化/情感重量事件」，明确不记寒暄琐事），逐条 `add_async`
+  写入语义记忆（topic/情感效价随附）。确定性周期触发，替代已删除的 AI 主动工具。
+- 隔离：挂在主动机制总闸（`_manage_initiative_timer` 且 `initiative_timer.enabled`）
+  ——nb2-meta 元租户（enabled=False）与 World Actor（manage=False）天然不触发，
+  不与 World 记忆投影双写；会话切换重置计数。
+- 配置：`memory.distill_enabled`（默认 true）/ `memory.distill_turns`（默认 10，
+  校验 ≥1），local.yaml 与模板已同步。
+- 测试：计数触发/写入映射/禁用短路/空与畸形 JSON/截断与空项过滤。
+  基线：721 passed, 3 subtests passed。
+
 ## 8.28 记忆工具与 REMEMBER/RECALL/THINK 动作子系统删除（2026-07-31，用户拍板）
 
 - 用户决定：记忆工具「AI 主动记住」在实测中见啥记啥、语义记忆全变噪音，删除；

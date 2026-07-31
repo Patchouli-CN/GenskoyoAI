@@ -121,7 +121,7 @@ scene:
 
 tool:
   # 把 "scene" 加进来，角色才有切换/查看场景的能力
-  builtin_tools: ["time", "moon", "memory", "system", "scene"]
+  builtin_tools: ["time", "moon", "system", "scene"]
 ```
 
 **2. 场景库已经备好了。** 看看 `scenes/zh_cn/`，博丽神社、魔法森林、红魔馆、迷途竹林、人间之里都在里面。想加新地点？照着抄一份 YAML 就行：

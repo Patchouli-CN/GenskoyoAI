@@ -84,7 +84,7 @@ class ToolRuntimeContext(Struct):
 
 **阶段 1b（✅ 已完成）**：
 - `GensokyoAI/tools/base.py`：`ToolDefinition` / `tool()` 装饰器增加 `parallel_safe: bool = True`。
-- `remember` / `update_memory` / `scene_switch` 标记 `parallel_safe=False`。
+- `scene_switch` 标记 `parallel_safe=False`。
 - `ToolExecutor.execute_batch()`：只读工具并发（`asyncio.gather`），写状态工具按调用顺序串行；结果按入参顺序对齐。`ToolRegistry.register()` 也支持 `parallel_safe`。
 - `tests/test_tool_context.py` 新增 `ToolBatchParallelSafetyTests`：验证并行工具重叠执行、串行工具并发度恒为 1 且保序、混合批结果按 tool_call_id 对齐。
 

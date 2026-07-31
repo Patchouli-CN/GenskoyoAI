@@ -15,7 +15,7 @@
 
 HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id` 资源层级。JWT 的 `sub` 是稳定 `user_id`；客户端不能提交或覆盖 `user_id`。同名 `agent_id` 和 `session_id` 在不同用户下完全隔离。
 
-- `agent.init` 与 `world.init` 可传 `agent_id`；省略时由服务生成（结果中返回）。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。
+- `agent.init` 与 `world.init` 可传 `agent_id`；省略时由服务生成（结果中返回）。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。每用户内存中同时装配的租户上限为 `resource_control.tenant_max_agents_per_user`（默认 32）：满员时 Runtime 休眠最久未活跃的租户（数据保留、再发言自动唤醒重建），全部繁忙才返回 `agent.limit_exceeded`。
 - 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
 - `world.*` 多角色编排方法同样按 `user_id -> agent_id` 租户隔离；`world.send_message` / `world.send_message_stream` 必须传 `idempotency_key`（与 Agent 消息共用 `operations.json` 操作账本，账本槽位为 World 存档 id）。World 没有 session revision 概念，写操作不要求 `expected_revision`（World 回合锁已串行化）。
 - 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。

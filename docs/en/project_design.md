@@ -16,17 +16,15 @@
 | **Episodic Memory** | Compressed summaries of historical dialogue | Model-generated summaries, key event extraction |
 | **Semantic Memory** | Long-term knowledge storage and retrieval | Topic-aware storage + forgetting curve; no vector database required by default |
 
-### Memory Management Tools
+### Memory Management
 
-> **Design Philosophy**: The model entity playing the role should manage its own memory, just like a real social individual.
+> **Design Philosophy**: Long-term memory should be distilled by the system on a schedule, not dependent on the model remembering to take notes.
 
-When tool calling is enabled and the selected model supports and chooses to invoke tools, the character can actively manage its own memory:
-
-- **`remember` tool**: AI autonomously decides when to remember important information.
-- **`recall` tool**: AI actively retrieves relevant memories when needed.
-- **Topic-aware storage**: Automatically categorizes memories into topics and builds association graphs.
-- **Forgetting curve**: Memory weight adjustment mechanism based on importance, emotional valence, and access frequency.
-- **`update_memory` tool**: Updates existing memories when old information becomes outdated or inaccurate.
+- **Periodic memory distillation**: every `memory.distill_turns` conversation turns, the ThinkEngine automatically distills "precious memories" (facts, preferences, relationship changes, emotionally significant events) from recent working memory into semantic memory — deterministic periodic triggering with one short JSON call; can be disabled via `memory.distill_enabled`.
+- **Automatic retrieval injection**: before generating replies, relevant memories are retrieved and injected into the prompt, so characters naturally recall the past without calling any tool.
+- **Topic-aware storage**: automatically categorizes memories into topics and builds association graphs, feeding the long-term thinking random walk.
+- **Forgetting curve**: memory weight adjustment mechanism based on importance, emotional valence, and access frequency.
+- **World memory projection**: in multi-character mode, after each performance segment, the world writes a first-person perspective memory for every character present.
 
 ### Silent Thinking Engine (ThinkEngine)
 
@@ -45,10 +43,7 @@ Give AI its own "psychological time":
 |-------------|-------------|
 | **SPEAK** | Respond to user message |
 | **INITIATIVE_SPEAK** | Proactively initiate dialogue |
-| **THINK** | Silent thinking (internal) |
-| **REMEMBER** | Actively remember something |
-| **RECALL** | Actively recall |
-| **WAIT** | Do nothing |
+| **WAIT** | Do nothing (silence is also an action) |
 
 ### Session Management
 
@@ -65,8 +60,8 @@ Built-in tools give characters "superpowers":
 - `get_current_dateinfo`: get date and weekday.
 - `get_moon_phase`: get moon phase.
 - `get_system_info`: get system information.
-- `remember` / `recall`: autonomous memory management.
-- `update_memory`: update existing memory.
+- `web_search`: web search (requires `web_search` in `tool.builtin_tools` and `tool.web_search.enabled`).
+- `scene_switch` / `get_current_scene`: scene switching and querying (requires the scene system).
 
 Tool calling has been uniformly adapted for multiple providers: OpenAI / DeepSeek / OpenAI Responses / Ollama / Claude / Gemini are converted to their respective official tool-calling formats. DeepSeek uses a separate provider to handle the `reasoning_content` round-trip required for tool calling in thinking mode; Claude uses the official Messages API `tool_use` / `tool_result` content blocks, not the OpenAI-style `role: tool`.
 

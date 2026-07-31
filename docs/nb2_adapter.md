@@ -55,6 +55,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_STRIP_RP_STYLE` | `true` | 发送前清洗 RP 标记（`*动作*`、`「」`），确定性生效 |
 | `GSK_NB2_SENDER_LABEL` | `true` | 群聊消息注入 `【昵称】` 说话人标记（私聊不标） |
 | `GSK_NB2_MEMBER_MEMORY` | `true` | 群友印象：首轮交谈后生成第一印象，之后随消息注入 |
+| `GSK_NB2_QUOTE_CONTEXT` | `true` | 引用回复时取原消息拼成 `（引用 昵称：…）`，让角色看到被引用的内容 |
 | `GSK_NB2_OWNER_QQ` | 空 | OWNER 级指令白名单（逗号分隔 QQ 号）；仅影响 OWNER 级指令 |
 | `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
@@ -109,6 +110,7 @@ Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力
   `VISITOR < USER < ADMIN < OWNER`：`OWNER`= `GSK_NB2_OWNER_QQ` 名单、
   `ADMIN`= QQ 群管理/群主、`USER`= 普通群成员/私聊、`VISITOR`= 身份无法核实的
   最低信任级；当前指令：`/quota`（`/额度`，USER 级，查询 Provider 余额）、
+  `/status`（`/状态`，USER 级，查看开户数/处理中会话数/内心思考延迟中位数）、
   `/help`（`/帮助`，VISITOR 级，按调用者权限列出可用指令）。
 - **说话人归属**：群聊多对单场景下，消息正文自动带 `【群名片/昵称】` 前缀
   （注入前经 `sanitize_display_name` 净化：去换行/括号、限长 24，防群名片伪造指令），
@@ -116,6 +118,15 @@ Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力
   消息中 @ 其他人的段会转译为 `@昵称` 文本（@bot 自身的段丢弃、`@全体成员` 特判），
   昵称优先取缓存、未命中调 `get_group_member_info`，兜底为 QQ 号——
   角色能看懂「你认识 @某某 吗」这类指代。
+- **引用回复原文**：消息里的引用段（reply）会经 `get_msg` 取回被引用消息，
+  以 `（引用 昵称：…）`（截断 120 字）拼进文本——A 引用 B 的话 @bot 问「你认识她吗」
+  时角色看得到 B 说过什么；取不到（如 NapCat 缓存没有）则静默跳过。
+  可用 `GSK_NB2_QUOTE_CONTEXT=false` 关闭。
+- **复读防护（烦躁模型）**：同一用户连续复读/刷屏时角色会烦——连击 3 次注入厌烦
+  （回复转冷淡），5 次让角色当面表态后进入 10 分钟「不理」冷却；冷却期复读直接丢弃
+  （零 token），有新意的内容则由 LLM 以角色性格裁决：消气原谅 / 破例回一句 / 继续不理。
+  阈值与冷却在全局配置 `repeat_guard` 节（`warn_streak` / `mute_streak` / `mute_minutes` /
+  `similarity` / `history_size` / `llm_break`），私聊同样生效。
 - **群友印象**（fake db）：与新群友的首轮交谈完成后，适配器用一个隔离的
   `nb2-meta` 元租户让角色脱稿写一段第一人称「第一印象」，存入
   `nb2_data/known_members.json`（key 为 `{昵称}_{QQ号}`，同名靠 QQ 号后缀区分、

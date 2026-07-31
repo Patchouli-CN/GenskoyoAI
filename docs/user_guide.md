@@ -285,6 +285,7 @@ resource_control:
   default_timeout_seconds: 120.0
   dependency_install_timeout_seconds: 600
   overflow_policy: "reject"
+  tenant_max_agents_per_user: 32
 ```
 
 说明：
@@ -293,6 +294,9 @@ resource_control:
 - `overflow_policy: "wait"`：允许等待队列；此时 `acquire_timeout_seconds` 必须大于 0。
 - 子资源并发如果大于 `runtime_max_concurrent`，会被 Runtime 总闸门实际限制，诊断会给 warning。
 - 依赖安装通常较慢，建议 `dependency_install_timeout_seconds` 不小于 `default_timeout_seconds`。
+- `tenant_max_agents_per_user`：每用户内存中同时装配的租户 Agent 上限（多租户部署时生效）。
+  达到上限时 Runtime 会休眠最久未活跃的租户（会话保存、磁盘数据保留，再次发言自动唤醒），
+  只有全部租户都在处理请求时才返回 `agent.limit_exceeded`。
 
 ## 8. 创建和校验角色
 
@@ -326,6 +330,12 @@ example_dialogue:
   默认 `0.3 / 0.35 / 0.2 / 0.15`（总和 1，量纲不变）；缺失维度回落默认。
   情感型调高 `emotional_charge`、话痨型调高 `expression_drive`、
   黏人型调高 `relational_need`、严谨型调高 `situational_relevance`。
+- `emotion_baseline`：八维情绪基线（可选），角色的「平常心情」与情绪衰减目标。
+  八个维度为 `anger`（愤怒）、`sorrow`（悲伤）、`fear`（恐惧）、`happy`（快乐）、
+  `love`（爱意）、`surprised`（惊讶）、`disgust`（厌恶）、`shame`（羞耻），各 0~1，
+  不写 = 全 0 平稳。对话中 LLM 会顺带自评情绪，状态随时间向基线缓慢衰减
+  （默认半衰期 30 分钟）；当前情绪会注入回复语气，并影响对话欲阈值。
+  例：天真烂漫型 `{happy: 0.4}`；忧郁型 `{sorrow: 0.3}`。
 
 开场模式由顶层配置 `begin_scene` 控制：
 
@@ -534,7 +544,7 @@ GensokyoAI 自有的 `web_search` 工具默认使用 DuckDuckGo（`ddgs` 包）�
 ```yaml
 tool:
   enabled: true
-  builtin_tools: ["time", "moon", "memory", "system", "web_search"]
+  builtin_tools: ["time", "moon", "system", "web_search"]
   web_search:
     enabled: true
     provider: "ddg"        # ddg / bing / api / mixed

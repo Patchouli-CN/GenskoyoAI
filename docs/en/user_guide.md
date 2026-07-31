@@ -320,6 +320,15 @@ Field descriptions:
 - `begin_scene`: scene opening description (optional). When `begin_scene: true` is set in the top-level config, the model will proactively generate a description of the character's current state based on this description, rather than reciting the static `greeting`.
 - `example_dialogue`: example dialogue to help the model understand the character style.
 - `metadata`: character metadata for retrieval or display.
+- `motivation_weights`: four-dimension motivation weights (optional), deciding which drive dominates the urge to speak.
+  Dimensions: `expression_drive`, `emotional_charge`, `relational_need`, `situational_relevance`;
+  defaults `0.3 / 0.35 / 0.2 / 0.15` (sum 1); missing dimensions fall back to defaults.
+- `emotion_baseline`: eight-dimension emotion baseline (optional), the character's resting mood
+  and the target emotions decay toward. Dimensions: `anger`, `sorrow`, `fear`, `happy`, `love`,
+  `surprised`, `disgust`, `shame` (0~1 each; omit for a calm baseline). The LLM self-reports
+  emotions during conversation, and the state slowly decays toward this baseline (default
+  half-life: 30 minutes); current emotion is injected into reply tone and modulates the
+  speaking-drive threshold. Examples: cheerful `{happy: 0.4}`; melancholic `{sorrow: 0.3}`.
 
 Opening mode is controlled by the top-level config `begin_scene`:
 
@@ -526,7 +535,7 @@ GensokyoAI's own `web_search` tool now uses DuckDuckGo (`ddgs` package) by defau
 ```yaml
 tool:
   enabled: true
-  builtin_tools: ["time", "moon", "memory", "system", "web_search"]
+  builtin_tools: ["time", "moon", "system", "web_search"]
   web_search:
     enabled: true
     provider: "ddg"        # ddg / bing / api / mixed

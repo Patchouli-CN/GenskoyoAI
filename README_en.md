@@ -105,7 +105,7 @@ GensokyoAI is not a simple Q&A bot. It is a dialogue engine built around rolepla
 
 Conversations do not end with the current sentence. Characters retain recent context, compress long-term exchanges into memories, and build connections around topics. In later conversations, the system retrieves relevant memories to help characters naturally recall the past.
 
-Memory management is not simply "stuff everything into context." When tool calling is enabled and the model chooses to invoke memory tools, the character can actively remember or recall information based on the conversation. Topic and forgetting mechanisms make memories feel more like real impressions than rigid records.
+Memory management is not simply "stuff everything into context," nor does it rely on the model remembering to take notes. As the conversation progresses, the system periodically distills recent exchanges into lasting "precious memories" (facts, preferences, relationship changes, emotionally significant events) and links them by topic. In later conversations, relevant memories are retrieved into the prompt so characters naturally recall the past. Together with topic awareness and forgetting curves, memories feel like real impressions rather than rigid records.
 
 ### Natural Character Activity
 
