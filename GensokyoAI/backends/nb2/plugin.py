@@ -375,13 +375,26 @@ async def _chat(
     verdict = None
     if _repeat_guard is not None and member_qq is not None:
         verdict = _repeat_guard.check(key, member_qq, text)
+        member_label = member_name or str(member_qq)
         if verdict.verdict is RepeatVerdict.MUTED:
             # 「不理」冷却中：静默丢弃，不进 Runtime（零 token），模拟真人已读不回
             logger.info(
-                f"[nb2] {agent_id} 的 {member_name or member_qq} 处于「不理」冷却"
+                f"[nb2] {agent_id} 的 {member_label} 处于「不理」冷却"
                 f"（剩 {verdict.remaining_seconds:.0f} 秒），消息已忽略"
             )
             return
+        if verdict.verdict is RepeatVerdict.ANNOYED:
+            logger.info(
+                f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次，"
+                "已注入厌烦情绪（回复将转冷淡）"
+            )
+        elif verdict.verdict is RepeatVerdict.FAREWELL:
+            logger.info(
+                f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次，"
+                f"角色将当面表态「不理他」并进入 {_repeat_guard.mute_seconds / 60:.0f} 分钟冷却"
+            )
+        elif verdict.streak:
+            logger.debug(f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次")
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
@@ -391,7 +404,6 @@ async def _chat(
         if impression:
             contexts.append(f"【你对 {member_name} 的印象】\n{impression}")
     if verdict is not None:
-        member_label = member_name or str(member_qq)
         if verdict.verdict is RepeatVerdict.ANNOYED:
             # 厌烦区：角色回复自然转冷淡（由性格决定怎么表达）
             contexts.append(build_repeat_annoyance_context(member_label, verdict.streak))
