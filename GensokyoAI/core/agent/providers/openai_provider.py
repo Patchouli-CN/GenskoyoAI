@@ -232,15 +232,17 @@ class OpenAIProvider(BaseProvider):
 
     # ==================== 核心 API ====================
 
-    async def chat(
+    def _build_call_kwargs(
         self,
         model: str,
         messages: list[dict],
-        tools: list[dict] | None = None,
-        options: dict | None = None,
-        **kwargs,
-    ) -> UnifiedResponse:
-        """非流式调用 OpenAI 兼容 API"""
+        tools: list[dict] | None,
+        options: dict | None,
+        *,
+        stream: bool = False,
+        extra_body: dict | None = None,
+    ) -> dict:
+        """组装 chat.completions.create 的共用请求参数（chat 与 chat_stream 共用）。"""
         options = options or {}
 
         call_kwargs: dict = {
@@ -249,6 +251,12 @@ class OpenAIProvider(BaseProvider):
             "temperature": options.get("temperature", 0.7),
             "top_p": options.get("top_p", 0.9),
         }
+        if stream:
+            call_kwargs["stream"] = True
+
+        # 应用 extra_body（如 thinking 模式控制）
+        if extra_body:
+            call_kwargs["extra_body"] = extra_body
 
         # max_tokens 映射：优先使用 max_completion_tokens（新版 API 推荐），回退到 max_tokens
         max_tokens = (
@@ -267,6 +275,19 @@ class OpenAIProvider(BaseProvider):
             call_kwargs["tools"] = self._convert_tools_to_openai(tools)
             if tool_choice := options.get("tool_choice"):
                 call_kwargs["tool_choice"] = tool_choice
+
+        return call_kwargs
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        options: dict | None = None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        """非流式调用 OpenAI 兼容 API"""
+        call_kwargs = self._build_call_kwargs(model, messages, tools, options)
 
         if self._uses_custom_http():
             response = await post_json(
@@ -326,33 +347,9 @@ class OpenAIProvider(BaseProvider):
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 OpenAI 兼容 API"""
-        options = options or {}
-
-        call_kwargs: dict = {
-            "model": model,
-            "messages": self._clean_messages(messages),
-            "temperature": options.get("temperature", 0.7),
-            "top_p": options.get("top_p", 0.9),
-            "stream": True,
-        }
-
-        # 应用 extra_body（如 thinking 模式控制）
-        if extra_body:
-            call_kwargs["extra_body"] = extra_body
-
-        # max_tokens 映射
-        max_tokens = (
-            options.get("max_completion_tokens")
-            or options.get("num_predict")
-            or options.get("max_tokens")
+        call_kwargs = self._build_call_kwargs(
+            model, messages, tools, options, stream=True, extra_body=extra_body
         )
-        if max_tokens:
-            call_kwargs["max_completion_tokens"] = max_tokens
-
-        if tools:
-            call_kwargs["tools"] = self._convert_tools_to_openai(tools)
-            if tool_choice := options.get("tool_choice"):
-                call_kwargs["tool_choice"] = tool_choice
 
         # 流式工具调用累积器（不存 reasoning_content，防止 V4 要求回传）
         tool_calls_acc: dict[int, dict] = {}

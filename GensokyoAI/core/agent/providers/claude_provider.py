@@ -126,15 +126,15 @@ class ClaudeProvider(BaseProvider):
             return {"format": response_format}
         return {"format": {"type": "json_schema", "schema": schema}}
 
-    async def chat(
+    def _build_call_kwargs(
         self,
         model: str,
         messages: list[dict],
-        tools: list[dict] | None = None,
-        options: dict | None = None,
-        **kwargs,
-    ) -> UnifiedResponse:
-        """非流式调用 Claude API"""
+        tools: list[dict] | None,
+        options: dict | None,
+        think: bool | None,
+    ) -> dict:
+        """组装 messages.create/stream 的共用请求参数（chat 与 chat_stream 共用）。"""
         options = options or {}
         system_prompt, claude_messages = self._convert_messages_to_claude(messages)
         max_tokens = options.get("num_predict") or options.get("max_tokens") or 8192
@@ -158,7 +158,6 @@ class ClaudeProvider(BaseProvider):
 
         # Claude extended thinking 支持。
         # Anthropic 要求 thinking budget 小于 max_tokens；开启 thinking 时移除采样参数以避免模型族兼容问题。
-        think = kwargs.get("think")
         if think:
             thinking_budget = self._get_thinking_budget(options, max_tokens)
             if thinking_budget:
@@ -173,7 +172,20 @@ class ClaudeProvider(BaseProvider):
             # 不传参数也会思考；必须显式打 disabled 才能关闭
             call_kwargs["thinking"] = {"type": "disabled"}
 
-        response = await self._client.messages.create(**call_kwargs)
+        return call_kwargs
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        options: dict | None = None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        """非流式调用 Claude API"""
+        response = await self._client.messages.create(
+            **self._build_call_kwargs(model, messages, tools, options, kwargs.get("think"))
+        )
         return self._convert_response(response)
 
     async def chat_stream(
@@ -185,48 +197,13 @@ class ClaudeProvider(BaseProvider):
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 Claude API"""
-        options = options or {}
-        system_prompt, claude_messages = self._convert_messages_to_claude(messages)
-        max_tokens = options.get("num_predict") or options.get("max_tokens") or 8192
-
-        call_kwargs: dict = {
-            "model": model,
-            "messages": claude_messages,
-            "max_tokens": max_tokens,
-            "temperature": options.get("temperature", 0.7),
-            "top_p": options.get("top_p", 0.9),
-        }
-
-        if system_prompt:
-            call_kwargs["system"] = system_prompt
-
-        if response_format := options.get("response_format"):
-            call_kwargs["output_config"] = self._response_format_to_output_config(response_format)
-
-        if tools:
-            call_kwargs["tools"] = self._convert_tools_to_claude(tools)
-
-        # Claude extended thinking 支持。
-        think = kwargs.get("think")
-        if think:
-            thinking_budget = self._get_thinking_budget(options, max_tokens)
-            if thinking_budget:
-                call_kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget,
-                }
-                call_kwargs.pop("temperature", None)
-                call_kwargs.pop("top_p", None)
-        elif think is False:
-            # 显式禁用：kimi-k2.5 等模型在 anthropic 端点默认开启思考，
-            # 不传参数也会思考；必须显式打 disabled 才能关闭
-            call_kwargs["thinking"] = {"type": "disabled"}
-
         # 工具调用 / thinking 累积；Claude 流式事件以 content block index 区分多个 block。
         tool_blocks: dict[int, dict[str, Any]] = {}
         thinking_parts: list[str] = []
 
-        async with self._client.messages.stream(**call_kwargs) as stream:
+        async with self._client.messages.stream(
+            **self._build_call_kwargs(model, messages, tools, options, kwargs.get("think"))
+        ) as stream:
             async for event in stream:
                 # 文本内容
                 if hasattr(event, "type"):

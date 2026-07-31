@@ -140,20 +140,23 @@ class DeepSeekProvider(OpenAIProvider):
             ),
         )
 
-    async def chat(
+    def _build_call_kwargs(
         self,
         model: str,
         messages: list[dict],
-        tools: list[dict] | None = None,
-        options: dict | None = None,
-        **kwargs,
-    ) -> UnifiedResponse:
-        """非流式调用 DeepSeek API。"""
+        tools: list[dict] | None,
+        options: dict | None,
+        *,
+        stream: bool = False,
+    ) -> dict:
+        """组装 chat.completions.create 的共用请求参数（chat 与 chat_stream 共用）。"""
         options = options or {}
         call_kwargs: dict = {
             "model": model,
             "messages": self._prepare_messages(messages),
         }
+        if stream:
+            call_kwargs["stream"] = True
 
         max_tokens = (
             options.get("max_completion_tokens")
@@ -175,7 +178,20 @@ class DeepSeekProvider(OpenAIProvider):
             if tool_choice := options.get("tool_choice"):
                 call_kwargs["tool_choice"] = tool_choice
 
-        response = await self._client.chat.completions.create(**call_kwargs)
+        return call_kwargs
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        options: dict | None = None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        """非流式调用 DeepSeek API。"""
+        response = await self._client.chat.completions.create(
+            **self._build_call_kwargs(model, messages, tools, options)
+        )
         return self._convert_response(response)
 
     async def chat_stream(  # type: ignore
@@ -187,32 +203,7 @@ class DeepSeekProvider(OpenAIProvider):
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 DeepSeek API，捕获 reasoning_content 和 tool_calls。"""
-        options = options or {}
-        call_kwargs: dict = {
-            "model": model,
-            "messages": self._prepare_messages(messages),
-            "stream": True,
-        }
-
-        max_tokens = (
-            options.get("max_completion_tokens")
-            or options.get("num_predict")
-            or options.get("max_tokens")
-        )
-        if max_tokens:
-            call_kwargs["max_tokens"] = max_tokens
-
-        if not self._thinking_enabled:
-            call_kwargs["temperature"] = options.get("temperature", 0.7)
-            call_kwargs["top_p"] = options.get("top_p", 0.9)
-
-        self._apply_deepseek_options(call_kwargs)
-        self._apply_deepseek_response_format(call_kwargs, options)
-
-        if tools:
-            call_kwargs["tools"] = self._convert_tools_to_openai(tools)
-            if tool_choice := options.get("tool_choice"):
-                call_kwargs["tool_choice"] = tool_choice
+        call_kwargs = self._build_call_kwargs(model, messages, tools, options, stream=True)
 
         tool_calls_acc: dict[int, dict] = {}
         content_acc = ""

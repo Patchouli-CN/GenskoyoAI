@@ -93,17 +93,14 @@ class GeminiProvider(BaseProvider):
             return {"text": {"mime_type": "application/json"}}
         return response_format
 
-    async def chat(
+    def _build_content_config(
         self,
-        model: str,
         messages: list[dict],
-        tools: list[dict] | None = None,
-        options: dict | None = None,
-        **kwargs,
-    ) -> UnifiedResponse:
-        """非流式调用 Gemini API"""
-        genai_types = self._load_genai_types()
-
+        tools: list[dict] | None,
+        options: dict | None,
+        genai_types,
+    ):
+        """组装 GenerateContentConfig 与消息体（chat 与 chat_stream 共用）。"""
         options = options or {}
         system_instruction, gemini_contents = self._convert_messages(messages)
 
@@ -127,7 +124,21 @@ class GeminiProvider(BaseProvider):
         if gemini_tools:
             config_kwargs["tools"] = gemini_tools
 
-        config = genai_types.GenerateContentConfig(**config_kwargs)
+        return genai_types.GenerateContentConfig(**config_kwargs), gemini_contents
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        options: dict | None = None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        """非流式调用 Gemini API"""
+        genai_types = self._load_genai_types()
+        config, gemini_contents = self._build_content_config(
+            messages, tools, options, genai_types
+        )
 
         response = await self._client.aio.models.generate_content(
             model=model,
@@ -147,31 +158,9 @@ class GeminiProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 Gemini API"""
         genai_types = self._load_genai_types()
-
-        options = options or {}
-        system_instruction, gemini_contents = self._convert_messages(messages)
-
-        config_kwargs: dict = {
-            "temperature": options.get("temperature", 0.7),
-            "top_p": options.get("top_p", 0.9),
-        }
-
-        max_tokens = options.get("num_predict") or options.get("max_tokens")
-        if max_tokens:
-            config_kwargs["max_output_tokens"] = max_tokens
-
-        if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
-
-        if response_format := options.get("response_format"):
-            config_kwargs["response_format"] = self._response_format_to_gemini(response_format)
-
-        gemini_tools = self._convert_tools_to_gemini(tools) if tools else []
-        self._inject_google_search_tool(gemini_tools, options, genai_types)
-        if gemini_tools:
-            config_kwargs["tools"] = gemini_tools
-
-        config = genai_types.GenerateContentConfig(**config_kwargs)
+        config, gemini_contents = self._build_content_config(
+            messages, tools, options, genai_types
+        )
 
         async for chunk in self._client.aio.models.generate_content_stream(
             model=model,

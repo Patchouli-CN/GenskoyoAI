@@ -143,15 +143,16 @@ class OpenAIResponsesProvider(BaseProvider):
             text_format["schema"] = schema
         return text_format
 
-    async def chat(
+    def _build_call_kwargs(
         self,
         model: str,
         messages: list[dict],
-        tools: list[dict] | None = None,
-        options: dict | None = None,
-        **kwargs,
-    ) -> UnifiedResponse:
-        """非流式调用 OpenAI Responses API"""
+        tools: list[dict] | None,
+        options: dict | None,
+        *,
+        stream: bool = False,
+    ) -> dict:
+        """组装 responses.create 的共用请求参数（chat 与 chat_stream 共用）。"""
         options = options or {}
 
         # 从 messages 中分离 system/developer 指令和对话内容
@@ -161,6 +162,8 @@ class OpenAIResponsesProvider(BaseProvider):
             "model": model,
             "input": input_items,
         }
+        if stream:
+            call_kwargs["stream"] = True
 
         # 设置 instructions（系统提示词）
         if instructions:
@@ -181,7 +184,8 @@ class OpenAIResponsesProvider(BaseProvider):
         if max_tokens:
             call_kwargs["max_output_tokens"] = max_tokens
 
-        if response_format := options.get("response_format"):
+        # text format 当前仅非流式路径使用（保持既有行为）
+        if not stream and (response_format := options.get("response_format")):
             call_kwargs["text"] = {"format": self._response_format_to_text_format(response_format)}
 
         # 工具支持
@@ -198,6 +202,19 @@ class OpenAIResponsesProvider(BaseProvider):
 
         # store 配置（默认不存储，因为项目自己管理对话状态）
         call_kwargs["store"] = options.get("store", False)
+
+        return call_kwargs
+
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        options: dict | None = None,
+        **kwargs,
+    ) -> UnifiedResponse:
+        """非流式调用 OpenAI Responses API"""
+        call_kwargs = self._build_call_kwargs(model, messages, tools, options)
 
         if self._uses_custom_http():
             response = await post_json(
@@ -263,43 +280,7 @@ class OpenAIResponsesProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 OpenAI Responses API"""
         options = options or {}
-
-        # 从 messages 中分离指令和对话内容
-        instructions, input_items = self._convert_messages_to_input(messages)
-
-        call_kwargs: dict = {
-            "model": model,
-            "input": input_items,
-            "stream": True,
-        }
-
-        if instructions:
-            call_kwargs["instructions"] = instructions
-
-        temperature = options.get("temperature", 0.7)
-        top_p = options.get("top_p", 0.9)
-        call_kwargs["temperature"] = temperature
-        call_kwargs["top_p"] = top_p
-
-        max_tokens = (
-            options.get("max_completion_tokens")
-            or options.get("num_predict")
-            or options.get("max_tokens")
-        )
-        if max_tokens:
-            call_kwargs["max_output_tokens"] = max_tokens
-
-        converted_tools = self._convert_tools_to_responses(tools) if tools else []
-        self._inject_web_search_tool(converted_tools, options)
-        if converted_tools:
-            call_kwargs["tools"] = converted_tools
-            if tool_choice := options.get("tool_choice"):
-                call_kwargs["tool_choice"] = tool_choice
-
-        if reasoning := options.get("reasoning"):
-            call_kwargs["reasoning"] = reasoning
-
-        call_kwargs["store"] = options.get("store", False)
+        call_kwargs = self._build_call_kwargs(model, messages, tools, options, stream=True)
 
         # 流式工具调用累积器：{output_index: {"call_id": ..., "name": ..., "arguments": ...}}
         tool_calls_acc: dict[int, dict] = {}
