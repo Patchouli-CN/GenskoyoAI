@@ -235,6 +235,19 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.25 情绪→行为倾向映射（2026-07-31，用户「just do it」）
+
+- 阈值调制：`Emotion.threshold_adjustment()`（[-0.10,+0.12]）——happy/love/
+  surprised 降阈（更爱说）、sorrow/fear/shame 升阈（消沉少言）、anger 微降
+  （易呛）、disgust 微升（懒得理）；ThinkEngine 评估时叠加到 drive_threshold
+  并钳制 [0.3, 0.9]，二元判断结构不变（§7.3），日志带调制明细。
+- 行为倾向注入：`Emotion.behavior_tendency()`（显著情绪 ≥0.4 才给倾向）——
+  消沉→简短低沉点到即止、心情好→话多愿延展、气头上→带刺易呛、嫌弃→冷淡
+  疏离；经 `ThinkEngine.emotion_tone_context()` 合并进语气注入
+  （build_emotion_tone_context 加 tendency 段），全 send 路径生效。
+- 测试：调制方向/钳制、倾向文本、同一份 0.55 打分在 happy（说）/sorrow（沉默）/
+  平静（沉默）三态对照、tone_context 合成。增量 28 passed。
+
 ## 8.24 memory 模型字段跟随主模型（2026-07-31，用户报 provider 不支持）
 
 - `episodic_summary_model` / `auto_memory_model` 原默认值写死 Ollama 本地模型名

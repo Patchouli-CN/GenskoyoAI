@@ -308,6 +308,50 @@ class ThinkEngineDecisionTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_evaluate_speaking_drive_threshold_modulated_by_emotion(self):
+        """情绪调制阈值：同一份打分，心情好时说、消沉时沉默（§8.25）。"""
+        borderline_json = (
+            '{"message": "嗯……", "delay_seconds": 120, "reason": "", '
+            '"enthusiasm": 0.5, "motivation": {"expression_drive": 0.55, '
+            '"emotional_charge": 0.55, "relational_need": 0.55, "situational_relevance": 0.55}}'
+        )
+        # total = 0.55（默认权重总和 1）；基础阈值 0.6
+
+        async def run():
+            # 心情好：阈值 0.6 - 0.072(happy0.9*-0.08) ≈ 0.528 → 说
+            happy_engine, _ = self._make_engine(_FakeModelClient(borderline_json))
+            happy_engine.emotion_state.current = Emotion(happy=0.9)
+            decision = await happy_engine.evaluate_speaking_drive("触发", [])
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertTrue(decision.want_speak)
+
+            # 消沉：阈值 0.6 + 0.09(sorrow0.9*0.10) ≈ 0.69 → 沉默
+            sad_engine, _ = self._make_engine(_FakeModelClient(borderline_json))
+            sad_engine.emotion_state.current = Emotion(sorrow=0.9)
+            decision = await sad_engine.evaluate_speaking_drive("触发", [])
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertFalse(decision.want_speak)
+
+            # 平静：阈值不变 0.6 → 沉默（0.55 < 0.6）
+            calm_engine, _ = self._make_engine(_FakeModelClient(borderline_json))
+            decision = await calm_engine.evaluate_speaking_drive("触发", [])
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertFalse(decision.want_speak)
+
+        asyncio.run(run())
+
+    def test_emotion_tone_context_includes_tendency(self):
+        engine, _ = self._make_engine(_FakeModelClient())
+        self.assertEqual(engine.emotion_tone_context(), "")  # 平稳不注入
+        engine.emotion_state.current = Emotion(anger=0.7)
+        context = engine.emotion_tone_context()
+        self.assertIn("愤怒", context)
+        self.assertIn("气头上", context)
+        self.assertIn("不要直接说出这些数值", context)
+
     def test_evaluate_speaking_drive_returns_none_on_invalid_json(self):
         async def run():
             model_client = _FakeModelClient("这不是 JSON")

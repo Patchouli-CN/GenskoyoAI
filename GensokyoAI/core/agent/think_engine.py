@@ -30,6 +30,7 @@ from .emotion import Emotion, EmotionState
 from .model_client import ModelClient
 from .motivation_evaluator import MotivationProfile
 from .prompts import (
+    build_emotion_tone_context,
     build_long_term_think_prompt,
     build_pre_speak_thought_prompt,
     build_speaking_drive_prompts,
@@ -169,6 +170,13 @@ class ThinkEngine:
     def emotion_context_line(self) -> str:
         """当前情绪状态的一行描述（全平稳时为空串，不注入）。"""
         return self.emotion_state.context_line()
+
+    def emotion_tone_context(self) -> str:
+        """完整的情绪语气注入上下文（含行为倾向）；全平稳时为空串。"""
+        line = self.emotion_state.context_line()
+        if not line:
+            return ""
+        return build_emotion_tone_context(line, self.emotion_state.current.behavior_tendency())
 
     # ==================== 生命周期 ====================
 
@@ -400,11 +408,15 @@ class ThinkEngine:
         （用 message 作意图摘要、delay_seconds 排定时器）。
         """
         context_text = self._format_context_for_decision(recent_messages, trigger_text)
-        threshold = (
+        base_threshold = (
             self.initiative_timer_config.drive_threshold
             if self.initiative_timer_config is not None
             else _SPEAKING_DRIVE_DEFAULT_THRESHOLD
         )
+        # 情绪调制阈值（§8.25）：消沉少言、兴致话多；二元判断结构不变，
+        # 最终阈值钳制在 [0.3, 0.9]
+        adjust = self.emotion_state.current.threshold_adjustment()
+        threshold = max(0.3, min(0.9, base_threshold + adjust))
 
         system_prompt, user_prompt = build_speaking_drive_prompts(
             self.character_name,
@@ -449,7 +461,9 @@ class ThinkEngine:
                     emotion_line = self.emotion_state.context_line()
                     logger.debug(
                         f"[ThinkEngine] 对话欲评估: total={decision.total_drive:.2f} "
-                        f"(阈值 {threshold:.2f}) want_speak={decision.want_speak}, "
+                        f"(阈值 {threshold:.2f}"
+                        + (f"={base_threshold:.2f}{adjust:+.2f}" if adjust else "")
+                        + f") want_speak={decision.want_speak}, "
                         f"motivation={decision.motivation.to_prompt_context()}"
                         + (f", emotion={emotion_line}" if emotion_line else "")
                     )

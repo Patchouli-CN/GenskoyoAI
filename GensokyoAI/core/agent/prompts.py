@@ -190,13 +190,16 @@ def build_speaking_drive_prompts(
     return system_prompt, user_prompt
 
 
-def build_emotion_tone_context(emotion_line: str) -> str:
-    """情绪语气注入（解析方：无，随本轮消息注入 system_contexts，不写入会话）。"""
-    return (
-        f"【你当前的情绪状态】{emotion_line}\n"
-        "让它自然渗入你的语气、措辞与反应强度；"
-        "不要直接说出这些数值，也不要提及「情绪状态」这回事。"
-    )
+def build_emotion_tone_context(emotion_line: str, tendency: str = "") -> str:
+    """情绪语气注入（解析方：无，随本轮消息注入 system_contexts，不写入会话）。
+
+    tendency 为情绪对应的行为倾向（话多话少、带刺与否），随状态一并注入。
+    """
+    parts = [f"【你当前的情绪状态】{emotion_line}"]
+    if tendency:
+        parts.append(tendency + "。")
+    parts.append("让它自然渗入你的语气、措辞与反应强度；不要直接说出这些数值，也不要提及「情绪状态」这回事。")
+    return "\n".join(parts)
 
 
 # ==================== 主动消息生成（InitiativeCoordinator） ====================

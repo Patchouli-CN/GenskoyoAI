@@ -80,6 +80,36 @@ class Emotion(Struct):
             return "（平稳，无显著情绪）"
         return " | ".join(f"{label} {value:.2f}" for label, value in dominant)
 
+    def threshold_adjustment(self) -> float:
+        """情绪对对话欲阈值的调制量（叠加在 drive_threshold 上，返回 [-0.10, +0.12]）。
+
+        方向直觉：心情好/有兴致 → 更爱说（降阈）；消沉/害怕/羞愧 → 不想说（升阈）；
+        愤怒 → 容易呛出来（微降）；厌恶 → 懒得搭理（微升）。
+        最终阈值由调用方钳制在合法区间，二元判断结构不变（§7.3）。
+        """
+        positive = max(self.happy, self.love, self.surprised * 0.5)
+        withdrawal = max(self.sorrow, self.fear, self.shame)
+        adjust = (
+            -0.08 * positive
+            + 0.10 * withdrawal
+            - 0.04 * self.anger
+            + 0.04 * self.disgust
+        )
+        return max(-0.10, min(0.12, adjust))
+
+    def behavior_tendency(self) -> str:
+        """显著情绪（≥0.4）对应的行为倾向描述；无显著情绪返回空串。"""
+        hints = []
+        if max(self.sorrow, self.fear, self.shame) >= 0.4:
+            hints.append("现在没什么说话的欲望：回复可以更简短、低沉，不想展开的话题就点到即止")
+        if max(self.happy, self.love, self.surprised * 0.8) >= 0.4:
+            hints.append("现在心情不错：话自然会多一些，愿意主动分享和延展话题")
+        if self.anger >= 0.4:
+            hints.append("现在在气头上：语气带刺，容易呛人，耐心有限")
+        if self.disgust >= 0.4:
+            hints.append("现在有些嫌弃：态度冷淡疏离，不想过多纠缠")
+        return "；".join(hints)
+
 
 class EmotionState:
     """情绪状态机：基线 + 当前值，LLM 自评混合，随时间向基线衰减。

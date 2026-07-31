@@ -36,7 +36,7 @@ from .emotion import Emotion
 from .initiative_coordinator import InitiativeCoordinator
 from .lifecycle import LifecycleManager
 from .message_builder import MessageBuilder
-from .prompts import build_emotion_tone_context, build_roleplay_system_prompt
+from .prompts import build_roleplay_system_prompt
 from .response_handler import ResponseHandler
 from .runtime_context import AgentDependencies, AgentLazyComponents
 from .save_coordinator import SaveCoordinator
@@ -546,11 +546,11 @@ class Agent:
         text_input = self._extract_text_from_content(user_input)
         report = detect_prompt_injection(text_input)
         contexts = list(system_contexts or [])
-        # 情绪语气注入：让当前心情自然渗入本轮回复（不写入会话）
+        # 情绪语气注入：让当前心情（含行为倾向）自然渗入本轮回复（不写入会话）
         if self._think_engine is not None and (
-            emotion_line := self._think_engine.emotion_context_line()
+            emotion_context := self._think_engine.emotion_tone_context()
         ):
-            contexts.append(build_emotion_tone_context(emotion_line))
+            contexts.append(emotion_context)
         data: dict[str, Any] = {
             "content": user_input,
             "system_contexts": contexts,

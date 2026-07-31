@@ -44,6 +44,26 @@ class EmotionTests(unittest.TestCase):
         self.assertEqual(Emotion().to_prompt_context(), "（平稳，无显著情绪）")
         self.assertIn("快乐", Emotion(happy=0.6).to_prompt_context())
 
+    def test_threshold_adjustment_direction_and_bounds(self):
+        # 心情好降阈（更爱说）
+        self.assertLess(Emotion(happy=0.9).threshold_adjustment(), 0)
+        # 消沉升阈（不想说）
+        self.assertGreater(Emotion(sorrow=0.9).threshold_adjustment(), 0)
+        # 愤怒微降（易呛）、厌恶微升
+        self.assertLess(Emotion(anger=0.9).threshold_adjustment(), 0)
+        self.assertGreater(Emotion(disgust=0.9).threshold_adjustment(), 0)
+        # 平静无调制；极端值钳制在 [-0.10, +0.12]
+        self.assertEqual(Emotion().threshold_adjustment(), 0)
+        self.assertGreaterEqual(Emotion(sorrow=1.0, fear=1.0, shame=1.0).threshold_adjustment(), -0.10)
+        self.assertLessEqual(Emotion(sorrow=1.0, fear=1.0, shame=1.0).threshold_adjustment(), 0.12)
+
+    def test_behavior_tendency(self):
+        self.assertEqual(Emotion(happy=0.2).behavior_tendency(), "")
+        self.assertIn("心情不错", Emotion(happy=0.6).behavior_tendency())
+        self.assertIn("没什么说话的欲望", Emotion(sorrow=0.6).behavior_tendency())
+        self.assertIn("气头上", Emotion(anger=0.6).behavior_tendency())
+        self.assertIn("嫌弃", Emotion(disgust=0.6).behavior_tendency())
+
 
 class EmotionStateTests(unittest.TestCase):
     def test_update_blends_appraisal(self):
