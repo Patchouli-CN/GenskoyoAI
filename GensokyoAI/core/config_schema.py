@@ -276,6 +276,9 @@ class ResourceControlConfig(Struct):
     default_timeout_seconds: float = 120.0
     dependency_install_timeout_seconds: int = 600
     overflow_policy: Literal["reject", "wait"] = "reject"
+    # 每用户同时在内存中装配的租户 Agent 上限；达到上限时休眠最久未活跃租户
+    # （会话保存、磁盘数据保留，再次发言自动唤醒），全部繁忙才报 agent.limit_exceeded
+    tenant_max_agents_per_user: int = 32
 
 
 class WorldActorConfig(Struct):

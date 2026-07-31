@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import tempfile
 from pathlib import Path
 
@@ -169,3 +170,83 @@ def test_world_init_agent_id_matches_agent_init_contract() -> None:
     # 其余资源方法仍必须传 agent_id
     assert "agent_id" in network_rpc_requirements("agent.send_message")
     assert "agent_id" in network_rpc_requirements("world.send_message")
+
+
+def _register_idle_tenant(service: RuntimeService, user_id: str, agent_id: str) -> RuntimeService:
+    child = RuntimeService(
+        service.state.root_dir,
+        tenant_key=(user_id, agent_id),
+        storage_root=service._tenant_storage_root(user_id, agent_id),
+    )
+    service._tenant_services[(user_id, agent_id)] = child
+    return child
+
+
+def test_tenant_limit_evicts_least_active_idle_tenant() -> None:
+    """达到租户上限：休眠最久未活跃租户（而不是硬拒绝），再发言可原样唤醒。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            service._tenant_agent_limit = lambda: 2  # type: ignore[method-assign]
+            _register_idle_tenant(service, "alice", "old")
+            _register_idle_tenant(service, "alice", "fresh")
+            service._tenant_last_active[("alice", "old")] = 1.0
+            service._tenant_last_active[("alice", "fresh")] = 9.0
+
+            # agent.init 新租户：先驱逐 old，随后的装配因角色文件不存在而失败——
+            # 这里只断言驱逐已经发生
+            with pytest.raises(FileNotFoundError):
+                await _as_user(
+                    service, "alice", "agent.init", {"agent_id": "new", "character": "ghost"}
+                )
+
+            assert ("alice", "old") not in service._tenant_services
+            assert ("alice", "old") not in service._tenant_last_active
+            assert ("alice", "fresh") in service._tenant_services
+
+    asyncio.run(run())
+
+
+def test_tenant_limit_raises_only_when_all_busy() -> None:
+    """所有租户都在处理请求时才报 agent.limit_exceeded（真正的背压）。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            service._tenant_agent_limit = lambda: 1  # type: ignore[method-assign]
+            busy = _register_idle_tenant(service, "alice", "busy")
+            await busy._tenant_operation_lock.acquire()
+            try:
+                with pytest.raises(RpcError) as error:
+                    await _as_user(service, "alice", "agent.init", {"agent_id": "new"})
+                assert error.value.code == "agent.limit_exceeded"
+                assert error.value.details == {"maximum": 1}
+                # 忙碌租户不被驱逐
+                assert ("alice", "busy") in service._tenant_services
+            finally:
+                busy._tenant_operation_lock.release()
+
+    asyncio.run(run())
+
+
+def test_tenant_dispatch_marks_last_active() -> None:
+    """每次租户 RPC 派发都刷新活跃时间，活跃租户不会被当作休眠候选。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            _register_idle_tenant(service, "alice", "agent-1")
+            # 未装配 Agent 的调用结果不影响活跃度标记
+            with contextlib.suppress(Exception):
+                await _as_user(service, "alice", "session.list", {"agent_id": "agent-1"})
+            assert service._tenant_last_active[("alice", "agent-1")] > 0.0
+
+    asyncio.run(run())
+
+
+def test_tenant_agent_limit_reads_config_default() -> None:
+    """上限来自 resource_control.tenant_max_agents_per_user（模板默认 32）。"""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        service = RuntimeService(Path(temp_dir))
+        assert service._tenant_agent_limit() == 32

@@ -235,6 +235,25 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.12 租户上限 bug 修复：LRU 休眠驱逐（2026-07-31，用户报 bug）
+
+- 起因：nb2 跑一天后新群/新私聊全部 `agent.limit_exceeded`——旧的
+  `MAX_TENANT_AGENTS_PER_USER = 8` 硬常量对所有 QQ 租户共享（nb2 宿主是单一
+  user），满 8 个后新租户初始化被硬拒绝，且无驱逐机制，永久堵死。
+- 修复：`resource_control.tenant_max_agents_per_user`（默认 32，可配置，
+  校验 minimum=1）替代硬常量；达到上限时 `_evict_idle_tenant` 休眠最久未活跃
+  租户（优雅 shutdown 会话照常保存、manifest 与磁盘数据保留），新租户立即
+  递补；被休眠租户再发言时插件走 agent.not_found 自愈链（重建租户恢复最新
+  会话 + 重订阅），用户无感。正在处理请求的租户（_tenant_operation_lock
+  持有中）不驱逐；全部繁忙才真的报 agent.limit_exceeded（背压语义保留）。
+- 活跃度追踪：`_tenant_last_active` 在每次租户 RPC 派发与 init 成功时刷新
+  （monotonic）；目录恢复的租户默认 0.0（最先被休眠）；删除/驱逐/shutdown 清理。
+- 顺手开大 local.yaml 闸门（5 群并发不再排队误拒）：runtime 4→8、queue 8→16、
+  provider/model 2→4、stream 1→2、tool 2→4、acquire_timeout 0.25→1.0；
+  模板默认值保持保守，仅补 tenant_max_agents_per_user 注释。
+- 测试：tests/test_runtime_multi_user.py 新增 4 例（LRU 驱逐、全忙报错、
+  活跃度刷新、上限读配置）。基线：681 passed, 3 subtests passed。
+
 ## 8.11 复读烦躁模型（2026-07-31，用户定稿，未提交）
 
 - 起因：群友反复刷「转」「停」等无意义内容，角色每条都认真回复，很 bot 且烧 token。

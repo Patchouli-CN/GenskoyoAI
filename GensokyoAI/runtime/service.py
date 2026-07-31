@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections import OrderedDict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -73,7 +74,6 @@ from GensokyoAI.world.types import USER_OCCUPANT_ID
 from GensokyoAI.world.world import GensokyoWorld, WorldAssemblyError
 
 RUNTIME_EVENT_BACKPRESSURE_DROPPED = "runtime.backpressure.dropped"
-MAX_TENANT_AGENTS_PER_USER = 8
 # 非 admin 网络调用者禁止注入的自定义配置/路径参数；agent.init 与 world.init 同一道闸门
 _TENANT_ADMIN_ONLY_PARAMS = (
     "config_path",
@@ -138,6 +138,8 @@ class RuntimeService:
         self._storage_root = storage_root
         self._tenant_services: dict[tuple[str, str], RuntimeService] = {}
         self._tenant_subscription_owners: dict[str, tuple[RuntimeService, str]] = {}
+        # 租户最近活跃时间（monotonic）：LRU 休眠驱逐的依据；目录恢复的租户默认 0.0（最先被休眠）
+        self._tenant_last_active: dict[tuple[str, str], float] = {}
         self._tenant_operation_lock = asyncio.Lock()
         self._event_store = (
             RuntimeEventStore(storage_root / "events.jsonl") if storage_root is not None else None
@@ -200,6 +202,7 @@ class RuntimeService:
             return await dispatch_rpc(self, method, params)
         agent_id = self._pop_required_id(params, "agent_id")
         service = self._require_tenant_service(principal.user_id, agent_id)
+        self._tenant_last_active[(principal.user_id, agent_id)] = time.monotonic()
         session_id = params.get("session_id")
         if self._requires_explicit_session(method) and not session_id:
             raise RpcError(
@@ -262,13 +265,14 @@ class RuntimeService:
         service = self._tenant_services.get(key)
         if service is None:
             owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
-            if owned_count >= MAX_TENANT_AGENTS_PER_USER:
+            limit = self._tenant_agent_limit()
+            if owned_count >= limit and not await self._evict_idle_tenant(user_id):
                 raise RpcError(
                     "Runtime per-user Agent limit exceeded",
                     code="agent.limit_exceeded",
                     user_message="当前用户创建的 Agent 数量已达到上限。",
                     recoverable=True,
-                    details={"maximum": MAX_TENANT_AGENTS_PER_USER},
+                    details={"maximum": limit},
                 )
             storage_root = self._tenant_storage_root(user_id, agent_id)
             service = RuntimeService(
@@ -278,6 +282,7 @@ class RuntimeService:
             )
             self._tenant_services[key] = service
         result = await service.handle("agent.init", params)
+        self._tenant_last_active[key] = time.monotonic()
         self._save_tenant_manifest(user_id, agent_id, service)
         return self._attach_resource_ids(result, user_id, agent_id)
 
@@ -304,13 +309,14 @@ class RuntimeService:
         service = self._tenant_services.get(key)
         if service is None:
             owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
-            if owned_count >= MAX_TENANT_AGENTS_PER_USER:
+            limit = self._tenant_agent_limit()
+            if owned_count >= limit and not await self._evict_idle_tenant(user_id):
                 raise RpcError(
                     "Runtime per-user Agent limit exceeded",
                     code="agent.limit_exceeded",
                     user_message="当前用户创建的 Agent 数量已达到上限。",
                     recoverable=True,
-                    details={"maximum": MAX_TENANT_AGENTS_PER_USER},
+                    details={"maximum": limit},
                 )
             storage_root = self._tenant_storage_root(user_id, agent_id)
             service = RuntimeService(
@@ -320,6 +326,7 @@ class RuntimeService:
             )
             self._tenant_services[key] = service
         result = await service.handle("world.init", params)
+        self._tenant_last_active[key] = time.monotonic()
         self._save_tenant_manifest(user_id, agent_id, service)
         return self._attach_resource_ids(result, user_id, agent_id)
 
@@ -344,6 +351,7 @@ class RuntimeService:
         service = self._tenant_services.pop((user_id, agent_id), None)
         if service is None:
             raise ValueError(f"Runtime Agent does not exist: {agent_id}")
+        self._tenant_last_active.pop((user_id, agent_id), None)
         await service.shutdown()
         manifest = service._storage_root / "agent.json" if service._storage_root else None
         if manifest is not None:
@@ -354,6 +362,37 @@ class RuntimeService:
             "user_id": user_id,
             "agent_id": agent_id,
         }
+
+    def _tenant_agent_limit(self) -> int:
+        """每用户租户上限（resource_control.tenant_max_agents_per_user，默认 32）。"""
+        return int(getattr(self._resource_control_config(), "tenant_max_agents_per_user", 32) or 32)
+
+    async def _evict_idle_tenant(self, user_id: str) -> bool:
+        """达到租户上限时休眠最久未活跃的同用户租户；成功驱逐返回 True。
+
+        休眠 = 优雅 shutdown（会话照常保存），磁盘数据与 manifest 全部保留——
+        下次发言时 agent.init 原样唤醒，对用户不可见。正在处理请求的租户
+        （_tenant_operation_lock 持有中）不参与驱逐；全都繁忙才返回 False。
+        """
+        candidates = [
+            (key, service)
+            for key, service in self._tenant_services.items()
+            if key[0] == user_id and not service._tenant_operation_lock.locked()
+        ]
+        if not candidates:
+            return False
+        key, service = min(
+            candidates, key=lambda item: self._tenant_last_active.get(item[0], 0.0)
+        )
+        if self._tenant_services.pop(key, None) is None:
+            return False
+        self._tenant_last_active.pop(key, None)
+        await service.shutdown()
+        logger.info(
+            f"🧹 [Runtime] 租户数达上限，已休眠最久未活跃租户 {key[1]}"
+            "（数据保留，再次发言自动唤醒）"
+        )
+        return True
 
     def _require_tenant_service(self, user_id: str, agent_id: str) -> RuntimeService:
         service = self._tenant_services.get((user_id, agent_id))
@@ -2589,6 +2628,7 @@ class RuntimeService:
         if self._tenant_key is None and self._tenant_services:
             services = list(self._tenant_services.values())
             self._tenant_services.clear()
+            self._tenant_last_active.clear()
             await asyncio.gather(*(service.shutdown() for service in services))
         async with self._lock:
             await self._shutdown_locked()
