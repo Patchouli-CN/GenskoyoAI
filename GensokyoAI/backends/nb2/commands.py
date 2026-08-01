@@ -12,6 +12,7 @@ QQ 回复由 handler 自己经 send 回调发送）。
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ...commands import (
@@ -103,12 +104,72 @@ _LOAD_LEVEL_DISPLAY = {
     "unavailable": "⚫ 不可用",
 }
 
+# 额度查询缓存：/status 是全员指令，不每次都打余额 API
+_quota_cache: tuple[float, dict[str, Any] | None] | None = None
+_QUOTA_CACHE_TTL_SECONDS = 300.0
 
-def _format_status(status: dict[str, Any]) -> str:
-    """格式化系统状态（负载水位 / 开户数 / 处理中 / 思考延迟 / 闸门用量）。"""
+
+async def _get_quota_cached(host: Any, character: str) -> dict[str, Any] | None:
+    """额度查询（5 分钟缓存）；查询失败返回 None，不阻断 /status 主体。"""
+    global _quota_cache
+    now = time.monotonic()
+    if _quota_cache is not None and now - _quota_cache[0] < _QUOTA_CACHE_TTL_SECONDS:
+        return _quota_cache[1]
+    try:
+        data = await host.get_quota(character)
+    except Exception:
+        data = None
+    _quota_cache = (now, data)
+    return data
+
+
+def _format_uptime(seconds: float) -> str:
+    """运行时长人性化：天/小时/分钟取最高两级。"""
+    total = max(0, int(seconds))
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days} 天 {hours} 小时"
+    if hours:
+        return f"{hours} 小时 {minutes} 分"
+    return f"{minutes} 分钟"
+
+
+def _format_quota_health(data: dict[str, Any] | None, *, warn: float, crit: float) -> str:
+    """额度健康指数行：余额 ≥ warn 满分（🟢），≥ crit 偏低（🟡），否则告急（🔴）。"""
+    if data is None:
+        return "额度：暂不可用（Provider 不支持或查询失败）"
+    available = data.get("available_balance")
+    if not isinstance(available, int | float):
+        return f"额度信息：{data}"
+    index = min(100, max(0, round(available / warn * 100))) if warn > 0 else 100
+    emoji = "🟢" if available >= warn else ("🟡" if available >= crit else "🔴")
+    details = []
+    for label, key in (("现金", "cash_balance"), ("代金券", "voucher_balance")):
+        value = data.get(key)
+        if isinstance(value, int | float):
+            details.append(f"{label} ¥{value:.2f}")
+    suffix = f"（{'，'.join(details)}）" if details else ""
+    return f"额度：{emoji} 健康指数 {index}（余额 ¥{available:.2f}{suffix}）"
+
+
+def _format_status(
+    status: dict[str, Any],
+    *,
+    quota: dict[str, Any] | None = None,
+    quota_fetched: bool = False,
+    quota_warn: float = 20.0,
+    quota_crit: float = 5.0,
+    repeat_guard: Any = None,
+) -> str:
+    """格式化系统状态（负载水位 / 额度 / 开户数 / 处理中 / 思考延迟 / 闸门 / 复读防护 / 记忆 / 版本）。"""
     level = status.get("load_level") or {}
     level_text = _LOAD_LEVEL_DISPLAY.get(level.get("level", ""), level.get("level", "未知"))
     lines = [f"系统状态：{level_text}（{level.get('reason', '—')}）"]
+
+    if quota_fetched:
+        lines.append(_format_quota_health(quota, warn=quota_warn, crit=quota_crit))
 
     tenants = status["tenants"]
     # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解
@@ -123,7 +184,9 @@ def _format_status(status: dict[str, Any]) -> str:
             waiting = f"（排队 {gate['waiting']}）" if gate["waiting"] else ""
             instances = gate.get("instances", 1)
             capacity = (
-                f"{gate['max_concurrent']}×{instances}" if instances > 1 else str(gate["max_concurrent"])
+                f"{gate['max_concurrent']}×{instances}"
+                if instances > 1
+                else str(gate["max_concurrent"])
             )
             gate_parts.append(f"{gate['name']} {gate['active']}/{capacity}{waiting}")
     lines.append(f"闸门：{' · '.join(gate_parts) if gate_parts else '全部空闲'}")
@@ -136,6 +199,29 @@ def _format_status(status: dict[str, Any]) -> str:
         )
     else:
         lines.append("思考延迟：预计中…")
+
+    if repeat_guard is not None:
+        guard_stats = repeat_guard.stats()
+        if guard_stats["muted"] or guard_stats["watching"]:
+            lines.append(
+                f"复读防护：{guard_stats['muted']} 人冷却中 · {guard_stats['watching']} 人观察中"
+            )
+        else:
+            lines.append("复读防护：全员平静")
+
+    memory = status.get("memory") or {}
+    if "topics" in memory:
+        lines.append(f"记忆：{memory['topics']} 个话题 / {memory.get('memories', 0)} 条珍贵记忆")
+
+    version = status.get("version") or {}
+    uptime_seconds = status.get("uptime_seconds")
+    if version or uptime_seconds is not None:
+        parts = []
+        if version:
+            parts.append(f"v{version.get('package', '?')}（协议 {version.get('protocol', '?')}）")
+        if uptime_seconds is not None:
+            parts.append(f"已运行 {_format_uptime(float(uptime_seconds))}")
+        lines.append(f"版本：{' · '.join(parts)}")
     return "\n".join(lines)
 
 
@@ -150,10 +236,19 @@ async def cmd_status(ctx: CommandContext) -> CommandResult:
     host = ctx.metadata["host"]
     try:
         status = host.get_system_status()
+        quota = await _get_quota_cached(host, ctx.metadata["config"].character)
     except Exception:
         await ctx.metadata["send"]("状态查询失败了……稍后再试吧。")
         return CommandResult.failure("status", "系统状态读取异常")
-    text = _format_status(status)
+    config = ctx.metadata["config"]
+    text = _format_status(
+        status,
+        quota=quota,
+        quota_fetched=True,
+        quota_warn=getattr(config, "quota_warn_yuan", 20.0),
+        quota_crit=getattr(config, "quota_crit_yuan", 5.0),
+        repeat_guard=ctx.metadata.get("repeat_guard"),
+    )
     await ctx.metadata["send"](text)
     return CommandResult.success("status", "ok")
 

@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock
 from GensokyoAI.backends.nb2.commands import (
     NB2_COMMANDS,
     _format_quota,
+    _format_quota_health,
     _format_status,
+    _format_uptime,
     cmd_help,
     cmd_quota,
     resolve_level,
@@ -25,9 +27,7 @@ class _Sender:
         self.messages.append(text)
 
 
-def _ctx(
-    level: PermissionLevel, send, host: RuntimeHost | None = None
-) -> CommandContext:
+def _ctx(level: PermissionLevel, send, host: RuntimeHost | None = None) -> CommandContext:
     return CommandContext(
         source="nb2",
         issuer="tester(123)",
@@ -127,13 +127,40 @@ class StatusCommandTests(unittest.TestCase):
             {
                 "tenants": {"groups": 5, "users": 3, "meta": 1, "other": 0},
                 "active_operations": 2,
-                "latency": {"count": 12, "median_ms": 3200.0, "avg_ms": 3500.0, "last_ms": 2100.0, "max_ms": 9000.0},
+                "latency": {
+                    "count": 12,
+                    "median_ms": 3200.0,
+                    "avg_ms": 3500.0,
+                    "last_ms": 2100.0,
+                    "max_ms": 9000.0,
+                },
                 "gates": [
-                    {"name": "runtime", "max_concurrent": 16, "active": 2, "waiting": 0, "instances": 1},
-                    {"name": "model", "max_concurrent": 2, "active": 2, "waiting": 1, "instances": 4},
-                    {"name": "stream", "max_concurrent": 4, "active": 0, "waiting": 0, "instances": 4},
+                    {
+                        "name": "runtime",
+                        "max_concurrent": 16,
+                        "active": 2,
+                        "waiting": 0,
+                        "instances": 1,
+                    },
+                    {
+                        "name": "model",
+                        "max_concurrent": 2,
+                        "active": 2,
+                        "waiting": 1,
+                        "instances": 4,
+                    },
+                    {
+                        "name": "stream",
+                        "max_concurrent": 4,
+                        "active": 0,
+                        "waiting": 0,
+                        "instances": 4,
+                    },
                 ],
-                "load_level": {"level": "critical", "reason": "闸门利用率最高 100%，1 个请求排队中"},
+                "load_level": {
+                    "level": "critical",
+                    "reason": "闸门利用率最高 100%，1 个请求排队中",
+                },
             }
         )
         # 元租户（后台设施）不计入会话总数：5+3=8，不含 meta 的 1
@@ -169,12 +196,86 @@ class StatusCommandTests(unittest.TestCase):
                 "active_operations": 0,
                 "latency": {"count": 0},
             }
+            host.get_quota = AsyncMock(return_value=None)
+            from GensokyoAI.backends.nb2 import commands as nb2_commands
             from GensokyoAI.backends.nb2.commands import cmd_status
 
+            nb2_commands._quota_cache = None  # 避免跨测试缓存污染
             sender = _Sender()
             await cmd_status(_ctx(PermissionLevel.USER, sender, host=host))
             self.assertEqual(len(sender.messages), 1)
             self.assertIn("1 群", sender.messages[0])
+            self.assertIn("暂不可用", sender.messages[0])  # get_quota 返回 None 的口径
+
+        asyncio.run(run())
+
+    def test_format_status_with_all_extras(self):
+        text = _format_status(
+            {
+                "tenants": {"groups": 2, "users": 1, "meta": 1, "other": 0},
+                "active_operations": 0,
+                "latency": {"count": 0},
+                "gates": [],
+                "load_level": {"level": "healthy", "reason": "运行正常"},
+                "memory": {"topics": 42, "memories": 137},
+                "uptime_seconds": 90061.0,
+                "version": {"package": "2026.7.30.0", "protocol": "2.1.0"},
+            },
+            quota={"available_balance": 36.5, "cash_balance": 30.0, "voucher_balance": 6.5},
+            quota_fetched=True,
+            quota_warn=20.0,
+            quota_crit=5.0,
+            repeat_guard=SimpleNamespace(stats=lambda: {"muted": 2, "watching": 1, "tracked": 9}),
+        )
+        self.assertIn("额度：🟢 健康指数 100（余额 ¥36.50（现金 ¥30.00，代金券 ¥6.50））", text)
+        self.assertIn("复读防护：2 人冷却中 · 1 人观察中", text)
+        self.assertIn("记忆：42 个话题 / 137 条珍贵记忆", text)
+        self.assertIn("版本：v2026.7.30.0（协议 2.1.0） · 已运行 1 天 1 小时", text)
+
+    def test_format_status_minimal_dict_skips_new_lines(self):
+        text = _format_status(
+            {
+                "tenants": {"groups": 0, "users": 0, "meta": 0, "other": 0},
+                "active_operations": 0,
+                "latency": {"count": 0},
+                "gates": [],
+                "load_level": {"level": "healthy", "reason": "运行正常"},
+            }
+        )
+        self.assertNotIn("额度", text)
+        self.assertNotIn("复读防护", text)
+        self.assertNotIn("记忆", text)
+        self.assertNotIn("版本", text)
+
+    def test_quota_health_levels(self):
+        self.assertIn(
+            "🟢 健康指数 100",
+            _format_quota_health({"available_balance": 25.0}, warn=20.0, crit=5.0),
+        )
+        self.assertIn(
+            "🟡 健康指数 50", _format_quota_health({"available_balance": 10.0}, warn=20.0, crit=5.0)
+        )
+        self.assertIn(
+            "🔴 健康指数 20", _format_quota_health({"available_balance": 4.0}, warn=20.0, crit=5.0)
+        )
+        self.assertIn("暂不可用", _format_quota_health(None, warn=20.0, crit=5.0))
+
+    def test_format_uptime(self):
+        self.assertEqual(_format_uptime(90061), "1 天 1 小时")
+        self.assertEqual(_format_uptime(3661), "1 小时 1 分")
+        self.assertEqual(_format_uptime(59), "0 分钟")
+
+    def test_quota_cache_avoids_refetch(self):
+        async def run():
+            from GensokyoAI.backends.nb2 import commands as nb2_commands
+
+            nb2_commands._quota_cache = None
+            host = RuntimeHost()
+            host.get_quota = AsyncMock(return_value={"available_balance": 99.0})
+            first = await nb2_commands._get_quota_cached(host, "KirisameMarisa")
+            second = await nb2_commands._get_quota_cached(host, "KirisameMarisa")
+            self.assertEqual(first, second)
+            self.assertEqual(host.get_quota.await_count, 1)  # 第二次命中缓存
 
         asyncio.run(run())
 

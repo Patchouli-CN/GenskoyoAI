@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -24,8 +26,16 @@ from ..core.config_schema import AppConfig
 from ..utils.logger import logger
 from .auth import RuntimePrincipal, reset_current_principal, set_current_principal
 from .resource_control import ResourceLimitError
-from .rpc import RpcError
+from .rpc import RUNTIME_PROTOCOL_VERSION, RpcError
 from .service import RuntimeService
+
+
+def _package_version() -> str:
+    """包版本（editable/源码运行拿不到元数据时回落 dev）。"""
+    try:
+        return importlib.metadata.version("GensokyoAI")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
 
 
 class RuntimeRpcError(RuntimeError):
@@ -61,6 +71,7 @@ class RuntimeHost:
         )
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
         self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
+        self._started_at = time.monotonic()  # /status 运行时长基准
         # 适配器工具模板：(函数, 名称, 是否并行安全)，注入当前及后续租户的工具注册表
         self._adapter_tools: list[tuple[Callable[..., Any], str | None, bool]] = []
 
@@ -258,7 +269,22 @@ class RuntimeHost:
             "latency": latency,
             "gates": gates,
             "load_level": self._compute_load_level(gates, latency),
+            "memory": self._collect_memory_totals(),
+            "uptime_seconds": time.monotonic() - self._started_at,
+            "version": {"package": _package_version(), "protocol": RUNTIME_PROTOCOL_VERSION},
         }
+
+    def _collect_memory_totals(self) -> dict[str, int]:
+        """全租户语义记忆规模聚合（话题数 / 记忆条数；未启用语义的租户自然跳过）。"""
+        topics = 0
+        memories = 0
+        for service in self._service._tenant_services.values():
+            memory = getattr(service.state.agent, "semantic_memory", None)
+            if memory is None:
+                continue
+            topics += getattr(memory, "topic_count", 0)
+            memories += getattr(memory, "memory_count", 0)
+        return {"topics": topics, "memories": memories}
 
     def _collect_think_latency(self) -> dict[str, Any]:
         """聚合全部租户模型客户端的 ThinkEngine 内心戏延迟样本（滚动窗口）。

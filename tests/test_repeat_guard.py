@@ -68,7 +68,9 @@ class RepeatGuardTests(unittest.TestCase):
         self.assertIs(muted.verdict, RepeatVerdict.MUTED)
         self.assertGreater(muted.remaining_seconds, 0)
         # 冷却中出现新内容：交 LLM 破例判定
-        self.assertIs(self.guard.check("group:1", 42, "对不起，我错了").verdict, RepeatVerdict.MUTED_NOVEL)
+        self.assertIs(
+            self.guard.check("group:1", 42, "对不起，我错了").verdict, RepeatVerdict.MUTED_NOVEL
+        )
 
         # 冷却结束：消气，连击与判重窗口都已清零
         self.clock.advance(601)
@@ -124,6 +126,21 @@ class RepeatGuardTests(unittest.TestCase):
         self.assertIs(guard.check("group:1", 42, "转").verdict, RepeatVerdict.ANNOYED)  # 2
         self.assertIs(guard.check("group:1", 42, "转").verdict, RepeatVerdict.FAREWELL)  # 3
         self.assertIs(guard.check("group:1", 42, "转").verdict, RepeatVerdict.MUTED)
+
+    def test_stats_snapshot(self):
+        # 42 进入冷却，99 到厌烦区（连击 3，首条不计重），7 只是说过话
+        for _ in range(6):
+            self.guard.check("group:1", 42, "转")
+        for _ in range(4):
+            self.guard.check("group:1", 99, "停")
+        self.guard.check("group:1", 7, "正常聊天")
+        stats = self.guard.stats()
+        self.assertEqual(stats["muted"], 1)
+        self.assertEqual(stats["watching"], 1)
+        self.assertEqual(stats["tracked"], 3)
+        # 冷却结束后不再计入
+        self.clock.advance(601)
+        self.assertEqual(self.guard.stats()["muted"], 0)
 
 
 class RepeatGuardConfigTests(unittest.TestCase):

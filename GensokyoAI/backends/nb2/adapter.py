@@ -39,8 +39,9 @@ class Nonebot2Adapter:
         load_dotenv(self._env_file)
         environment = os.environ.get("ENVIRONMENT")
         if environment:
-            load_dotenv(self._env_file.with_name(f"{self._env_file.name}.{environment}"),
-                        override=True)
+            load_dotenv(
+                self._env_file.with_name(f"{self._env_file.name}.{environment}"), override=True
+            )
         # nonebot 初始化日志只有前几行受其 log_level 过滤——压到 CRITICAL 让它们闭嘴
         os.environ.setdefault("LOG_LEVEL", "CRITICAL")
         nonebot.init()

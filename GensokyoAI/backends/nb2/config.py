@@ -19,6 +19,15 @@ def _parse_bool(raw: str | None, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on", "是"}
 
 
+def _parse_float(raw: str | None, default: float) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
 # QQ 聊天场景的默认风格要求（群友反馈：话少一点、按行分段、不要动作描写）；
 # 可用 GSK_NB2_EXTRA_PROMPT 覆盖
 DEFAULT_EXTRA_PROMPT = (
@@ -26,7 +35,7 @@ DEFAULT_EXTRA_PROMPT = (
     "每句话单独占一行（系统会按行拆成多条消息依次发送）；"
     "不要用 *星号* 或括号描写动作、表情、心理活动；不要用「」等台词引号，直接写说的话；"
     "一次回复最多三句话。"
-    "群聊消息开头的【昵称】是说话人标记，让你分清谁在说话（私聊没有这个标记）；"
+    "群聊消息每行开头的【昵称】是说话人标记（多人接连发言时会一行一人），让你分清谁在说话（私聊没有这个标记）；"
     "（引用 昵称：…）是说话人引用回复的上一条消息内容；"
     "你可以用昵称称呼对方，但自己的回复不要带【】标记。"
 )
@@ -48,6 +57,12 @@ class Nb2Config:
     sender_label: bool = True  # 群聊消息注入【昵称】说话人标记（多对单会话的归属）
     member_memory: bool = True  # 群友印象：首轮交谈后生成第一印象，之后随消息注入
     quote_context: bool = True  # 引用回复时取原消息拼成（引用 昵称：…），让角色看到被引用的内容
+    # 多人同时 @ 的合并窗口（秒）：首个发言到达后等待这么久，窗口内（及处理期间）
+    # 攒下的消息合成一轮、一条回复同时回应所有人；0 = 不等待直接处理
+    merge_window_seconds: float = 1.5
+    # /status 额度健康指数阈值（元）：余额 ≥ warn 为健康（指数 100），< crit 为告急
+    quota_warn_yuan: float = 20.0
+    quota_crit_yuan: float = 5.0
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -78,4 +93,9 @@ class Nb2Config:
             sender_label=_parse_bool(get("GSK_NB2_SENDER_LABEL"), cls.sender_label),
             member_memory=_parse_bool(get("GSK_NB2_MEMBER_MEMORY"), cls.member_memory),
             quote_context=_parse_bool(get("GSK_NB2_QUOTE_CONTEXT"), cls.quote_context),
+            merge_window_seconds=_parse_float(
+                get("GSK_NB2_MERGE_WINDOW_SECONDS"), cls.merge_window_seconds
+            ),
+            quota_warn_yuan=_parse_float(get("GSK_NB2_QUOTA_WARN"), cls.quota_warn_yuan),
+            quota_crit_yuan=_parse_float(get("GSK_NB2_QUOTA_CRIT"), cls.quota_crit_yuan),
         )

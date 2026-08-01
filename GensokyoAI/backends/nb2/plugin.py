@@ -31,6 +31,7 @@ from nonebot.rule import Rule, to_me
 from ...commands import CommandContext, CommandExecutor
 from ...core.agent.prompts import (
     build_member_impression_prompt,
+    build_multi_speaker_context,
     build_mute_break_context,
     build_mute_break_judge_prompt,
     build_mute_forgive_context,
@@ -42,6 +43,7 @@ from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_
 from ...utils.logger import logger
 from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
+from .pending import PendingChat, PendingChatQueue, merge_batch
 from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
 
@@ -49,7 +51,7 @@ _config = Nb2Config.from_env()
 _host: RuntimeHost | None = None  # 由 Nonebot2Adapter.start() 经 bind_host 注入
 _store = SessionStore(_config.data_dir / "sessions.json")
 _members = MemberStore(_config.data_dir / "known_members.json")
-_locks: dict[str, asyncio.Lock] = {}
+_pending = PendingChatQueue()  # 多人同时发言的待发合并（替代旧的按会话锁串行）
 _initialized: set[str] = set()  # 本进程内已成功 ensure_agent 的 agent_id
 _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ号)
 _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
@@ -57,7 +59,9 @@ _impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（�
 _repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按全局配置构建）
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
-_EXTRA_CONTEXTS = [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
+_EXTRA_CONTEXTS = (
+    [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
+)
 
 # 指令执行器（框架 commands 体系）：本地注册表，解析/权限/执行/日志统一
 _command_executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
@@ -123,9 +127,7 @@ async def _fetch_quoted_text(bot: Bot, message_id: str) -> str | None:
         logger.debug(f"[nb2] 引用消息查询失败（{message_id}）: {error}")
         return None
     sender = info.get("sender") or {}
-    name = sanitize_display_name(
-        str(sender.get("card") or sender.get("nickname") or "某人")
-    )
+    name = sanitize_display_name(str(sender.get("card") or sender.get("nickname") or "某人"))
     raw = info.get("message")
     text = Message(raw).extract_plain_text() if isinstance(raw, list) else str(raw or "")
     text = " ".join(text.split())[:_QUOTED_TEXT_MAX_CHARS].strip()
@@ -378,16 +380,11 @@ async def _dispatch_command(
             "config": _config,
             "member_qq": event.user_id,
             "send": send,
+            # /status 的复读防护行（None 时该行不显示）
+            "repeat_guard": _repeat_guard,
         },
     )
     await _command_executor.execute(text, ctx)
-
-
-def _lock_for(key: str) -> asyncio.Lock:
-    lock = _locks.get(key)
-    if lock is None:
-        lock = _locks[key] = asyncio.Lock()
-    return lock
 
 
 async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[str, int]:
@@ -435,9 +432,9 @@ async def _chat(
         return  # 忽略纯表情/图片消息与未登记的指令文本（指令已在 handler 层分发）
     verdict = None
     break_action: str | None = None
+    member_label = member_name or str(member_qq or "?")
     if _repeat_guard is not None and member_qq is not None:
         verdict = _repeat_guard.check(key, member_qq, text)
-        member_label = member_name or str(member_qq)
         if verdict.verdict is RepeatVerdict.MUTED:
             # 「不理」冷却中且仍是复读：静默丢弃，不进 Runtime（零 token）
             logger.info(
@@ -493,54 +490,93 @@ async def _chat(
                 contexts.append(build_mute_forgive_context(member_label))
             else:
                 contexts.append(build_mute_break_context(member_label))
+    item = PendingChat(
+        text=text,
+        contexts=contexts,
+        member_name=member_name,
+        member_qq=member_qq,
+        self_id=self_id,
+        message_id=message_id,
+    )
+    if not _pending.add(key, item):
+        # 该会话正在处理中：消息并入待发，由处理循环合并成一轮一起回应
+        logger.info(f"[nb2] {agent_id} 正在处理中，{member_label} 的消息已并入待发")
+        return
+    try:
+        # 合并窗口：等一等接连到达的发言，窗口内攒下的消息合成一轮回复，
+        # 避免两个人同时 @ 时交替回（0 = 不等待直接处理）
+        if _config.merge_window_seconds > 0:
+            await asyncio.sleep(_config.merge_window_seconds)
+        while batch := _pending.take_batch(key):
+            await _process_batch(matcher, key=key, agent_id=agent_id, batch=batch)
+    finally:
+        _pending.finish(key)
+
+
+async def _process_batch(
+    matcher: type[Matcher],
+    *,
+    key: str,
+    agent_id: str,
+    batch: list[PendingChat],
+) -> None:
+    """把一批待发消息合并成一轮处理：一次生成、一条回复同时回应所有人。"""
+    text, contexts, idempotency_key = merge_batch(batch)
+    if len(batch) > 1:
+        contexts.append(build_multi_speaker_context(len(batch)))
+        logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
     reply = ""
-    async with _lock_for(key):
+    try:
+        entry = _store.get(key)
+        if entry is None or agent_id not in _initialized:
+            session_id, revision = await _ensure_agent(agent_id, entry)
+            _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
+        else:
+            session_id = str(entry["session_id"])
+            revision = int(entry["revision"])
         try:
-            entry = _store.get(key)
-            if entry is None or agent_id not in _initialized:
-                session_id, revision = await _ensure_agent(agent_id, entry)
-                _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
-            else:
-                session_id = str(entry["session_id"])
-                revision = int(entry["revision"])
-            idempotency_key = f"nb2:{self_id}:{message_id}"
-            try:
-                reply, new_revision = await _host_send(
-                    agent_id, session_id, revision, text, idempotency_key, contexts
-                )
-            except RuntimeRpcError as error:
-                if error.code == "resource.limit_exceeded":
-                    await matcher.send(MessageSegment.text("幻想乡现在有点忙，稍后再叫我吧。"))
-                    return
-                # 租户丢失 / 会话失效：重建租户后同键重试一次（幂等安全）
-                logger.warning(f"[nb2] 发送失败 [{error.code}]，重建租户会话后重试: {error}")
-                session_id, revision = await _ensure_agent(agent_id, None)
-                _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
-                reply, new_revision = await _host_send(
-                    agent_id, session_id, revision, text, idempotency_key, contexts
-                )
-            _store.update_revision(key, new_revision)
+            reply, new_revision = await _host_send(
+                agent_id, session_id, revision, text, idempotency_key, contexts
+            )
         except RuntimeRpcError as error:
-            logger.error(f"[nb2] Runtime 调用失败 [{error.code}]: {error}")
-            await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
-            return
-        except Exception:
-            logger.exception("[nb2] 处理消息时出现未预期错误")
-            await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
-            return
+            if error.code == "resource.limit_exceeded":
+                await matcher.send(MessageSegment.text("幻想乡现在有点忙，稍后再叫我吧。"))
+                return
+            # 租户丢失 / 会话失效：重建租户后同键重试一次（幂等安全）
+            logger.warning(f"[nb2] 发送失败 [{error.code}]，重建租户会话后重试: {error}")
+            session_id, revision = await _ensure_agent(agent_id, None)
+            _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
+            reply, new_revision = await _host_send(
+                agent_id, session_id, revision, text, idempotency_key, contexts
+            )
+        _store.update_revision(key, new_revision)
+    except RuntimeRpcError as error:
+        logger.error(f"[nb2] Runtime 调用失败 [{error.code}]: {error}")
+        await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
+        return
+    except Exception:
+        logger.exception("[nb2] 处理消息时出现未预期错误")
+        await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
+        return
     if not reply.strip():
         logger.warning(f"[nb2] {agent_id} 返回了空回复")
         reply = "……（好像一下子不知道说什么了，再说一次试试？）"
-    if (
-        _config.member_memory
-        and member_qq is not None
-        and member_name
-        and _members.get(member_qq) is None
-        and member_qq not in _impression_inflight
-    ):
-        # 新群友：首轮交谈完成后后台生成第一印象（不阻塞回复）
-        _impression_inflight.add(member_qq)
-        asyncio.create_task(_learn_impression(member_name, member_qq, f"{text}\n{reply}"))
+    if _config.member_memory:
+        # 新群友：首轮交谈完成后后台生成第一印象（不阻塞回复；按批去重）
+        seen: set[int] = set()
+        for item in batch:
+            if (
+                item.member_qq is not None
+                and item.member_name
+                and item.member_qq not in seen
+                and _members.get(item.member_qq) is None
+                and item.member_qq not in _impression_inflight
+            ):
+                seen.add(item.member_qq)
+                _impression_inflight.add(item.member_qq)
+                asyncio.create_task(
+                    _learn_impression(item.member_name, item.member_qq, f"{text}\n{reply}")
+                )
     await _send_segmented(matcher.send, reply)
 
 

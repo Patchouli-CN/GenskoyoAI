@@ -516,3 +516,15 @@ def build_half_completion_context(partial_content: str) -> str:
         "也可以换个说法融入这次回复，但不要原样重复已经说过的部分，"
         "也不要提到「回复被中断」这回事。"
     )
+
+
+def build_multi_speaker_context(count: int) -> str:
+    """多人同时发言提示（解析方：无，随本轮消息注入 system_contexts）。
+
+    nb2 待发合并把同一窗口内多条发言合成一轮时注入，避免角色只回最后一个人。
+    """
+    return (
+        f"【接连有 {count} 个人对你说话】这轮消息里每一行都是不同的人"
+        "（开头的【昵称】是各自说话人）。请在一条回复里把他们都回应到，"
+        "用昵称分清对谁说话，不要只回答最后一个。"
+    )

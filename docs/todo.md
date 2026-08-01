@@ -235,6 +235,52 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.39 /status 增强：额度健康指数 + 运行时长 + 版本 + 复读防护 + 记忆规模（2026-08-01，用户点单）
+
+- **额度健康指数**（用户点名）：/status 内嵌余额行（此前要单独 /quota）。
+  指数 = `min(100, 余额/quota_warn×100)`，🟢 ≥ warn（默认 ¥20）/ 🟡 ≥ crit
+  （默认 ¥5）/ 🔴 告急；阈值走 `GSK_NB2_QUOTA_WARN` / `GSK_NB2_QUOTA_CRIT`。
+  **5 分钟 TTL 缓存**（commands 模块级）——/status 是 USER 级全员指令，不能
+  每次都打余额 API；查询失败回落「暂不可用」不阻断主体。
+- **复读防护行**：`RepeatGuard.stats()`（冷却中/观察中/追踪数快照），
+  plugin 经指令 metadata 把 `_repeat_guard` 递给 cmd_status；全员平静也如实显示。
+- **记忆规模行**：host 聚合全租户 `semantic_memory.topic_count/memory_count`
+  （同步属性，未启用语义的租户自然跳过）。
+- **版本 + 运行时长行**：`importlib.metadata` 包版本（源码运行回落 dev）+
+  RUNTIME_PROTOCOL_VERSION + host 启动至今 uptime（人性化格式化取两级单位）。
+- 兼容性：`get_system_status` 纯增量键（适配器公开契约只加不改）；
+  `_format_status` 新行全部按 key 存在才显示，旧调用/旧测试不受影响。
+- 测试：_format_status 全字段/最小字典、额度三级+不可用、uptime 格式化、
+  缓存只取一次、RepeatGuard.stats 快照（含冷却过期不计）、阈值 env 解析。
+  基线：增量 101 passed，ruff / pyright 全绿（沿用用户「增量验证」要求）。
+
+建议 commit message（待用户授权后提交）：
+`feat(nb2): /status 增强——额度健康指数（TTL 缓存+阈值可配）、复读防护快照、全租户记忆规模、版本与运行时长`
+
+## 8.38 nb2 多人同时 @ 交替回修复：待发合并（2026-08-01，用户报体验问题）
+
+- 根因：`_chat` 按会话锁串行，A 的 LLM 回合进行中 B 的 @ 排队等锁，
+  A 回完再单独回 B——两个人同时 @ 时 bot 交替回两条，像分别和两个人对话。
+- 方案（待发合并）：新增 `backends/nb2/pending.py`（无 nonebot 依赖可单测）
+  `PendingChatQueue`——按会话 key 的待发队列替代按会话锁：首个发言的调用方
+  成为处理者，先等 `merge_window_seconds`（默认 1.5s，`GSK_NB2_MERGE_WINDOW_`
+  `SECONDS`，0 = 不等待）合并窗口，再把攒下的全部消息经 `merge_batch` 合成
+  一轮（文本按到达顺序逐行拼接、各自带【昵称】标记；上下文去重保序；幂等键
+  取批次首条），一次生成、一条回复同时回应所有人。处理期间到达的消息并入
+  下一批。竞态分析：入队/取批/收尾之间无 await，单线程语义无间隙丢消息。
+- 多人提示：`build_multi_speaker_context`（prompts.py）在合并批注入「把每个
+  人都回应到」；DEFAULT_EXTRA_PROMPT 说话人标记说明改「每行一人」。
+- 行为边界：复读防护/印象/指令仍在入队前按条处理（muted 丢弃不合并）；
+  第一印象生成按批去重；单人快速连发同样受益（合成一轮）；批处理失败时
+  重建租户重试语义不变（同键幂等）。已知取舍：合并批幂等键取首条，QQ 对
+  批内后续消息的罕见重投无法被幂等账本去重。
+- 测试：tests/test_nb2_pending.py 11 例（队列处理权/保序/收尾间隙/清理，
+  merge 拼接/去重/幂等键，窗口配置解析）。基线：增量 88 passed（nb2 相关），
+  ruff / pyright 全绿（应用户要求本轮不跑全量）。
+
+建议 commit message（待用户授权后提交）：
+`fix(nb2): 多人同时 @ 交替回改待发合并——PendingChatQueue 按会话攒批，一次生成一条回复同时回应所有人（merge_window_seconds 可配）`
+
 ## 8.37 情景记忆（episodic）子系统整体删除：三层记忆收口为两层（2026-08-01，用户定稿「实事求是」）
 
 - 背景：§5.6 待定夺最后一条。episodic 是「名义三层」的中间层——写入路径

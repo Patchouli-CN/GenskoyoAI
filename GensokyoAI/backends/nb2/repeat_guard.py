@@ -150,3 +150,14 @@ class RepeatGuard:
             state.muted_until = 0.0
             state.streak = 0
             state.recent.clear()
+
+    def stats(self) -> dict[str, int]:
+        """防护状态快照（/status 用）：冷却中人数 / 连击观察中人数 / 追踪总数。"""
+        now = self._clock()
+        muted = sum(1 for state in self._states.values() if state.muted_until > now)
+        watching = sum(
+            1
+            for state in self._states.values()
+            if state.muted_until <= now and state.streak >= self.warn_streak
+        )
+        return {"muted": muted, "watching": watching, "tracked": len(self._states)}
