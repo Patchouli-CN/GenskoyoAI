@@ -48,11 +48,12 @@ model:
   # 单次调用成本估算单价（元/百万 token，按你的服务商价目填写）：
   # 配置后 ModelClient 按 usage 采样单次成本，/status 的额度健康阈值会按
   # 消耗中位数动态计算（余额还能撑多少次典型调用）；不配置则回落静态阈值。
-  # price_input_cached_per_million 是缓存命中部分的输入价：配置后按真消耗
-  # 分项计费（缓存读取按此价、创建按全价），不配置则缓存也按全价（保守）
+  # 缓存分项：cached = 缓存读取价（如 kimi 命中 ¥0.7），cache_write = 缓存写入价
+  # （如 Anthropic 1.25× 输入价）；不配置时缓存读写均按普通输入全价计（保守）
   # price_input_per_million: 10.0
   # price_output_per_million: 30.0
   # price_input_cached_per_million: 1.0
+  # price_input_cache_write_per_million: 12.5
 
 # Embedding 模型配置（独立于主聊天模型，避免误用聊天模型调用 embeddings）
 # Claude 原生不支持 embeddings；当前用 claude-sonnet-4-6-thinking，先禁用语义记忆以免启动报错。

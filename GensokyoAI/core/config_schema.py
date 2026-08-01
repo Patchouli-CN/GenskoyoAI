@@ -75,6 +75,9 @@ class ModelConfig(Struct):
     # 缓存命中部分的输入单价（元/百万 token，如 kimi 缓存命中价）：
     # 配置后按真消耗分项计费（缓存读取 token 按此价）；None = 缓存也按全价（保守）
     price_input_cached_per_million: float | None = None
+    # 缓存写入部分的输入单价（元/百万 token，如 Anthropic 写入溢价 1.25× 输入价）：
+    # None = 按普通输入全价计（Moonshot 无写入溢价时的正确口径）
+    price_input_cache_write_per_million: float | None = None
 
 
 class EmbeddingConfig(Struct):

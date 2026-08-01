@@ -471,6 +471,12 @@ class ConfigValidator:
             diagnostics,
             minimum=0,
         )
+        self._validate_numeric_range(
+            f"{section}.price_input_cache_write_per_million",
+            data.get("price_input_cache_write_per_million"),
+            diagnostics,
+            minimum=0,
+        )
         self._validate_enum(
             f"{section}.web_search_strategy",
             data.get("web_search_strategy"),

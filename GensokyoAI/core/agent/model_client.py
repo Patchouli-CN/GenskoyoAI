@@ -68,10 +68,11 @@ class ModelClient:
 
         缓存分项（真消耗）：
         - Anthropic 风格：`input_tokens` 不含缓存——`cache_read_input_tokens`
-          （按缓存价）与 `cache_creation_input_tokens`（按全价）独立相加；
+          （按缓存读取价）与 `cache_creation_input_tokens`（按缓存写入价，
+          未配时按全价；Anthropic 官方为 1.25× 输入价）独立相加；
         - OpenAI 风格：`cached_tokens` 是 `prompt_tokens` 的子集，拆开分别计价。
-        未配缓存单价（price_input_cached_per_million）时缓存读取按全价（保守）。
-        单价未配置或响应未带 usage 时返回 None——不估算就不产生样本。
+        未配缓存单价（price_input_cached/write_per_million）时缓存读写均按
+        全价（保守）。单价未配置或响应未带 usage 时返回 None——不估算就不产生样本。
         """
         if not usage:
             return None
@@ -86,10 +87,12 @@ class ModelClient:
         full_in = price_in or 0.0
         cached_price = self.config.price_input_cached_per_million
         cached_price = full_in if cached_price is None else cached_price
+        write_price = self.config.price_input_cache_write_per_million
+        write_price = full_in if write_price is None else write_price
         if "input_tokens" in usage:
             cache_read = usage.get("cache_read_input_tokens") or 0
             cache_write = usage.get("cache_creation_input_tokens") or 0
-            input_cost = prompt * full_in + cache_read * cached_price + cache_write * full_in
+            input_cost = prompt * full_in + cache_read * cached_price + cache_write * write_price
         else:
             details = usage.get("prompt_tokens_details")
             cached = (details.get("cached_tokens") or 0) if isinstance(details, dict) else 0

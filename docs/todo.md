@@ -253,6 +253,10 @@ provider 转换属组装逻辑，不搬。
   ——usage 拆缓存分项计价（Anthropic 风格 cache_read/cache_creation 独立字段、
   OpenAI 风格 cached_tokens 子集两种结构都认；缓存创建按全价），未配缓存价
   时回落全价保守；claude 流式/非流式 usage 提取同步带上缓存字段。
+- 缓存写入溢价（用户追问「外国模型 cache_creation 额外计费」）：新增
+  `price_input_cache_write_per_million`——Anthropic 官方口径（写入 1.25× 输入、
+  读取 0.1×）可完整配置；Moonshot 无写入溢价（官方价目未列），不配时按输入
+  全价计，恰好正确。
 
 建议 commit message（待用户授权后提交）：
 `fix(claude): usage 链路补全——流式事件捕获 + 非流式映射进 UnifiedResponse.usage，成本采样在 claude 链路可用`

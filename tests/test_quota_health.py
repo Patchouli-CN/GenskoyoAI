@@ -106,6 +106,27 @@ class ModelClientCostTests(unittest.TestCase):
         expected = (1000 * 4.0 + 5000 * 4.0 + 100 * 21.0) / 1_000_000
         self.assertAlmostEqual(cost, expected)
 
+    def test_cache_write_billed_at_write_price(self):
+        # Anthropic 口径：缓存写入 1.25× 输入价、读取 0.1×
+        client = _FakeModelClient(
+            ModelConfig(
+                price_input_per_million=24.0,
+                price_output_per_million=120.0,
+                price_input_cached_per_million=2.4,
+                price_input_cache_write_per_million=30.0,
+            )
+        )
+        cost = client._estimate_call_cost(
+            {
+                "input_tokens": 1000,
+                "cache_read_input_tokens": 5000,
+                "cache_creation_input_tokens": 2000,
+                "output_tokens": 100,
+            }
+        )
+        expected = (1000 * 24.0 + 5000 * 2.4 + 2000 * 30.0 + 100 * 120.0) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
+
     def test_no_pricing_or_no_usage_gives_none(self):
         client = _FakeModelClient(ModelConfig())
         self.assertIsNone(client._estimate_call_cost({"prompt_tokens": 1000}))
