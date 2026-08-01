@@ -109,6 +109,9 @@ class UnifiedResponse(Struct):
     thinking: str | None = None
     web_search_references: list[WebSearchReference] = field(default_factory=list)
     web_search_diagnostics: WebSearchDiagnostics | None = None
+    # 非流式 token 用量（键名按 Provider 原生：prompt/completion 或 input/output）；
+    # ModelClient 的成本估算两种都认。流式路径经 StreamChunk.usage 传递。
+    usage: dict[str, Any] | None = None
 
 
 class ModelCallTiming(Struct):

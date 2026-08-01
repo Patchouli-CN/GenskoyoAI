@@ -64,12 +64,14 @@ class ModelClient:
         logger.debug(f"ModelClient 初始化完成，Provider: {config.provider}, 模型: {config.name}")
 
     def _estimate_call_cost(self, usage: dict[str, Any] | None) -> float | None:
-        """按配置单价与 usage token 数估算单次调用成本（元）。
+        """按配置单价与 usage token 数估算单次调用成本（元），缓存命中按缓存价。
 
-        单价未配置（price_*_per_million 均为 None）或本次响应未带 usage 时
-        返回 None——不估算就不产生样本，额度健康宁可回落静态阈值也不猜数。
-        token 键名兼容 OpenAI 风格（prompt/completion）与 Claude/Responses
-        风格（input/output）。
+        缓存分项（真消耗）：
+        - Anthropic 风格：`input_tokens` 不含缓存——`cache_read_input_tokens`
+          （按缓存价）与 `cache_creation_input_tokens`（按全价）独立相加；
+        - OpenAI 风格：`cached_tokens` 是 `prompt_tokens` 的子集，拆开分别计价。
+        未配缓存单价（price_input_cached_per_million）时缓存读取按全价（保守）。
+        单价未配置或响应未带 usage 时返回 None——不估算就不产生样本。
         """
         if not usage:
             return None
@@ -81,7 +83,19 @@ class ModelClient:
         completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         if not prompt and not completion:
             return None
-        return (prompt * (price_in or 0.0) + completion * (price_out or 0.0)) / 1_000_000
+        full_in = price_in or 0.0
+        cached_price = self.config.price_input_cached_per_million
+        cached_price = full_in if cached_price is None else cached_price
+        if "input_tokens" in usage:
+            cache_read = usage.get("cache_read_input_tokens") or 0
+            cache_write = usage.get("cache_creation_input_tokens") or 0
+            input_cost = prompt * full_in + cache_read * cached_price + cache_write * full_in
+        else:
+            details = usage.get("prompt_tokens_details")
+            cached = (details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+            cached = min(cached, prompt)
+            input_cost = (prompt - cached) * full_in + cached * cached_price
+        return (input_cost + completion * (price_out or 0.0)) / 1_000_000
 
     def cost_stats(self) -> dict[str, Any]:
         """单次调用成本统计（元，滚动窗口）：中位数/均值/累计，供额度健康动态阈值。"""
@@ -587,6 +601,9 @@ class ModelClient:
             )
             content = response.message.content or ""
             content_text = content if isinstance(content, str) else ""
+            # 非流式 usage（Provider 已映射到 UnifiedResponse.usage）是成本采样的
+            # 非流式数据源；流式路径由 finish chunk 经 chat_stream 另行填充
+            timing.usage = response.usage
             reasoning = (
                 getattr(response.message, "reasoning_content", None)
                 or getattr(response, "thinking", None)

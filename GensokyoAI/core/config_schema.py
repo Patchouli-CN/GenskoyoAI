@@ -72,6 +72,9 @@ class ModelConfig(Struct):
     # 单次成本，供额度健康按消耗中位数动态计算阈值；None = 不估算（无法动态）
     price_input_per_million: float | None = None
     price_output_per_million: float | None = None
+    # 缓存命中部分的输入单价（元/百万 token，如 kimi 缓存命中价）：
+    # 配置后按真消耗分项计费（缓存读取 token 按此价）；None = 缓存也按全价（保守）
+    price_input_cached_per_million: float | None = None
 
 
 class EmbeddingConfig(Struct):

@@ -57,6 +57,55 @@ class ModelClientCostTests(unittest.TestCase):
         cost = client._estimate_call_cost({"input_tokens": 2000, "output_tokens": 100})
         self.assertAlmostEqual(cost, 2000 * 10.0 / 1_000_000)
 
+    def test_anthropic_cache_fields_billed_at_cached_price(self):
+        client = _FakeModelClient(
+            ModelConfig(
+                price_input_per_million=4.0,
+                price_output_per_million=21.0,
+                price_input_cached_per_million=0.7,
+            )
+        )
+        cost = client._estimate_call_cost(
+            {
+                "input_tokens": 1000,
+                "cache_read_input_tokens": 5000,
+                "cache_creation_input_tokens": 2000,
+                "output_tokens": 100,
+            }
+        )
+        # 缓存读取按 0.7、缓存创建按全价 4.0（独立于 input_tokens 相加）
+        expected = (1000 * 4.0 + 5000 * 0.7 + 2000 * 4.0 + 100 * 21.0) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
+
+    def test_openai_cached_subset_split_from_prompt(self):
+        client = _FakeModelClient(
+            ModelConfig(
+                price_input_per_million=4.0,
+                price_output_per_million=21.0,
+                price_input_cached_per_million=0.7,
+            )
+        )
+        cost = client._estimate_call_cost(
+            {
+                "prompt_tokens": 6000,
+                "completion_tokens": 100,
+                "prompt_tokens_details": {"cached_tokens": 5000},
+            }
+        )
+        # cached_tokens 是 prompt_tokens 的子集：拆开分别计价
+        expected = (1000 * 4.0 + 5000 * 0.7 + 100 * 21.0) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
+
+    def test_cache_billed_full_price_without_cached_price(self):
+        client = _FakeModelClient(
+            ModelConfig(price_input_per_million=4.0, price_output_per_million=21.0)
+        )
+        cost = client._estimate_call_cost(
+            {"input_tokens": 1000, "cache_read_input_tokens": 5000, "output_tokens": 100}
+        )
+        expected = (1000 * 4.0 + 5000 * 4.0 + 100 * 21.0) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
+
     def test_no_pricing_or_no_usage_gives_none(self):
         client = _FakeModelClient(ModelConfig())
         self.assertIsNone(client._estimate_call_cost({"prompt_tokens": 1000}))

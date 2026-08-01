@@ -235,6 +235,28 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.41 claude usage 链路补全（2026-08-01，用户提问「调用库基本都返回 token_used 吧」牵出）
+
+- 答案：是（OpenAI 系 usage 自带/流式 include_usage，Anthropic 非流式 usage 字段、
+  流式 message_start/message_delta 事件），但 claude_provider 整条链路把它丢了，
+  §8.40 的成本采样在「claude + Moonshot + 流式」配置下永远拿不到样本。
+- 修复：`UnifiedResponse` 新增 `usage` 槽位（非流式数据源）；`model_client.chat`
+  非流式路径填充 `timing.usage`（此前只有流式 finish chunk 一条通道）；
+  `claude_provider` 流式捕获 message_start（input 初始）/message_delta（output
+  累计）附着终止 chunk，非流式 `_convert_response` 映射 response.usage。
+- 测试：test_claude_provider_conversion.py 增 3 例（非流式映射/无 usage 兼容/
+  流式事件捕获到 finish chunk）。基线：增量 41 passed，ruff / pyright 全绿。
+- 落地：local.yaml / local_world.yaml 已按官方价目配置 kimi-k2.5 单价
+  （输入 ¥4.00、输出 ¥21.00、缓存命中 ¥0.70 每百万 token，
+  来源 platform.moonshot.cn/docs/pricing/chat-k25，gitignore 本地文件不入库）。
+- 真消耗计费（用户「最好按真消耗来」）：新增 `price_input_cached_per_million`
+  ——usage 拆缓存分项计价（Anthropic 风格 cache_read/cache_creation 独立字段、
+  OpenAI 风格 cached_tokens 子集两种结构都认；缓存创建按全价），未配缓存价
+  时回落全价保守；claude 流式/非流式 usage 提取同步带上缓存字段。
+
+建议 commit message（待用户授权后提交）：
+`fix(claude): usage 链路补全——流式事件捕获 + 非流式映射进 UnifiedResponse.usage，成本采样在 claude 链路可用`
+
 ## 8.40 额度健康动态阈值 + 紫色耗尽级（2026-08-01，用户定稿设计）
 
 - 设计（用户原话）：阈值动态计算、放框架中心模块统一算、ModelClient 提供

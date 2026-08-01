@@ -196,6 +196,12 @@ class ConfigMerger:
                 if override.price_output_per_million is not None
                 else base.price_output_per_million,
             ),
+            price_input_cached_per_million=choose(
+                "price_input_cached_per_million",
+                override.price_input_cached_per_million
+                if override.price_input_cached_per_million is not None
+                else base.price_input_cached_per_million,
+            ),
         )
 
     def _merge_embedding(self, base: EmbeddingConfig, override: EmbeddingConfig) -> EmbeddingConfig:

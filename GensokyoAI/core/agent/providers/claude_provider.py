@@ -103,8 +103,9 @@ class ClaudeProvider(BaseProvider):
         timeout = aiohttp.ClientTimeout(total=15)
         async with (
             aiohttp.ClientSession(timeout=timeout) as session,
-            session.get(url, headers={"Authorization": f"Bearer {self.config.api_key}"})
-            as response,
+            session.get(
+                url, headers={"Authorization": f"Bearer {self.config.api_key}"}
+            ) as response,
         ):
             if response.status != 200:
                 logger.warning(f"[ClaudeProvider] 额度查询失败: HTTP {response.status}")
@@ -200,6 +201,9 @@ class ClaudeProvider(BaseProvider):
         # 工具调用 / thinking 累积；Claude 流式事件以 content block index 区分多个 block。
         tool_blocks: dict[int, dict[str, Any]] = {}
         thinking_parts: list[str] = []
+        # token 用量：message_start 带 input 初始值，message_delta 带 output 累计值；
+        # 附着到终止 chunk，供 ModelClient 成本采样（此前整条链路直接丢弃）
+        usage: dict[str, int] = {}
 
         async with self._client.messages.stream(
             **self._build_call_kwargs(model, messages, tools, options, kwargs.get("think"))
@@ -207,7 +211,27 @@ class ClaudeProvider(BaseProvider):
             async for event in stream:
                 # 文本内容
                 if hasattr(event, "type"):
-                    if event.type == "content_block_start":
+                    if event.type == "message_start":
+                        start_usage = getattr(getattr(event, "message", None), "usage", None)
+                        if start_usage is not None:
+                            usage["input_tokens"] = getattr(start_usage, "input_tokens", 0) or 0
+                            usage["output_tokens"] = getattr(start_usage, "output_tokens", 0) or 0
+                            # 缓存分项（真消耗计费）：命中读取 / 创建分别提取
+                            for cache_key in (
+                                "cache_read_input_tokens",
+                                "cache_creation_input_tokens",
+                            ):
+                                if value := getattr(start_usage, cache_key, None):
+                                    usage[cache_key] = value
+
+                    elif event.type == "message_delta":
+                        delta_usage = getattr(event, "usage", None)
+                        if delta_usage is not None:
+                            usage["output_tokens"] = getattr(
+                                delta_usage, "output_tokens", None
+                            ) or usage.get("output_tokens", 0)
+
+                    elif event.type == "content_block_start":
                         block = event.content_block
                         index = getattr(event, "index", 0)
                         if getattr(block, "type", "") == "tool_use":
@@ -276,9 +300,10 @@ class ClaudeProvider(BaseProvider):
                             is_tool_call=True,
                             tool_info=tool_info,
                             finish_reason="tool_use",
+                            usage=usage or None,
                         )
                     elif event.type == "message_stop":
-                        yield StreamChunk(type="finish", finish_reason="stop")
+                        yield StreamChunk(type="finish", finish_reason="stop", usage=usage or None)
 
     async def list_models(self) -> list[ModelInfo]:
         """Claude SDK 暂不统一暴露模型列表，返回当前配置模型作为 fallback。"""
@@ -561,6 +586,17 @@ class ClaudeProvider(BaseProvider):
             elif block.type == "thinking":
                 thinking = block.thinking
 
+        usage = getattr(response, "usage", None)
+        usage_dict = None
+        if usage is not None:
+            usage_dict = {
+                "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            }
+            # 缓存分项（真消耗计费）：命中读取 / 创建分别提取
+            for cache_key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+                if value := getattr(usage, cache_key, None):
+                    usage_dict[cache_key] = value
         return UnifiedResponse(
             message=UnifiedMessage(
                 role="assistant",
@@ -570,6 +606,7 @@ class ClaudeProvider(BaseProvider):
             model=response.model or "",
             done=True,
             thinking=thinking,
+            usage=usage_dict,
         )
 
     @staticmethod

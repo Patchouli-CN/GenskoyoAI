@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 
@@ -108,6 +109,97 @@ class ClaudeProviderConversionTests(unittest.TestCase):
         self.assertEqual(converted.message.tool_calls[0].provider, "claude")
         self.assertEqual(
             converted.message.tool_calls[0].function.arguments, {"timezone": "Asia/Shanghai"}
+        )
+
+    def test_convert_response_maps_usage(self):
+        response = SimpleNamespace(
+            model="claude-test",
+            content=[SimpleNamespace(type="text", text="你好。")],
+            usage=SimpleNamespace(
+                input_tokens=120,
+                output_tokens=42,
+                cache_read_input_tokens=3000,
+                cache_creation_input_tokens=800,
+            ),
+        )
+
+        converted = ClaudeProvider._convert_response(
+            ClaudeProvider.__new__(ClaudeProvider), response
+        )
+
+        self.assertEqual(
+            converted.usage,
+            {
+                "input_tokens": 120,
+                "output_tokens": 42,
+                "cache_read_input_tokens": 3000,
+                "cache_creation_input_tokens": 800,
+            },
+        )
+
+    def test_convert_response_without_usage_keeps_none(self):
+        response = SimpleNamespace(
+            model="claude-test",
+            content=[SimpleNamespace(type="text", text="你好。")],
+        )
+
+        converted = ClaudeProvider._convert_response(
+            ClaudeProvider.__new__(ClaudeProvider), response
+        )
+
+        self.assertIsNone(converted.usage)
+
+    def test_stream_finish_chunk_carries_usage(self):
+        events = [
+            SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        input_tokens=120,
+                        output_tokens=1,
+                        cache_read_input_tokens=3000,
+                        cache_creation_input_tokens=None,
+                    )
+                ),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="你好"),
+                index=0,
+            ),
+            SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=42)),
+            SimpleNamespace(type="message_stop"),
+        ]
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def __aiter__(self):
+                async def _gen():
+                    for event in events:
+                        yield event
+
+                return _gen()
+
+        provider = ClaudeProvider.__new__(ClaudeProvider)
+        provider._client = SimpleNamespace(
+            messages=SimpleNamespace(stream=lambda **kwargs: _FakeStream())
+        )
+        provider._build_call_kwargs = lambda *args, **kwargs: {}
+
+        async def collect():
+            return [chunk async for chunk in provider.chat_stream("model", [])]
+
+        chunks = asyncio.run(collect())
+        finish = [chunk for chunk in chunks if chunk.type == "finish"]
+        self.assertEqual(len(finish), 1)
+        self.assertEqual(
+            finish[0].usage,
+            {"input_tokens": 120, "output_tokens": 42, "cache_read_input_tokens": 3000},
         )
 
     def test_thinking_budget_is_less_than_max_tokens(self):
