@@ -102,6 +102,8 @@ class MemoryConfig(Struct):
     semantic_enabled: bool = True
     semantic_top_k: int = 5
     semantic_similarity_threshold: float = 0.7
+    # 话题数写入侧上限：达到上限新增话题时，淘汰回忆权重最低的非 pin 话题（§8.33）
+    semantic_max_topics: int = 50
     auto_memory_enabled: bool = True
     # 自动记忆模型；None = 跟随主模型。当前无消费方（预留字段）。
     auto_memory_model: str | None = None

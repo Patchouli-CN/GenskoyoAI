@@ -636,6 +636,9 @@ class ConfigValidator:
             "memory.semantic_top_k", data.get("semantic_top_k"), diagnostics, minimum=1
         )
         self._validate_numeric_range(
+            "memory.semantic_max_topics", data.get("semantic_max_topics"), diagnostics, minimum=1
+        )
+        self._validate_numeric_range(
             "memory.semantic_similarity_threshold",
             data.get("semantic_similarity_threshold"),
             diagnostics,

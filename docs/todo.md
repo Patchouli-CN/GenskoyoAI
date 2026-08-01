@@ -235,6 +235,21 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.33 写入侧话题淘汰：max_topics 死参数激活（2026-08-01，用户点单）
+
+- 背景：§8.32 审查发现 `SemanticMemoryManager` 传的 `max_topics=50` 从未被
+  `TopicAwareStore` 执行，话题数实际无上限。本节补上写入侧淘汰。
+- `TopicAwareStore`：新增 `_evict_for_new_topic`（两个新话题创建点统一调用）——
+  达到上限时淘汰「回忆权重最低（`_calculate_recall_weight`，并列取最久未更新）的
+  非 pin 话题」，全 pin 才兜底淘汰；`_remove_topic` 连带移除其全部记忆、
+  清理关联边并重建索引；构造参数新增 `pin_importance`（默认 8.0，复用 decay 模块常量）。
+- 配置：`memory.semantic_max_topics`（默认 50）进 schema/merge/validator/模板；
+  `SemanticMemoryManager` 改为从配置读 max_topics 与 topic_pin_importance。
+- 顺带发现的 API 怪癖（未改）：`list_memories(topic_name=...)` 传不存在的话题名时
+  不过滤、返回全部记忆——测试里改用 `get_memory(id)` 断言淘汰结果。
+- 测试：test_memory_decay.py 增 TopicEvictionTests 3 例（上限执行+最弱淘汰、
+  记忆连带移除、pin 免疫）。基线：增量 59 passed，ruff/pyright 全绿。
+
 ## 8.32 话题热度淘汰器（2026-08-01，用户点单，参考 Lumi_Nox memory/decay.py）
 
 - 背景：原有「遗忘曲线」`_calculate_recall_weight` 只在检索打分里占 0.1 权重加成，

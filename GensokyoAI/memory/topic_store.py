@@ -38,6 +38,7 @@ from ..core.migrations import (
 from ..core.schema_versions import MEMORY_SCHEMA_VERSION, MEMORY_STORE_FORMAT
 from ..utils.helpers import ensure_utc, utc_now
 from ..utils.logger import logger
+from .decay import DEFAULT_PIN_IMPORTANCE, is_pinned
 from .types import Topic, TopicMemory, TopicMemoryType
 
 
@@ -66,11 +67,16 @@ class TopicAwareStore:
     """
 
     def __init__(
-        self, path: Path, max_topics: int = 50, topic_config: TopicGenerationConfig | None = None
+        self,
+        path: Path,
+        max_topics: int = 50,
+        topic_config: TopicGenerationConfig | None = None,
+        pin_importance: float = DEFAULT_PIN_IMPORTANCE,
     ):
         self.path = Path(path)
         self.max_topics = max_topics
         self.topic_config = topic_config or TopicGenerationConfig()
+        self._pin_importance = pin_importance
 
         self._topics: dict[str, Topic] = {}
         self._memories: dict[str, TopicMemory] = {}
@@ -325,6 +331,35 @@ class TopicAwareStore:
 
         logger.debug(f"话题 '{topic.name}' 被刷新，重要性: {topic.importance:.2f}")
 
+    # ==================== 写入侧淘汰（max_topics 上限） ====================
+
+    def _remove_topic(self, topic: Topic) -> None:
+        """移除话题及其全部记忆，并清理关联边与索引。"""
+        for memory_id in topic.message_ids:
+            self._memories.pop(memory_id, None)
+        self._topics.pop(topic.id, None)
+        for other in self._topics.values():
+            other.related_topics.pop(topic.id, None)
+        self._rebuild_indexes()
+
+    def _evict_for_new_topic(self) -> None:
+        """话题数达上限时，淘汰回忆权重最低的非 pin 话题（pin 话题免疫，全 pin 才兜底淘汰）。"""
+        while len(self._topics) >= self.max_topics:
+            unpinned = [
+                topic
+                for topic in self._topics.values()
+                if not is_pinned(topic, self._pin_importance)
+            ]
+            pool = unpinned or list(self._topics.values())
+            victim = min(
+                pool,
+                key=lambda topic: (self._calculate_recall_weight(topic), topic.last_updated),
+            )
+            logger.info(
+                f"话题数达上限({self.max_topics})，淘汰回忆权重最低的话题: 「{victim.name}」"
+            )
+            self._remove_topic(victim)
+
     def _snapshot_memories(self) -> list[TopicMemory]:
         """获取当前记忆的浅拷贝快照，避免迭代期间被异步写操作修改。"""
         return list(self._memories.values())
@@ -482,6 +517,7 @@ class TopicAwareStore:
             memory.topic_id = topic.id
             memory.tags = [topic_name]
 
+            self._evict_for_new_topic()
             self._topics[topic.id] = topic
             self._topic_name_index[topic_name_lower] = topic.id
             self._index_topic(topic)
@@ -531,6 +567,7 @@ class TopicAwareStore:
         memory.topic_id = topic.id
         memory.tags = [fallback_name]
 
+        self._evict_for_new_topic()
         self._topics[topic.id] = topic
         self._topic_name_index[fallback_name.lower()] = topic.id
         self._index_topic(topic)

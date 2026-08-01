@@ -24,7 +24,7 @@
 - **Automatic retrieval injection**: before generating replies, relevant memories are retrieved and injected into the prompt, so characters naturally recall the past without calling any tool.
 - **Topic-aware storage**: automatically categorizes memories into topics and builds association graphs, feeding the long-term thinking random walk.
 - **Forgetting curve**: memory weight adjustment mechanism based on importance, emotional valence, and access frequency.
-- **Topic heat decay**: at read time, topic heat is computed with a half-life (default 72h, `memory.topic_half_life_hours`); cold topics are hidden from the silent-thinking random walk rather than deleted, and naturally revive when brought up again. Topics reaching `memory.topic_pin_importance` are immune. Can be disabled via `memory.topic_decay_enabled`.
+- **Topic heat decay**: at read time, topic heat is computed with a half-life (default 72h, `memory.topic_half_life_hours`); cold topics are hidden from the silent-thinking random walk rather than deleted, and naturally revive when brought up again. Topics reaching `memory.topic_pin_importance` are immune, and the feature can be disabled via `memory.topic_decay_enabled`. On the write side there is also a topic cap (`memory.semantic_max_topics`, default 50): once full, adding a new topic evicts the non-pinned topic with the lowest recall weight.
 - **World memory projection**: in multi-character mode, after each performance segment, the world writes a first-person perspective memory for every character present.
 
 ### Silent Thinking Engine (ThinkEngine)

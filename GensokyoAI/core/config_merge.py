@@ -247,6 +247,12 @@ class ConfigMerger:
                 else base.semantic_similarity_threshold,
             ),
             auto_memory_enabled=choose("auto_memory_enabled", override.auto_memory_enabled),
+            semantic_max_topics=choose(
+                "semantic_max_topics",
+                override.semantic_max_topics
+                if override.semantic_max_topics != 50
+                else base.semantic_max_topics,
+            ),
             auto_memory_model=choose(
                 "auto_memory_model",
                 override.auto_memory_model

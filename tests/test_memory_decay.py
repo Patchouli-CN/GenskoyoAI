@@ -174,5 +174,51 @@ class ThinkEngineDecayFilterTests(unittest.TestCase):
         asyncio.run(run())
 
 
+class TopicEvictionTests(unittest.TestCase):
+    """写入侧淘汰：话题数达 max_topics 上限时，回忆权重最低的非 pin 话题被移除。"""
+
+    def _add(self, store: TopicAwareStore, name: str, importance: float):
+        return asyncio.run(
+            store.add_async(content=f"{name}的内容", importance=importance, topic_name=name)
+        )
+
+    def test_cap_enforced_and_weakest_evicted(self):
+        with TemporaryDirectory() as tmpdir:
+            store = TopicAwareStore(Path(tmpdir) / "topics.json", max_topics=2)
+            self._add(store, "重要", 0.9)
+            self._add(store, "路人", 0.1)
+            self._add(store, "新人", 0.5)
+
+            self.assertEqual(store.topic_count, 2)
+            self.assertIsNone(store.find_topic_by_name("路人"))
+            self.assertIsNotNone(store.find_topic_by_name("重要"))
+            self.assertIsNotNone(store.find_topic_by_name("新人"))
+
+    def test_evicted_topic_memories_are_removed(self):
+        with TemporaryDirectory() as tmpdir:
+            store = TopicAwareStore(Path(tmpdir) / "topics.json", max_topics=2)
+            self._add(store, "重要", 0.9)
+            self._add(store, "路人", 0.1)
+            self.assertEqual(store.memory_count, 2)
+            victim_memory_id = store.list_memories(topic_name="路人")["items"][0]["id"]
+
+            self._add(store, "新人", 0.5)
+
+            self.assertEqual(store.memory_count, 2)  # 路人的记忆随话题一起移除
+            self.assertIsNone(store.get_memory(victim_memory_id))
+
+    def test_pinned_topic_survives_eviction(self):
+        with TemporaryDirectory() as tmpdir:
+            store = TopicAwareStore(
+                Path(tmpdir) / "topics.json", max_topics=2, pin_importance=8.0
+            )
+            self._add(store, "核心", 9.0)
+            self._add(store, "路人", 0.1)
+            self._add(store, "新人", 0.5)
+
+            self.assertIsNotNone(store.find_topic_by_name("核心"))
+            self.assertIsNone(store.find_topic_by_name("路人"))
+
+
 if __name__ == "__main__":
     unittest.main()

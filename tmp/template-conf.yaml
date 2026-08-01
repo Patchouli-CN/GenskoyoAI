@@ -164,6 +164,7 @@ memory:
   semantic_enabled: false  # 当前用 Claude 不带 embedding，临时关闭语义记忆；后续接 embedding 后改回 true
   semantic_top_k: 5
   semantic_similarity_threshold: 0.7
+  semantic_max_topics: 50        # 话题数上限：达到后新增话题时淘汰回忆权重最低的非 pin 话题
   auto_memory_enabled: true
   auto_memory_model: null        # 自动记忆模型；null = 跟随主模型（当前无消费方，预留）
   distill_enabled: true          # 定期记忆蒸馏：每 distill_turns 轮对话后自动提炼珍贵记忆写入语义记忆

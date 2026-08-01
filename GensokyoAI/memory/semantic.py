@@ -32,7 +32,10 @@ class SemanticMemoryManager:
         # 直接使用传入的路径
         store_path = memory_path / "topics.json"
         self._store = TopicAwareStore(
-            store_path, max_topics=50, topic_config=config.topic_generation
+            store_path,
+            max_topics=config.semantic_max_topics,
+            topic_config=config.topic_generation,
+            pin_importance=config.topic_pin_importance,
         )
 
         logger.debug(f"语义记忆初始化: {character_id}, 存储路径: {store_path}")
