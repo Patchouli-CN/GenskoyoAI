@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import tempfile
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -268,6 +269,24 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         assert status["tenants"] == {"groups": 2, "users": 1, "meta": 1, "other": 0}
         assert status["active_operations"] == 3
         assert status["latency"] == {"count": 0}  # 元租户未装配 Agent → 空延迟
+
+        # 内心戏延迟聚合自各租户 Agent 的模型客户端（而非元租户）
+        from types import SimpleNamespace
+
+        client_a = SimpleNamespace(
+            _latency_samples=deque([("think_engine", 1000.0), ("chat", 9000.0)])
+        )
+        client_b = SimpleNamespace(
+            _latency_samples=deque([("think_engine", 2000.0), ("think_engine", 3000.0)])
+        )
+        for agent_id, client in (("qq-group-111", client_a), ("qq-group-222", client_b)):
+            service._tenant_services[("nb2", agent_id)].state.agent = SimpleNamespace(
+                runtime_context=SimpleNamespace(model_client=client)
+            )
+        status = RuntimeHost(service=service).get_system_status()
+        assert status["latency"]["count"] == 3
+        assert status["latency"]["median_ms"] == 2000.0
+        assert status["latency"]["max_ms"] == 3000.0
         # runtime 闸只取 root 入口闸（模板默认 4，不随租户扩容）；
         # model 闸为每租户一套：instances = root + 4 租户
         runtime_gate = next(g for g in status["gates"] if g["name"] == "runtime")

@@ -248,12 +248,8 @@ class RuntimeHost:
                 tenants["meta"] += 1
             else:
                 tenants["other"] += 1
-        latency: dict[str, Any] = {"count": 0}
-        agent = self._tenant_agent("nb2-meta")
-        client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
-        if client is not None:
-            # 思考延迟专取 ThinkEngine 内心戏（长期思考/说话前思考/对话欲评估）
-            latency = client.latency_stats(context="think_engine")
+        # 内心戏样本记在各租户 Agent 的模型客户端上（不是元租户）——全租户聚合
+        latency = self._collect_think_latency()
 
         gates = self._aggregate_gate_usage()
         return {
@@ -262,6 +258,37 @@ class RuntimeHost:
             "latency": latency,
             "gates": gates,
             "load_level": self._compute_load_level(gates, latency),
+        }
+
+    def _collect_think_latency(self) -> dict[str, Any]:
+        """聚合全部租户模型客户端的 ThinkEngine 内心戏延迟样本（滚动窗口）。
+
+        内心戏（长期思考/说话前思考/对话欲评估）发生在各租户 Agent 的
+        ThinkEngine 上，样本分散在各自 ModelClient；元租户只跑脱稿生成，
+        没有内心戏样本。
+        """
+        samples: list[float] = []
+        for service in self._service._tenant_services.values():
+            agent = service.state.agent
+            client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
+            if client is None:
+                continue
+            samples.extend(
+                duration
+                for context, duration in getattr(client, "_latency_samples", ())
+                if context == "think_engine"
+            )
+        if not samples:
+            return {"count": 0}
+        ordered = sorted(samples)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        return {
+            "count": len(samples),
+            "median_ms": round(median, 1),
+            "avg_ms": round(sum(samples) / len(samples), 1),
+            "last_ms": round(samples[-1], 1),
+            "max_ms": round(max(samples), 1),
         }
 
     def _aggregate_gate_usage(self) -> list[dict[str, Any]]:
