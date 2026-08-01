@@ -40,7 +40,7 @@ class ModelClient:
     模型客户端 - Facade 层
 
     对外暴露统一接口，内部委托给具体的 Provider 实现。
-    消费方（ThinkEngine、EpisodicMemory 等）只需要和 ModelClient 交互，
+    消费方（ThinkEngine 等）只需要和 ModelClient 交互，
     不需要关心底层使用的是 Ollama、OpenAI 还是其他 API。
     """
 

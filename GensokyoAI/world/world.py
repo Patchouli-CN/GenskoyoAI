@@ -586,10 +586,12 @@ class GensokyoWorld:
 
     # ==================== 用户回合 ====================
 
-    async def send_message(self, user_input: str) -> list[WorldTurn]:
+    async def send_message(
+        self, user_input: str, system_contexts: list[str] | None = None
+    ) -> list[WorldTurn]:
         """用户发言（非流式）：返回本段自动表演中各 Actor 的发言记录。"""
         turns: list[WorldTurn] = []
-        async for event in self.send_message_stream(user_input):
+        async for event in self.send_message_stream(user_input, system_contexts):
             if event["type"] == STREAM_ACTOR_COMPLETED:
                 turns.append(
                     WorldTurn(
@@ -601,8 +603,15 @@ class GensokyoWorld:
                 )
         return turns
 
-    async def send_message_stream(self, user_input: str) -> AsyncIterator[dict[str, Any]]:
-        """用户发言（流式）：产出 world.actor.* / world.waiting_user 事件。"""
+    async def send_message_stream(
+        self, user_input: str, system_contexts: list[str] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """用户发言（流式）：产出 world.actor.* / world.waiting_user 事件。
+
+        ``system_contexts`` 为本轮附加提示词上下文（如 console 的
+        /know /meta /attention 累积内容），仅注入本段表演的各 Actor 回合，
+        不持久化、不影响后续回合。
+        """
         async with self._turn_lock:
             # 用户消息优先于世界主动：取消/作废尚未触发的世界主动意图
             await self._cancel_initiative("user_message")
@@ -621,6 +630,7 @@ class GensokyoWorld:
                 current=self._current_actor_id,
                 auto_count=0,
                 same_count=0,
+                user_contexts=system_contexts,
             ):
                 yield event
             await self._save_record()
@@ -636,6 +646,7 @@ class GensokyoWorld:
         auto_count: int,
         same_count: int,
         initiative_summary: str = "",
+        user_contexts: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """自动表演段：导演决策 → 演员回合 → 再决策，直到 wait_user/熔断。"""
         decision = await self._decide(
@@ -651,7 +662,7 @@ class GensokyoWorld:
                 logger.warning(f"[World] 决策指向不可用演员 {speaker}，强制等待用户")
                 break
             async for event in self._run_actor_turn_stream(
-                speaker, trigger_text, turn_index=turn_index + 1
+                speaker, trigger_text, turn_index=turn_index + 1, extra_contexts=user_contexts
             ):
                 yield event
             same_count = same_count + 1 if speaker == current else 1
@@ -676,7 +687,12 @@ class GensokyoWorld:
         yield {"type": STREAM_WAITING_USER}
 
     async def _run_actor_turn_stream(
-        self, actor_id: str, trigger_text: str, *, turn_index: int
+        self,
+        actor_id: str,
+        trigger_text: str,
+        *,
+        turn_index: int,
+        extra_contexts: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """驱动一名 Actor 开口：注入舞台上下文、流出正文、写入共享剧本。"""
         agent = self._actors[actor_id]
@@ -685,6 +701,8 @@ class GensokyoWorld:
         # 回合开始即登记当前演员：scene_switch 的用户跟随、导演上下文都依赖它
         self._current_actor_id = actor_id
         contexts = await self._build_actor_contexts(actor_id, scene_id)
+        if extra_contexts:
+            contexts = [*contexts, *extra_contexts]
         started = WorldActorTurnPayload(
             actor_id=actor_id,
             actor_name=brief.display_name,

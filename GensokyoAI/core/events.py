@@ -51,8 +51,6 @@ class SystemEvent(Enum):
     RESPONSE_COMPLETED = "response.completed"  # 响应完成
 
     # 记忆事件
-    MEMORY_WORKING_ADDED = "memory.working.added"
-    MEMORY_EPISODIC_COMPRESSED = "memory.episodic.compressed"
     MEMORY_SEMANTIC_ADDED = "memory.semantic.added"
     MEMORY_SEMANTIC_RECALLED = "memory.semantic.recalled"
     MEMORY_SEMANTIC_UPDATED = "memory.semantic.updated"

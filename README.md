@@ -6,7 +6,7 @@
   [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 </div>
 
-> 一个专为角色扮演设计的通用 Python AI Agent 工具包与运行时，支持 Ollama / OpenAI / OpenRouter / DeepSeek / OpenAI Responses / Claude / Gemini 等多种 LLM Provider，提供三层记忆系统、会话管理、工具调用、Provider 抽象和稳定 Runtime API。
+> 一个专为角色扮演设计的通用 Python AI Agent 工具包与运行时，支持 Ollama / OpenAI / OpenRouter / DeepSeek / OpenAI Responses / Claude / Gemini 等多种 LLM Provider，提供两层记忆系统、会话管理、工具调用、Provider 抽象和稳定 Runtime API。
 >
 > 当前项目处于 Alpha 阶段：核心 Runtime、Provider、会话、记忆和工具能力已经成型，可用于集成验证；正式发布前仍会继续收口版本号、文档、端到端验收和兼容性说明。
 >

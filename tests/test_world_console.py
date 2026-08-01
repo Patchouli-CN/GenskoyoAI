@@ -169,6 +169,26 @@ class WorldConsoleBackendTests(unittest.IsolatedAsyncioTestCase):
         assert "帕秋莉·诺蕾姬: " in printed
         assert "还给我。" in printed
 
+    async def test_prompt_commands_feed_world_turn(self):
+        # /know 累积的提示词上下文必须随用户回合注入 World（此前只写不读、静默失效）
+        captured: dict[str, list[str] | None] = {}
+        original_send = self.world.send_message
+
+        async def _spy(message, system_contexts=None):
+            captured["contexts"] = system_contexts
+            return await original_send(message, system_contexts=system_contexts)
+
+        self.world.send_message = _spy
+        _ConsoleProvider.reset(
+            director=[_decision("switch", "marisa"), _decision("wait_user")],
+            replies=[[StreamChunk(content="明白了")]],
+        )
+        await self.backend.send("<know>灵梦是博丽神社的巫女</know>")
+        await self.backend.send("你知道吗")
+
+        contexts = captured.get("contexts") or []
+        assert any("灵梦是博丽神社的巫女" in context for context in contexts)
+
     async def test_world_commands_execute(self):
         for text in ("/world", "/roster", "/stage", "/transcript"):
             self.output.truncate(0)

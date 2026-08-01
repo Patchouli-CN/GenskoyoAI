@@ -8,7 +8,6 @@ from ...tools.build_service import ToolBuildResult
 from ...tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
-    from ...memory.episodic import EpisodicMemoryManager
     from ...memory.semantic import SemanticMemoryManager
     from ...memory.working import WorkingMemoryManager
     from ..config import ModelConfig, WebSearchToolConfig
@@ -20,7 +19,6 @@ class MessageBuilder:
 
     职责：
     - 组装系统提示词
-    - 添加情景记忆（历史摘要）
     - 添加语义记忆（相关知识）
     - 添加工作记忆（当前对话）
     - 构建工具调用后的继续对话消息
@@ -30,7 +28,6 @@ class MessageBuilder:
         self,
         system_prompt: str,
         working_memory: WorkingMemoryManager,
-        episodic_memory: EpisodicMemoryManager,
         semantic_memory: SemanticMemoryManager,
         tool_registry: ToolRegistry | None = None,
         tool_enabled: bool = False,
@@ -47,7 +44,6 @@ class MessageBuilder:
         Args:
             system_prompt: 基础系统提示词
             working_memory: 工作记忆管理器
-            episodic_memory: 情景记忆管理器
             semantic_memory: 语义记忆管理器
             tool_registry: 工具注册中心（用于生成工具说明）
             tool_enabled: 是否启用工具
@@ -56,7 +52,6 @@ class MessageBuilder:
         """
         self._system_prompt = system_prompt
         self._working_memory = working_memory
-        self._episodic_memory = episodic_memory
         self._semantic_memory = semantic_memory
         self._tool_registry = tool_registry
         self._tool_enabled = tool_enabled
@@ -140,16 +135,7 @@ class MessageBuilder:
                     if assistant_text:
                         messages.append({"role": "assistant", "content": assistant_text})
 
-        # 2. 情景记忆（历史摘要）
-        if episodic_context := self._episodic_memory.get_relevant_context(user_input):
-            messages.append(
-                {
-                    "role": "system",
-                    "content": "【历史记忆摘要】\n" + "\n".join(episodic_context),
-                }
-            )
-
-        # 3. 语义记忆（相关记忆）
+        # 2. 语义记忆（相关记忆）
         if semantic_context := self._semantic_memory.get_relevant_context(user_input):
             messages.append(
                 {
@@ -158,14 +144,14 @@ class MessageBuilder:
                 }
             )
 
-        # 4. 联网搜索触发策略提示（只引导模型调用工具，不在后端自动联网）
+        # 3. 联网搜索触发策略提示（只引导模型调用工具，不在后端自动联网）
         if hint := self._build_web_search_hint(user_input, system_contexts):
             messages.append({"role": "system", "content": hint})
 
-        # 5. 工作记忆（当前对话）
+        # 4. 工作记忆（当前对话）
         messages.extend(self._working_memory.get_context())
 
-        # 6. world-turn 临时触发：不入私历，但必须让模型看到本轮触发
+        # 5. world-turn 临时触发：不入私历，但必须让模型看到本轮触发
         if ephemeral_input and user_input:
             messages.append({"role": "user", "content": user_input})
 

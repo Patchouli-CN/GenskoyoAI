@@ -6,7 +6,7 @@
   [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 </div>
 
-> A general-purpose Python AI Agent toolkit and runtime designed for roleplay. Supports multiple LLM providers including Ollama, OpenAI, OpenRouter, DeepSeek, OpenAI Responses, Claude, and Gemini. Features a three-layer memory system, session management, tool calling, provider abstraction, and a stable Runtime API.
+> A general-purpose Python AI Agent toolkit and runtime designed for roleplay. Supports multiple LLM providers including Ollama, OpenAI, OpenRouter, DeepSeek, OpenAI Responses, Claude, and Gemini. Features a two-layer memory system, session management, tool calling, provider abstraction, and a stable Runtime API.
 >
 > The project is currently in Alpha: the core runtime, providers, sessions, memory, and tool capabilities are solid and ready for integration validation. Version numbers, documentation, end-to-end acceptance, and compatibility notes will continue to be tightened before a stable release.
 >

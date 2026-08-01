@@ -18,19 +18,6 @@ class TopicMemoryType(Enum):
     CORRECTION = auto()
 
 
-class MemoryRecord(Struct):
-    """基础记忆记录"""
-
-    id: str = field(default_factory=lambda: str(uuid4()))
-    content: str = ""
-    role: str = "user"  # user/assistant/system/tool
-    timestamp: datetime = field(default_factory=utc_now)
-    character_id: str = "default"
-    importance: float = 0.0  # 0-1 重要程度
-    emotional_valence: float = 0.0  # 情感效价 -1.0 到 1.0
-    metadata: dict = field(default_factory=dict)
-
-
 class WorkingMemory(Struct):
     """工作记忆 - 当前会话的完整对话"""
 
@@ -54,18 +41,6 @@ class WorkingMemory(Struct):
     def clear(self) -> None:
         """清空"""
         self.messages.clear()
-
-
-class EpisodicMemory(Struct):
-    """情景记忆 - 历史摘要"""
-
-    summary: str = ""
-    start_time: datetime = field(default_factory=utc_now)
-    end_time: datetime | None = None
-    message_count: int = 0
-    key_events: list[str] = field(default_factory=list)
-    emotional_valence: float = 0.0  # 情感效价
-    location: str = ""  # 地点
 
 
 class Topic(Struct):

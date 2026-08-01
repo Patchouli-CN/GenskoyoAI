@@ -6,15 +6,14 @@
 
 - **YAML Character Configuration**: Define character name, persona, greeting, and example dialogues with simple config files.
 - **System Prompt Templates**: Support long prompts and example dialogues to quickly shape character personality.
-- **Character Consistency Maintenance**: Through working memory, episodic memory, and semantic memory, characters maintain context and personality consistency across long conversations.
+- **Character Consistency Maintenance**: Through working memory and semantic memory, characters maintain context and personality consistency across long conversations.
 
-### Three-Layer Memory System
+### Two-Layer Memory System
 
 | Memory Type | Purpose | Implementation |
 |-------------|---------|----------------|
 | **Working Memory** | Full conversation of current session | Sliding window, retains the most recent N turns |
-| **Episodic Memory** | Compressed summaries of historical dialogue | Model-generated summaries, key event extraction |
-| **Semantic Memory** | Long-term knowledge storage and retrieval | Topic-aware storage + forgetting curve; no vector database required by default |
+| **Semantic Memory** | Long-term knowledge storage and retrieval | Topic-aware storage + scheduled distillation + forgetting curve; no vector database required by default |
 
 ### Memory Management
 
@@ -124,7 +123,7 @@ GensokyoAI/
 │   │   ├── config.py           # Configuration management (YAML + environment variables)
 │   │   ├── events.py           # Event bus
 │   │   └── exceptions.py       # Custom exceptions
-│   ├── memory/                 # Working memory, episodic memory, semantic memory
+│   ├── memory/                 # Working memory, semantic memory
 │   ├── session/                # Session management and persistence
 │   ├── tools/                  # Tool registration, execution, built-in tools
 │   └── utils/                  # Utility functions

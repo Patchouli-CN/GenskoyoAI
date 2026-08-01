@@ -40,6 +40,21 @@ class WorkingMemoryManager:
                 msg[key] = value
 
         self._memory.messages.append(msg)
+        self._trim()
+
+    def _trim(self) -> None:
+        """裁剪到最大轮数，并丢弃头部的孤儿 tool 结果消息。
+
+        截断从头部进行，可能切断 tool_call 配对：assistant 的 tool_call 消息
+        被裁掉后，其对应的 tool 结果消息会成为非法上下文（Provider 要求
+        tool 消息必须紧跟带 tool_calls 的 assistant 消息），一并丢弃。
+        """
+        memory = self._memory
+        limit = memory.max_turns * 2
+        if len(memory.messages) > limit:
+            del memory.messages[: len(memory.messages) - limit]
+        while memory.messages and memory.messages[0].get("role") == "tool":
+            del memory.messages[0]
 
     @staticmethod
     def _clean_reasoning(obj):

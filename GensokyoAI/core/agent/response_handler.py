@@ -20,6 +20,16 @@ if TYPE_CHECKING:
 # 模型可能意外输出的 XML 标签残留（如 <get_current_time>, </think> 等）
 _XML_TAG_PATTERN = re.compile(r"</?[a-z_]+[^>]*>")
 
+# 流式中断时补给用户的可见标记。只投递给 UI；写入模型上下文前必须用
+# strip_interrupt_marker 剥掉（错误文本不提供给模型）。
+STREAM_INTERRUPT_MARKER = "响应中断"
+_INTERRUPT_MARKER_PATTERN = re.compile(r"\n?\[响应中断:[^\]]*\]\n?")
+
+
+def strip_interrupt_marker(text: str) -> str:
+    """剥离流式中断标记，返回干净的半截正文。"""
+    return _INTERRUPT_MARKER_PATTERN.sub("", text).strip()
+
 
 class ResponseHandler:
     """
@@ -91,15 +101,13 @@ class ResponseHandler:
     def _record_tool_results(self, tool_calls_message: UnifiedMessage, results: list[dict]) -> None:
         """将工具调用和结果写入工作记忆"""
 
-        # 写入 assistant 的 tool_call 消息
+        # 写入 assistant 的 tool_call 消息。content 置空：前言文本已包含在
+        # MESSAGE_SENT 记录的完整回复（前言 + 续写）中，这里再存一份会让
+        # 前言在工作记忆里出现两次，白占上下文 token。
         if tool_calls_message.tool_calls:
             self._working_memory.add_message(
                 role="assistant",
-                content=(
-                    tool_calls_message.content
-                    if isinstance(tool_calls_message.content, str)
-                    else ""
-                ),
+                content="",
                 tool_calls=tool_calls_message.tool_calls,
                 reasoning_content=tool_calls_message.reasoning_content,
             )
@@ -212,7 +220,7 @@ class ResponseHandler:
                 yield chunk
         except Exception as e:
             logger.error(f"{context}失败: {e}")
-            yield StreamChunk(content=f"\n[响应中断: {e}]\n")
+            yield StreamChunk(content=f"\n[{STREAM_INTERRUPT_MARKER}: {e}]\n")
 
     async def _safe_tool_calls(self, message: UnifiedMessage) -> list[dict] | None:
         """带容错的工具调用"""

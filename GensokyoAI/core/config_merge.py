@@ -217,24 +217,6 @@ class ConfigMerger:
                 if override.working_max_turns != 20
                 else base.working_max_turns,
             ),
-            episodic_threshold=choose(
-                "episodic_threshold",
-                override.episodic_threshold
-                if override.episodic_threshold != 50
-                else base.episodic_threshold,
-            ),
-            episodic_summary_model=choose(
-                "episodic_summary_model",
-                override.episodic_summary_model
-                if override.episodic_summary_model is not None
-                else base.episodic_summary_model,
-            ),
-            episodic_keep_recent=choose(
-                "episodic_keep_recent",
-                override.episodic_keep_recent
-                if override.episodic_keep_recent != 10
-                else base.episodic_keep_recent,
-            ),
             semantic_enabled=choose("semantic_enabled", override.semantic_enabled),
             semantic_top_k=choose(
                 "semantic_top_k",

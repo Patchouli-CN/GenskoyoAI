@@ -277,3 +277,14 @@ class StreamChunk(Struct):
 # 正文挤成空串导致决策 JSON 永远解析失败。抬高下限对非 thinking 模型无影响
 # （它们输出本来就短），对 thinking 模型留出思考余量。
 DECISION_MIN_MAX_TOKENS = 1024
+
+
+class HalfCompletionMessage(Struct):
+    """响应中断时未说完的半截回复（中间状态）。
+
+    只保留剥离错误标记后的干净正文：标记文本已投递给用户，但不进模型
+    上下文。下一轮生成前经提示词注入（见 prompts.build_half_completion_context），
+    让角色自然接着说完；正常回复完成后清除。不写入工作记忆 / 会话存档。
+    """
+
+    content: str

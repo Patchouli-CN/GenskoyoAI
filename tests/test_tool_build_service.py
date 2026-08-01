@@ -205,7 +205,6 @@ class ToolBuildServiceTests(unittest.TestCase):
         builder = MessageBuilder(
             system_prompt="system",
             working_memory=_EmptyMemory(),
-            episodic_memory=_EmptyMemory(),
             semantic_memory=_EmptyMemory(),
             tool_build_result=ToolBuildResult(instructions="【可用工具】\n- test: instruction"),
         )

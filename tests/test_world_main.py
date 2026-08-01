@@ -313,6 +313,42 @@ class WorldMainTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(snapshot.waiting_for_user)
             self.assertEqual(snapshot.current_actor_id, "patchouli")
 
+    async def test_user_turn_system_contexts_reach_actor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_characters(tmp)
+            world = await self._boot(
+                tmp,
+                director=[_decision("switch", "marisa"), _decision("wait_user")],
+                replies=[[StreamChunk(content="了解DA☆ZE")]],
+            )
+            await world.start()
+            await world.send_message("看看这个", system_contexts=["【参考资料】\n灵梦是巫女"])
+
+            flattened = "\n".join(
+                str(message.get("content", ""))
+                for call in _WorldProvider.stream_calls
+                for message in call
+            )
+            self.assertIn("【参考资料】\n灵梦是巫女", flattened)
+
+    async def test_user_turn_without_system_contexts_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_characters(tmp)
+            world = await self._boot(
+                tmp,
+                director=[_decision("switch", "marisa"), _decision("wait_user")],
+                replies=[[StreamChunk(content="了解DA☆ZE")]],
+            )
+            await world.start()
+            await world.send_message("看看这个")
+
+            flattened = "\n".join(
+                str(message.get("content", ""))
+                for call in _WorldProvider.stream_calls
+                for message in call
+            )
+            self.assertNotIn("【参考资料】", flattened)
+
     async def test_continue_then_invalid_switch_falls_back(self):
         with tempfile.TemporaryDirectory() as tmp:
             _write_characters(tmp)

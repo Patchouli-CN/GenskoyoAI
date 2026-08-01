@@ -94,11 +94,6 @@ class MemoryConfig(Struct):
     """记忆配置"""
 
     working_max_turns: int = 20
-    episodic_threshold: int = 50
-    # 情景摘要模型；None = 跟随主模型（model.name）。
-    # 注意：episodic 写入路径当前未启用（event_listeners 中已注释），本字段为预留。
-    episodic_summary_model: str | None = None
-    episodic_keep_recent: int = 10
     semantic_enabled: bool = True
     semantic_top_k: int = 5
     semantic_similarity_threshold: float = 0.7

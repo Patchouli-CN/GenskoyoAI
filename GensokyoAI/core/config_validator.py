@@ -54,6 +54,14 @@ _REMOVED_INITIATIVE_FALLBACK_KEYS = {
     "mood_half_life_negative_minutes",
 }
 
+# 已删除的 memory 配置键（情景记忆子系统 2026-08-01 删除）：
+# 旧配置仍被接受（不报未知字段错误），由 DEPRECATED_FIELDS 给出迁移警告。
+_REMOVED_MEMORY_EPISODIC_KEYS = {
+    "episodic_threshold",
+    "episodic_summary_model",
+    "episodic_keep_recent",
+}
+
 
 class ConfigDiagnostic(Struct, frozen=True):
     """单条配置诊断。"""
@@ -204,7 +212,20 @@ class ConfigValidator:
             "initiative_timer.drive_threshold",
             "对话欲累积器已删除：改为四维心情打分 + drive_threshold 阈值判断。",
         ),
+        "memory.episodic_threshold": (
+            "memory.distill_turns",
+            "情景记忆子系统已删除：历史摘要职责由定期记忆蒸馏接替（§8.29）。",
+        ),
+        "memory.episodic_summary_model": (
+            "memory.distill_turns",
+            "情景记忆子系统已删除：历史摘要职责由定期记忆蒸馏接替（§8.29）。",
+        ),
+        "memory.episodic_keep_recent": (
+            "memory.distill_turns",
+            "情景记忆子系统已删除：历史摘要职责由定期记忆蒸馏接替（§8.29）。",
+        ),
     }
+
     def validate_config_dict(self, data: dict[str, Any]) -> list[ConfigDiagnostic]:
         diagnostics: list[ConfigDiagnostic] = []
         self._validate_top_level(data, diagnostics)
@@ -621,16 +642,16 @@ class ConfigValidator:
         if not isinstance(data, dict):
             return
         self._validate_unknown_fields(
-            "memory", data, self._struct_field_names(MemoryConfig), diagnostics
+            "memory",
+            data,
+            self._struct_field_names(MemoryConfig)
+            # 已删除的情景记忆配置键：不作为未知字段报错，
+            # 由 DEPRECATED_FIELDS 给出迁移警告（见类常量）
+            | _REMOVED_MEMORY_EPISODIC_KEYS,
+            diagnostics,
         )
         self._validate_numeric_range(
             "memory.working_max_turns", data.get("working_max_turns"), diagnostics, minimum=1
-        )
-        self._validate_numeric_range(
-            "memory.episodic_threshold", data.get("episodic_threshold"), diagnostics, minimum=1
-        )
-        self._validate_numeric_range(
-            "memory.episodic_keep_recent", data.get("episodic_keep_recent"), diagnostics, minimum=0
         )
         self._validate_numeric_range(
             "memory.semantic_top_k", data.get("semantic_top_k"), diagnostics, minimum=1

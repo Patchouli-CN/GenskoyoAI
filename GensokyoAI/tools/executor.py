@@ -22,6 +22,7 @@ from .tool_context import SINGLE_ACTOR_ID, ToolRuntimeContext, bind_tool_context
 
 if TYPE_CHECKING:
     from ..core.events import EventBus
+    from .web_search.service import WebSearchService
 
 
 class ToolExecutor:
@@ -35,6 +36,7 @@ class ToolExecutor:
         resource_gates: dict[str, ResourceGate] | None = None,
         actor_id: str = SINGLE_ACTOR_ID,
         world_id: str | None = None,
+        web_search_service: WebSearchService | None = None,
     ):
         self._registry = registry or ToolRegistry()
         self._event_bus = event_bus
@@ -44,6 +46,9 @@ class ToolExecutor:
         # 多角色模式由 World 装配时按 roster 注入稳定 id。
         self._actor_id = actor_id
         self._world_id = world_id
+        # 该 Actor 的联网搜索服务，按调用注入工具上下文；
+        # 为 None 时工具回落模块级兜底（兼容测试与裸调用）。
+        self._web_search_service = web_search_service
 
     def set_event_bus(self, event_bus: EventBus) -> None:
         """注入事件总线"""
@@ -121,6 +126,7 @@ class ToolExecutor:
                         event_bus=self._event_bus,
                         actor_id=self._actor_id,
                         world_id=self._world_id,
+                        web_search_service=self._web_search_service,
                     )
                 ):
                     if tool_def.is_async:

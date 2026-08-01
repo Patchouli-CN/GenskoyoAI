@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from ...memory.episodic import EpisodicMemoryManager
 from ...runtime.resource_control import build_resource_gates
 from ...scene.manager import SceneManager
 from ...session.manager import SessionManager
@@ -10,6 +9,7 @@ from ...tools.build_service import ToolBuildService
 from ...tools.executor import ToolExecutor
 from ...tools.external_manager import ExternalToolManager
 from ...tools.registry import ToolRegistry
+from ...tools.web_search.service import WebSearchService
 from ..config import AppConfig
 from ..events import EventBus
 from .model_client import ModelClient
@@ -51,12 +51,6 @@ class AgentComposition:
             embedding_config=self.config.embedding,
             resource_gates=resource_gates,
         )
-        episodic_memory = EpisodicMemoryManager(
-            self.config.memory,
-            self.character_name,
-            None,
-            model_client,
-        )
         tool_registry = ToolRegistry()
         external_tool_manager = ExternalToolManager()
         tool_executor = ToolExecutor(
@@ -66,6 +60,9 @@ class AgentComposition:
             resource_gates=resource_gates,
             actor_id=actor_id,
             world_id=world_id,
+            # 每个 Actor 持有自己的搜索服务，经工具上下文按调用注入，
+            # 不再依赖模块级全局配置（多 Actor 不互相覆盖）。
+            web_search_service=WebSearchService(self.config.tool.web_search),
         )
         tool_build_service = ToolBuildService(tool_registry)
         model_registry_service = ModelRegistryService()
@@ -82,7 +79,6 @@ class AgentComposition:
             semantic_memory_root=self.deps.semantic_memory_root,
             resource_gates=resource_gates,
             model_client=model_client,
-            episodic_memory=episodic_memory,
             tool_registry=tool_registry,
             tool_executor=tool_executor,
             tool_build_service=tool_build_service,

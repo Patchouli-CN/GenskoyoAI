@@ -235,6 +235,105 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.37 情景记忆（episodic）子系统整体删除：三层记忆收口为两层（2026-08-01，用户定稿「实事求是」）
+
+- 背景：§5.6 待定夺最后一条。episodic 是「名义三层」的中间层——写入路径
+  从未接线（唯一调用点是一行注释）、持久化 `persistence=None`、配置与事件
+  空挂，每轮 `get_relevant_context` 永远返回空。其「历史压缩摘要」职责已被
+  §8.29 定期记忆蒸馏（写进语义记忆）实质接替。用户拍板：整体删除，文档
+  不再叫三层记忆。
+- 删除面：`memory/episodic.py` 整文件、`EpisodicMemory` / `MemoryRecord`
+  结构体（后者仅 episodic 使用）、`MEMORY_EPISODIC_COMPRESSED` 事件及监听、
+  composition / runtime_context / _impl / message_builder 全部接线（含
+  message_builder 每轮空调用的【历史记忆摘要】注入块）、
+  `build_episodic_summary_prompt`、配置三键 `episodic_threshold` /
+  `episodic_summary_model` / `episodic_keep_recent`（schema/merge 删除）。
+- 配置退役通道：三键进 `_REMOVED_MEMORY_EPISODIC_KEYS` + `DEPRECATED_FIELDS`
+  ——旧配置不报未知字段错误，只给 `config.field.deprecated` 迁移警告
+  （指向 `memory.distill_turns`）；模板与本地配置已清理。
+- 文档：README 中英「三层记忆系统」改「两层」；project_design 中英记忆表
+  删情景行（语义记忆实现方式补「定期蒸馏」）；multi_character_design、
+  包根 docstring 同步。user_guide 的「情景相关」（四维心情维度）与 episodic
+  无关，未动。changelog 与 gsk-ai-multi-character 为历史档案，不改写。
+- 测试：tests/test_episodic_removal.py 2 例（schema 无 episodic 字段、旧键
+  警告不报错）；清理 test_agent_composition / test_web_search_tool /
+  test_tool_build_service 三处构造参数。基线：755 passed, 3 subtests
+  passed，ruff / pyright 全绿。至此 §5.6 待定夺六条全部收口。
+
+建议 commit message（待用户授权后提交）：
+`feat(memory)!: 删除情景记忆（episodic）死子系统——三层记忆收口为「工作+语义」两层，旧配置键走退役警告通道`
+
+## 8.36 MEMORY_WORKING_ADDED 死代码删除（2026-08-01，用户点单）
+
+- §5.6 待定夺第 4 条残余：`SystemEvent.MEMORY_WORKING_ADDED` 只有定义、全项目
+  无发布者无订阅者，删除（`core/events.py`）。同条的 REMEMBER/RECALL 死路
+  已于 §8.28 解决。至此 §5.6 待定夺只剩 episodic 死子系统（启用前再修）。
+- 基线：753 passed, 3 subtests passed，ruff 全绿。
+
+## 8.35 HalfCompletionMessage：响应中断半截回复计入中间状态并续说（2026-08-01，用户定稿）
+
+- 背景：§5.6 待定夺第 3 条——响应中断时半截回复只投递给用户却永不入记忆
+  （`_impl.py` 的「响应中断」过滤直接跳过 MESSAGE_SENT），角色对用户已看到的
+  半句话失忆。用户定稿方案：半截回复计入中间状态 `HalfCompletionMessage`
+  作为上下文，错误消息不提供给模型，下轮让它继续说完，说完后按普通消息处理。
+- `core/agent/types.py`：新增 `HalfCompletionMessage`（msgspec Struct，仅
+  `content`——剥离错误标记后的干净正文；不落工作记忆/会话存档）。
+- `response_handler.py`：中断标记提取为单源常量 `STREAM_INTERRUPT_MARKER` +
+  `strip_interrupt_marker()`（剥离 `\n[响应中断: ...]\n` 标记）；`_safe_stream`
+  产出标记处改用常量。
+- `_impl.py` 收尾分支重构：含中断标记 → 干净半截计入 `_half_completion`
+  （不发 MESSAGE_SENT、不调度定时器）；正常完成 → 清除状态并按原路径发
+  MESSAGE_SENT（即「说完后按普通消息处理」）。注入点在 `_on_generate_response`
+  场景注入之后：`build_half_completion_context`（prompts.py，明令不重复已说
+  部分、不提「中断」）随本轮 system_contexts 进模型，单角色与 World 回合
+  同链生效。`_reset_session_scoped_state` 一并清除（会话级状态不跨会话）。
+- 行为边界：用户可见侧零变化（标记文本照常随流投递）；空半截（首 chunk 即
+  失败）不留状态；连续中断取最新半截；孤儿生成（request_id 失效）依旧零副作用。
+- 测试：tests/test_half_completion.py 5 例（标记剥离 2 例 + Agent 级中断→续说
+  →入记忆→清除全流程、空半截不留状态、会话切换清除）。基线：753 passed,
+  3 subtests passed，ruff / pyright 全绿。
+
+建议 commit message（待用户授权后提交）：
+`feat(agent): HalfCompletionMessage——响应中断的半截回复计入中间状态，下轮注入提示词让角色接着说完，错误标记不进模型上下文`
+
+## 8.34 §5.6 待定夺问题修复批次（2026-08-01，用户点单：修 1/2/5 + §8.27 存疑两条）
+
+- 背景：§5.6 末尾「待用户定夺」六条与 §8.27 存疑两条悬置已久，用户拍板修
+  第 1（工作记忆 trim）、2（工具前言重复入记忆）、5（web_search 模块级全局）
+  与 §8.27 两条存疑；第 3（响应中断不记录）、4（MEMORY_WORKING_ADDED 死代码）、
+  6（episodic 死子系统）维持原状不动。
+- **工作记忆 trim 生效**：`WorkingMemoryManager.add_message` 末尾补 `_trim()`——
+  按 `max_turns * 2` 截断，并丢弃头部孤儿 `tool` 消息（其 assistant tool_call
+  已被裁掉，Provider 会拒绝非法配对）。此前 `WorkingMemory._trim` 只被无人
+  调用的 `WorkingMemory.add()` 使用，`working_max_turns` 形同虚设、长会话
+  token 无界。`replace_messages` / 回滚等显式操作不 trim（尊重前端编辑语义）。
+- **工具前言去重**：`_record_tool_results` 写入的 assistant tool_call 消息
+  content 置空——前言文本已包含在 MESSAGE_SENT 记录的完整回复（前言+续写）
+  中，此前同一段前言在工作记忆里存两份，白占上下文 token。
+- **web_search 去模块级全局**：`ToolRuntimeContext` 新增 `web_search_service`
+  字段，`ToolExecutor` 按调用注入（composition 为每个 Actor 各建一份
+  `WebSearchService`）；工具函数 `_current_service()` 优先读上下文注入，
+  回落模块级兜底（兼容裸调用与测试，`configure_web_search_tool` 保留）。
+  多 Actor 不再「后初始化者胜」。错误 details 的 provider 字段改读当前
+  service 配置（测试 duck 类型无 config 时兜底模块配置）。
+- **PersistenceListeners session_id 现查现报**：删掉注册时缓存的 `_session`
+  （注册早于会话创建，曾导致保存完成事件的 session_id 恒为 None），上报处
+  改为 `session_manager.get_current_session()` 现查。
+- **World 模式 /know /meta /attention 生效**：`World.send_message[_stream]`
+  新增 `system_contexts` 参数，经 `_dialogue_events` → `_run_actor_turn_stream`
+  合入 Actor 回合上下文（仅本轮、不持久化）；`WorldConsoleBackend` 补
+  `_build_system_contexts()`（最近 5 条，镜像单角色语义）并在 send 时透传。
+  此前 world_backend 只初始化 `_prompt_context` 列表而全文无消费，命令写进
+  去的提示词永远到不了模型。
+- 测试：新增 test_working_memory_trim.py（3 例）、test_response_handler.py
+  （前言只存一次）、test_persistence_listeners.py（注册后建会话也上报正确
+  session_id）；test_web_search_tool.py 加注入优先/兜底 2 例；test_world_main.py
+  加 contexts 到达模型/缺省不注入 2 例；test_world_console.py 加 /know 注入
+  World 回合 1 例。基线：748 passed, 3 subtests passed，ruff / pyright 全绿。
+
+建议 commit message（待用户授权后提交）：
+`fix(core): §5.6 待定夺问题批次——工作记忆 trim 生效、工具前言去重、web_search 按 Actor 注入，PersistenceListeners session_id 现查、World 模式提示词命令注入回合`
+
 ## 8.33 写入侧话题淘汰：max_topics 死参数激活（2026-08-01，用户点单）
 
 - 背景：§8.32 审查发现 `SemanticMemoryManager` 传的 `max_topics=50` 从未被

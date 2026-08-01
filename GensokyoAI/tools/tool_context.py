@@ -22,6 +22,7 @@ from msgspec import Struct
 
 if TYPE_CHECKING:
     from ..core.events import EventBus
+    from .web_search.service import WebSearchService
 
 # 单角色（无 World）模式下的默认 actor 标识。
 SINGLE_ACTOR_ID = "__single__"
@@ -35,11 +36,15 @@ class ToolRuntimeContext(Struct):
       （composition 未注入 actor_id 时的兜底），多角色模式为 World
       roster 中的稳定 id。
     - ``world_id``：所属 World 的 id；单角色模式为 None。
+    - ``web_search_service``：该 Actor 自己的联网搜索服务；由 ToolExecutor
+      按调用注入，替代模块级全局配置（多 Agent / Actor 互不覆盖）。
+      为空时工具回落到模块级兜底服务（兼容裸调用与测试）。
     """
 
     event_bus: EventBus | None = None
     actor_id: str = SINGLE_ACTOR_ID
     world_id: str | None = None
+    web_search_service: WebSearchService | None = None
 
 
 # 当前工具调用上下文；默认 None（未在工具执行上下文中）。

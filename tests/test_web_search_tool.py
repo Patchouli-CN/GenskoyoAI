@@ -59,7 +59,6 @@ class WebSearchToolTests(unittest.TestCase):
         builder = MessageBuilder(
             system_prompt="system",
             working_memory=_EmptyMemory(),
-            episodic_memory=_EmptyMemory(),
             semantic_memory=_EmptyMemory(),
             tool_registry=registry,
             tool_enabled=True,
@@ -79,7 +78,6 @@ class WebSearchToolTests(unittest.TestCase):
         builder = MessageBuilder(
             system_prompt="system",
             working_memory=_EmptyMemory(),
-            episodic_memory=_EmptyMemory(),
             semantic_memory=_EmptyMemory(),
             tool_registry=registry,
             tool_enabled=True,
@@ -248,6 +246,39 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertTrue(result["is_error"])
         self.assertEqual(result["error"]["error_code"], "web_search.disabled")
         self.assertEqual(result["error"]["details"]["status"], "disabled")
+
+    def test_injected_service_wins_over_module_global(self):
+        # 模块级全局配置为启用，但 executor 注入的服务是禁用的：
+        # 执行必须走注入服务（证明多 Actor 各用各的配置，不被全局覆盖）。
+        configure_web_search_tool(ToolConfig(web_search=WebSearchToolConfig(enabled=True)))
+        registry = ToolRegistry()
+        executor = ToolExecutor(
+            registry,
+            web_search_service=WebSearchService(WebSearchToolConfig(enabled=False)),
+        )
+
+        result = asyncio.run(
+            executor.execute(
+                {"id": "call-1", "name": "web_search", "arguments": {"query": "query"}}
+            )
+        )
+
+        self.assertTrue(result["is_error"])
+        self.assertEqual(result["error"]["error_code"], "web_search.disabled")
+
+    def test_module_global_still_fallback_without_injection(self):
+        # 未注入服务时保持旧行为：读模块级兜底配置。
+        configure_web_search_tool(ToolConfig(web_search=WebSearchToolConfig(enabled=False)))
+        registry = ToolRegistry()
+        executor = ToolExecutor(registry)
+
+        result = asyncio.run(
+            executor.execute(
+                {"id": "call-1", "name": "web_search", "arguments": {"query": "query"}}
+            )
+        )
+
+        self.assertEqual(result["error"]["error_code"], "web_search.disabled")
 
 
 if __name__ == "__main__":

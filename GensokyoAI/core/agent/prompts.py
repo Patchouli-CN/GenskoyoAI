@@ -198,7 +198,9 @@ def build_emotion_tone_context(emotion_line: str, tendency: str = "") -> str:
     parts = [f"【你当前的情绪状态】{emotion_line}"]
     if tendency:
         parts.append(tendency + "。")
-    parts.append("让它自然渗入你的语气、措辞与反应强度；不要直接说出这些数值，也不要提及「情绪状态」这回事。")
+    parts.append(
+        "让它自然渗入你的语气、措辞与反应强度；不要直接说出这些数值，也不要提及「情绪状态」这回事。"
+    )
     return "\n".join(parts)
 
 
@@ -416,15 +418,6 @@ def build_topic_relevance_prompt(content: str, topics_desc: str) -> str:
 只返回 JSON，格式：{{"1": 9, "2": 3}}"""
 
 
-def build_episodic_summary_prompt(text: str) -> str:
-    """情景记忆压缩摘要提示（解析方：无，自由文本摘要）。"""
-    return f"""请将以下对话内容压缩为一个简短的摘要，保留关键信息和重要事件：
-
-{text}
-
-摘要："""
-
-
 # ==================== nb2 QQ 适配器 ====================
 
 
@@ -507,4 +500,19 @@ def build_mute_break_context(member_label: str) -> str:
         f"【群内动态】你正在生 {member_label} 的气、暂时不想理他，但这句话让你忍不住"
         "想回一句。破例回应一下：别扭、端着架子、顺势吐槽都行（符合你的性格），"
         "但别太热络——你还没完全消气。"
+    )
+
+
+def build_half_completion_context(partial_content: str) -> str:
+    """「上一段话没说完」注入（解析方：无，随本轮消息注入 system_contexts）。
+
+    响应中断时，已投递给用户的半截正文经此注入下一轮上下文，让角色自然
+    接着说完；中断的错误标记文本不提供给模型。
+    """
+    return (
+        "【你上一段话没说完】\n"
+        f"你的上一段回复说到一半就停了，已经说出口的内容是：「{partial_content}」。"
+        "用户已经看到了这部分。请顺着它自然地把没表达完的意思说完——可以直接续完，"
+        "也可以换个说法融入这次回复，但不要原样重复已经说过的部分，"
+        "也不要提到「回复被中断」这回事。"
     )

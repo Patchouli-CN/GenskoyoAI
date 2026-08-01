@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 from msgspec import Struct, field
 
-from ...memory.episodic import EpisodicMemoryManager
 from ...runtime.resource_control import ResourceGate
 from ...scene.manager import SceneManager
 from ...session.manager import SessionManager
@@ -55,7 +54,6 @@ class AgentRuntimeContext(Struct):
     semantic_memory_root: Path | None
     resource_gates: dict[str, ResourceGate]
     model_client: ModelClient
-    episodic_memory: EpisodicMemoryManager
     tool_registry: ToolRegistry
     tool_executor: ToolExecutor
     tool_build_service: ToolBuildService

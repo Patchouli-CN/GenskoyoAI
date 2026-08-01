@@ -67,7 +67,6 @@ class AgentCompositionTests(unittest.TestCase):
 
             self.assertIs(agent.event_bus, agent.runtime_context.event_bus)
             self.assertIs(agent._model_client, agent.runtime_context.model_client)
-            self.assertIs(agent.episodic_memory, agent.runtime_context.episodic_memory)
             self.assertIs(agent.tool_registry, agent.runtime_context.tool_registry)
             self.assertIs(agent.tool_executor, agent.runtime_context.tool_executor)
             self.assertIs(agent.session_manager, agent.runtime_context.session_manager)

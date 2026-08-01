@@ -34,12 +34,12 @@ from .emotion import Emotion
 from .initiative_coordinator import InitiativeCoordinator
 from .lifecycle import LifecycleManager
 from .message_builder import MessageBuilder
-from .prompts import build_roleplay_system_prompt
-from .response_handler import ResponseHandler
+from .prompts import build_half_completion_context, build_roleplay_system_prompt
+from .response_handler import STREAM_INTERRUPT_MARKER, ResponseHandler, strip_interrupt_marker
 from .runtime_context import AgentDependencies, AgentLazyComponents
 from .save_coordinator import SaveCoordinator
 from .think_engine import ThinkEngine
-from .types import ProviderCapability, StreamChunk, UnifiedMessage
+from .types import HalfCompletionMessage, ProviderCapability, StreamChunk, UnifiedMessage
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
@@ -68,6 +68,9 @@ class Agent:
         # 统一由 World 主循环持有定时器（False），避免多个角色各自抢话烧 token。
         # （阶段 7 的 DialogueLoop 抽象会补完 World 侧的计划与触发。）
         self._manage_initiative_timer = manage_initiative_timer
+        # 响应中断时未说完的半截回复（中间状态）：下轮生成前注入提示词让角色
+        # 接着说完，正常完成后清除；错误标记不进模型上下文。
+        self._half_completion: HalfCompletionMessage | None = None
         self._init_config(config, config_file, character_file)
         self._init_infrastructure()
         self._init_core_components()
@@ -123,7 +126,6 @@ class Agent:
         self._memory_base_path = context.memory_base_path
         self._semantic_memory_root = context.semantic_memory_root
         self._model_client = context.model_client
-        self.episodic_memory = context.episodic_memory
         self._semantic_memory: SemanticMemoryManager | None = None
         # 对外暴露 Actor 身份，供 World 编排与前端识别；单角色模式为默认值。
         self.actor_id = context.actor_id
@@ -236,7 +238,6 @@ class Agent:
             self._message_builder = MessageBuilder(
                 system_prompt=self.system_prompt,
                 working_memory=self.working_memory,
-                episodic_memory=self.episodic_memory,
                 semantic_memory=self.semantic_memory,
                 tool_registry=self.tool_registry,
                 tool_enabled=self.config.tool.enabled,
@@ -637,6 +638,8 @@ class Agent:
         self._semantic_memory = None
         self._message_builder = None
         self._response_handler = None
+        # 半截回复是会话级中间状态，不随会话切换带过去
+        self._half_completion = None
         self._lazy_components.message_builder = None
         self._lazy_components.response_handler = None
         if self._action_planner is not None:
@@ -678,7 +681,6 @@ class Agent:
     async def start(self) -> None:
         await self.event_bus.start()
         await self._ensure_background_manager()
-        await self.episodic_memory.initialize()
 
         # 启动思考引擎
         if self._think_engine is None and self.semantic_memory is not None:
@@ -697,8 +699,7 @@ class Agent:
                 ),
                 emotion_baseline=(
                     Emotion(**self.config.character.emotion_baseline)
-                    if self.config.character is not None
-                    and self.config.character.emotion_baseline
+                    if self.config.character is not None and self.config.character.emotion_baseline
                     else None
                 ),
             )
@@ -819,6 +820,14 @@ class Agent:
         # 之后不再每轮注入，模型遗忘时可主动调用 get_current_scene。
         system_contexts = await self._prepend_scene_context(system_contexts)
 
+        # 上一轮响应中断留下的半截回复：注入提示词让角色本轮接着说完。
+        # 错误标记不注入（用户已看到，模型只需要干净的半截正文）。
+        if self._half_completion is not None:
+            system_contexts = [
+                *system_contexts,
+                build_half_completion_context(self._half_completion.content),
+            ]
+
         # World 回合的每轮上下文（舞台/在场角色/共享剧本/演员身份）必须在
         # 工具调用后的 continuation 中保留，否则 Actor 调完工具就丢失舞台；
         # 单角色路径维持原行为，不重复注入。
@@ -868,7 +877,16 @@ class Agent:
             # 过期请求（已超时/取消）的孤儿生成必须零副作用：
             # 不写私有记忆（MESSAGE_SENT）、不调度主动定时器、不解决新请求。
             is_current = self._action_executor.is_current_request(request_id)  # type: ignore
-            if full_response and "响应中断" not in full_response and is_current:
+            if full_response and is_current and STREAM_INTERRUPT_MARKER in full_response:
+                # 响应中断：半截正文计入 HalfCompletionMessage 中间状态，
+                # 下轮注入提示词让角色接着说完；不发 MESSAGE_SENT（半截不入
+                # 工作记忆），错误标记只投递给用户、不进模型上下文。
+                if partial := strip_interrupt_marker(full_response):
+                    self._half_completion = HalfCompletionMessage(content=partial)
+                    logger.info(f"响应中断，半截回复已计入中间状态（{len(partial)} 字）")
+            elif full_response and is_current:
+                # 正常说完：清除可能存在的半截状态，本轮按普通消息处理。
+                self._half_completion = None
                 data = {"content": full_response}
                 # reasoning_content 对 DeepSeek thinking mode 是多轮协议状态，
                 # 不是调试展示内容；是否显示仍由 UI/日志层的 debug_silent_output 控制。

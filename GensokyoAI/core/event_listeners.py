@@ -31,9 +31,6 @@ class CoreListeners:
         bus.subscribe(SystemEvent.MESSAGE_RECEIVED, self.on_message_received)
         bus.subscribe(SystemEvent.MESSAGE_SENT, self.on_message_sent)
 
-        # 记忆事件
-        bus.subscribe(SystemEvent.MEMORY_EPISODIC_COMPRESSED, self.on_episodic_compressed)
-
         # 工具事件
         bus.subscribe(SystemEvent.TOOL_CALL_STARTED, self.on_tool_call_started)
         bus.subscribe(SystemEvent.TOOL_CALL_COMPLETED, self.on_tool_call_completed)
@@ -60,21 +57,18 @@ class CoreListeners:
 
     # ==================== 思考事件 ====================
     async def on_thought_record(self, event: Event) -> None:
-        """当角色静默思考时，把思考内容存入语义/情景记忆"""
+        """当角色静默思考时，把思考内容存入语义记忆"""
         thought = event.data.get("thought", "")
         if not thought:
             return
 
-        # 1. 存入语义记忆 (TopicAwareStore)
+        # 存入语义记忆 (TopicAwareStore)
         # 让角色的长期记忆里，有这段“内心戏”
         await self.agent.semantic_memory.add_async(
             content=f"【内心思考】{thought}",
             importance=0.6,  # 思考的重要性中等偏高
             emotional_valence=event.data.get("emotional_valence", 0.0),
         )
-
-        # 2. (可选) 也可以记录到情景记忆，作为一段“心理事件”
-        # await self.agent.episodic_memory.add_message(...)
 
         logger.debug(f"🧠 已记录静默思考到语义记忆: {thought[:30]}...")
 
@@ -117,13 +111,6 @@ class CoreListeners:
             logger.info(f"🤖 记录主动发送的助手消息: {response[:60]}...")
         else:
             logger.debug(f"记录并发送响应: {response[:60]}...")
-
-    # ==================== 记忆事件 ====================
-
-    async def on_episodic_compressed(self, event: Event) -> None:
-        episode = event.data.get("episode")
-        if episode:
-            logger.info(f"情景记忆已压缩: {episode.summary[:50]}...")
 
     # ==================== 工具事件 ====================
 
@@ -374,7 +361,6 @@ class PersistenceListeners:
     def __init__(self, agent: Agent, event_bus: EventBus):
         self.agent = agent
         self.event_bus = event_bus
-        self._session = self.agent.session_manager.get_current_session()
         self._register()
 
     def _register(self) -> None:
@@ -426,7 +412,9 @@ class PersistenceListeners:
                 force=False,  # 让 save_coordinator 自己判断
             )
 
-            # 发布保存完成事件
+            # 发布保存完成事件；session 现查现报（监听器注册早于会话创建，
+            # 缓存会在会话切换后失效，曾导致 session_id 恒为 None）
+            session = self.agent.session_manager.get_current_session()
             self.event_bus.publish(
                 Event(
                     type=SystemEvent.PERSISTENCE_SAVE_COMPLETED
@@ -436,7 +424,7 @@ class PersistenceListeners:
                     data={
                         "trigger_event_id": event.id,
                         "success": success,
-                        "session_id": self._session.session_id if self._session else None,
+                        "session_id": session.session_id if session else None,
                     },
                 )
             )

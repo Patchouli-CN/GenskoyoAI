@@ -308,15 +308,22 @@ class WorldConsoleBackend(BaseBackend):
         if not clean_text:
             return ""
 
-        return await self._send_world_turn(clean_text)
+        system_contexts = system_contexts or self._build_system_contexts()
+        return await self._send_world_turn(clean_text, system_contexts)
 
-    async def _send_world_turn(self, message: str) -> str:
+    def _build_system_contexts(self) -> list[str]:
+        """构建系统上下文列表（/know /meta /attention 累积内容，最近 5 条）"""
+        if not self._prompt_context:
+            return []
+        return self._prompt_context[-5:]
+
+    async def _send_world_turn(self, message: str, system_contexts: list[str] | None = None) -> str:
         """驱动一段用户回合；显示完全交给 World 总线订阅（单一通道）。
 
         流式与非流式共用同一驱动：差异只在 chunk 回调是否逐字打印。
         """
         try:
-            turns = await self.world.send_message(message)
+            turns = await self.world.send_message(message, system_contexts=system_contexts)
         except asyncio.CancelledError:
             logger.debug("World 回合被取消")
             return ""
