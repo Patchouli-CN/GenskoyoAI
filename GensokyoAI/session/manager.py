@@ -112,7 +112,7 @@ class SessionManager:
             if changed:
                 wm.replace_messages(messages)
             self._persistence.save_messages(sid, messages)
-            logger.debug(f"保存工作记忆: {sid}, {len(messages)} 条消息")
+            logger.trace(f"保存工作记忆: {sid}, {len(messages)} 条消息")
 
             # 同时更新会话的 total_turns
             session = self._sessions.get(sid)
@@ -148,7 +148,7 @@ class SessionManager:
             session.touch()
         self._persistence.replace_messages(session_id, normalized_messages)
         self._persistence.save_session(session)
-        logger.debug(f"替换会话消息: {session_id}, {len(normalized_messages)} 条")
+        logger.trace(f"替换会话消息: {session_id}, {len(normalized_messages)} 条")
         return True
 
     async def save_working_memory_async(self, session_id: str | None = None) -> bool:
@@ -167,7 +167,7 @@ class SessionManager:
         if changed:
             wm.replace_messages(messages)
         await self._persistence.async_save_message(sid, messages)
-        logger.debug(f"异步保存工作记忆: {sid}, {len(messages)} 条消息")
+        logger.trace(f"异步保存工作记忆: {sid}, {len(messages)} 条消息")
 
         session = self._sessions.get(sid)
         if session:
@@ -198,7 +198,7 @@ class SessionManager:
             session.touch()
         await self._persistence.replace_messages_async(session_id, normalized_messages)
         await self._persistence.save_session_async(session)
-        logger.debug(f"异步替换会话消息: {session_id}, {len(normalized_messages)} 条")
+        logger.trace(f"异步替换会话消息: {session_id}, {len(normalized_messages)} 条")
         return True
 
     def delete_session(self, session_id: str) -> bool:
@@ -218,14 +218,14 @@ class SessionManager:
         if self._current_session_id:
             # 保存工作记忆（会自动更新 total_turns 和保存会话）
             self.save_working_memory()
-        logger.debug(f"会话已保存: {self._current_session_id}")
+        logger.trace(f"会话已保存: {self._current_session_id}")
 
     async def save_current_async(self) -> bool:
         """`save_current` 的异步变体：async RPC 路径不阻塞事件循环。"""
         if not self._current_session_id:
             return False
         saved = await self.save_working_memory_async()
-        logger.debug(f"会话已异步保存: {self._current_session_id}")
+        logger.trace(f"会话已异步保存: {self._current_session_id}")
         return saved
 
     def assert_revision(self, session_id: str, expected_revision: int | None) -> SessionContext:

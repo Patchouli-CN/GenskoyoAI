@@ -370,7 +370,7 @@ class InitiativeTimerManager:
         try:
             if self.trigger_handler is not None:
                 result = await self.trigger_handler(trigger_args)
-            logger.debug(f"[InitiativeTimer] trigger_handler 返回: {result}")
+            logger.trace(f"[InitiativeTimer] trigger_handler 返回: {result}")
         finally:
             # 回调完成即结束本次触发的有效期；若期间已被取代则不覆盖新状态
             if self._active_trigger_id == trigger_args.get("timer_id"):

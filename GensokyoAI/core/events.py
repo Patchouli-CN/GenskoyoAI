@@ -304,14 +304,14 @@ class EventBus:
 
     async def _event_worker(self) -> None:
         """事件处理工作器"""
-        logger.debug("🔄 [EventBus] 工作器线程已启动")
+        logger.trace("🔄 [EventBus] 工作器线程已启动")
 
         while self._running:
             try:
                 event = await self._event_queue.get()
 
                 if self.enable_trace:
-                    logger.debug(
+                    logger.trace(
                         f"📬 [EventBus] 从队列取出事件: {event.type.value} (队列剩余: {self._event_queue.qsize()})"
                     )
 
@@ -319,7 +319,7 @@ class EventBus:
                 self._event_queue.task_done()
 
             except asyncio.CancelledError:
-                logger.debug("🛑 [EventBus] 工作器收到取消信号")
+                logger.trace("🛑 [EventBus] 工作器收到取消信号")
                 break
             except Exception as e:
                 logger.error(f"❌ [EventBus] 事件处理异常: {e}", exc_info=True)
@@ -327,7 +327,7 @@ class EventBus:
                 with contextlib.suppress(ValueError):
                     self._event_queue.task_done()
 
-        logger.debug(f"🛑 [EventBus] 工作器线程已停止 (running={self._running})")
+        logger.trace(f"🛑 [EventBus] 工作器线程已停止 (running={self._running})")
 
     # ==================== 订阅管理 ====================
 
@@ -350,7 +350,7 @@ class EventBus:
         if self.enable_trace:
             filter_info = " (带过滤)" if filter_func else ""
             once_info = " (一次性)" if once else ""
-            logger.debug(
+            logger.trace(
                 f"📌 [EventBus] 订阅: '{event_type.value}' -> {sub.handler_name}"
                 f"{filter_info}{once_info} [优先级: {priority.name}]"
             )
@@ -363,7 +363,7 @@ class EventBus:
                 if sub.id == subscription_id:
                     subs.remove(sub)
                     if self.enable_trace:
-                        logger.debug(
+                        logger.trace(
                             f"🔕 [EventBus] 取消订阅: {subscription_id} ({sub.handler_name})"
                         )
                     return True
@@ -416,18 +416,18 @@ class EventBus:
         if future and not future.done():
             future.set_result(result)
             if self.enable_trace:
-                logger.debug(f"✅ [EventBus] 请求响应: {request_event.type.value}")
+                logger.trace(f"✅ [EventBus] 请求响应: {request_event.type.value}")
 
     async def _process_event(self, event: Event) -> list[Any]:
         if event.type not in self._subscribers:
             if self.enable_trace:
-                logger.debug(f"👻 [EventBus] 事件 '{event.type.value}' 无订阅者")
+                logger.trace(f"👻 [EventBus] 事件 '{event.type.value}' 无订阅者")
             return []
 
         subscribers = self._subscribers[event.type]
 
         if self.enable_trace:
-            logger.debug(
+            logger.trace(
                 f"🔄 [EventBus] 处理事件 '{event.type.value}' -> {len(subscribers)} 个订阅者"
             )
 

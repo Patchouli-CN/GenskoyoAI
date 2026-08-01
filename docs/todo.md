@@ -235,6 +235,30 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.42 日志分级优化：TRACE/DEBUG 分层（2026-08-01，用户点单）
+
+- 分级标准（已定稿）：**TRACE** = 逐条/逐次的内容细节与 IO（消息内容预览、
+  逐次会话/记忆读写、逐工具执行、逐事件分发、逐次思考内容、复读计数）；
+  **DEBUG** = 低频流程分支与决策点（初始化、生命周期、配置决策、决策摘要、
+  降级方案）；INFO = 关键生命周期；WARNING = 可恢复异常/降级；ERROR = 失败。
+- 重分级 47 处 debug→trace（session/persistence/manager 全部逐次 IO、
+  event_listeners 消息/工具/持久化细节、EventBus enable_trace 门内分发细节、
+  executor 工具执行与结果（1 处 info→trace）、think_engine 说话前思考/对话欲
+  数值、action_executor 过期请求细节、topic_store 话题明细、background 任务
+  提交、model_client embeddings 细节、nb2 复读计数）；
+  2 处升级：persistence_worker 超时 debug→warning、持久化失败 debug→error；
+  2 处降级告警化：topic_store 打分失败、semantic embedding 检索降级 → warning。
+- **LogLevel 枚举新增 TRACE**（config log_level: TRACE 可用，校验器自动生效）；
+  setup_logging docstring 与模板注释同步分级说明。
+- 连带修复：§8.41 的 `timing.usage = response.usage` 对 duck 类型 fake 硬崩
+  （test_model_client_retry 4 例），改 getattr 防御。
+- 结果：trace 10→57、debug 135→85；log_level: DEBUG 输出显著变安静，
+  全细节用 log_level: TRACE。基线：793 passed, 3 subtests passed，
+  ruff / pyright 全绿。
+
+建议 commit message（待用户授权后提交）：
+`refactor(logging): 日志分级分层——逐条 IO/内容细节归 TRACE、流程决策留 DEBUG，LogLevel 新增 TRACE，持久化超时/失败与检索降级升级告警`
+
 ## 8.41 claude usage 链路补全（2026-08-01，用户提问「调用库基本都返回 token_used 吧」牵出）
 
 - 答案：是（OpenAI 系 usage 自带/流式 include_usage，Anthropic 非流式 usage 字段、

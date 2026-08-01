@@ -10,6 +10,7 @@ from ..utils.logger import setup_logging
 
 
 class LogLevel(Enum):
+    TRACE = "TRACE"
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"

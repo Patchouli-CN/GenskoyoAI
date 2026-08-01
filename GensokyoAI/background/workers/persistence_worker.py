@@ -44,7 +44,7 @@ class PersistenceWorker(BaseWorker):
                         raise ValueError(f"Unknown operation: {data.operation}")
             except TimeoutError:
                 duration_ms = (time.time() - start_time) * 1000
-                logger.debug(f"⏱️ 持久化超时 ({task.timeout}s)")
+                logger.warning(f"⏱️ 持久化超时 ({task.timeout}s)")
                 return TaskResult(
                     task_id=task.id,
                     success=False,
@@ -63,7 +63,7 @@ class PersistenceWorker(BaseWorker):
 
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.debug(f"❌ 持久化失败: {e}")
+            logger.error(f"❌ 持久化失败: {e}")
             return TaskResult(
                 task_id=task.id,
                 success=False,

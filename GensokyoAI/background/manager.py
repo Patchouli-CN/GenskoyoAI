@@ -111,7 +111,7 @@ class BackgroundManager:
         try:
             self._task_queue.put_nowait(task)
             self._stats["submitted"] += 1
-            logger.debug(f"提交任务: {task.name} (优先级: {task.priority.name})")
+            logger.trace(f"提交任务: {task.name} (优先级: {task.priority.name})")
             return True
         except asyncio.QueueFull:
             self._stats["dropped"] += 1

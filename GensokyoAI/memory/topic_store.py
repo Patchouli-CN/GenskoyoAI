@@ -329,7 +329,7 @@ class TopicAwareStore:
         topic.access_count = getattr(topic, "access_count", 0) + 1
         topic.importance = min(topic.importance + boost, 10.0)
 
-        logger.debug(f"话题 '{topic.name}' 被刷新，重要性: {topic.importance:.2f}")
+        logger.trace(f"话题 '{topic.name}' 被刷新，重要性: {topic.importance:.2f}")
 
     # ==================== 写入侧淘汰（max_topics 上限） ====================
 
@@ -442,7 +442,7 @@ class TopicAwareStore:
                 }
 
         except Exception as e:
-            logger.debug(f"模型打分失败，使用降级方案: {e}")
+            logger.warning(f"模型打分失败，使用降级方案: {e}")
 
         return self._fallback_score(content, candidates)
 
@@ -502,7 +502,7 @@ class TopicAwareStore:
                 self._update_topic(topic, memory, importance, 10.0, emotional_valence)
                 self._refresh_topic(topic, boost=0.05)
                 await self._save_async()
-                logger.debug(f"更新现有话题(由AI指定): {topic.name}")
+                logger.trace(f"更新现有话题(由AI指定): {topic.name}")
                 return topic
 
             topic = Topic(
@@ -546,7 +546,7 @@ class TopicAwareStore:
                     self._refresh_topic(topic, boost=0.03)  # 刷新
                     self._update_edges(topic.id, scores)
                     await self._save_async()
-                    logger.debug(f"更新话题: {topic.name} (相关性: {best_score:.1f})")
+                    logger.trace(f"更新话题: {topic.name} (相关性: {best_score:.1f})")
                     return topic
 
         # 最终降级：生成默认话题名（探测未占用名，避免删过话题后撞名覆盖索引）

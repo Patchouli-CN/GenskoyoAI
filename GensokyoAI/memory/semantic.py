@@ -60,7 +60,7 @@ class SemanticMemoryManager:
         )
 
         if topic:
-            logger.debug(f"添加语义记忆: {content[:30]}... -> 话题「{topic.name}」")
+            logger.trace(f"添加语义记忆: {content[:30]}... -> 话题「{topic.name}」")
             return topic
 
         return None
@@ -159,7 +159,7 @@ class SemanticMemoryManager:
                         "embedding_error": str(error),
                     }
                 )
-                logger.debug(f"语义记忆 embedding 检索降级为关键词检索: {error}")
+                logger.warning(f"语义记忆 embedding 检索降级为关键词检索: {error}")
         elif include_embedding:
             diagnostics["embedding_fallback"] = True
             diagnostics["embedding_error"] = "embedding provider is not configured or not supported"

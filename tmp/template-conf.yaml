@@ -3,7 +3,8 @@
 # 当前配置 schema 版本。旧配置可不写该字段；如果写了高于当前支持版本的数字，启动前会报错。
 config_schema_version: 1
 
-# 日志配置
+# 日志配置（级别：TRACE / DEBUG / INFO / WARNING / ERROR；
+# TRACE = 逐条消息/IO/事件等全部细节，DEBUG = 流程分支与决策摘要，日常建议 INFO）
 log_level: DEBUG
 log_console: false
 log_file: "logs/GENSOKYOAI.log"

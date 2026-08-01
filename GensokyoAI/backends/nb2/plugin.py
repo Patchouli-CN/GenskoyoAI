@@ -468,7 +468,7 @@ async def _chat(
                 f"角色将当面表态「不理他」并进入 {_repeat_guard.mute_seconds / 60:.0f} 分钟冷却"
             )
         elif verdict.streak:
-            logger.debug(f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次")
+            logger.trace(f"[nb2] {agent_id} 的 {member_label} 复读连击 {verdict.streak} 次")
     if sender_name:
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"

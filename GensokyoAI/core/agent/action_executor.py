@@ -175,7 +175,7 @@ class ActionExecutor:
     async def feed_chunk(self, chunk: StreamChunk, request_id: str | None = None) -> None:
         """喂入流式块；过期请求的 chunk 直接丢弃。"""
         if not self.is_current_request(request_id):
-            logger.debug(f"⚡ [ActionExecutor] 丢弃过期请求的流式块: {request_id}")
+            logger.trace(f"⚡ [ActionExecutor] 丢弃过期请求的流式块: {request_id}")
             return
         if self._stream_queue:
             await self._stream_queue.put(chunk)
@@ -200,7 +200,7 @@ class ActionExecutor:
         最后几个 chunk，清空会丢失流尾；队列随下一次 prepare_response 整体替换。
         过期请求的 complete 直接忽略，不得解决新请求的 future。"""
         if not self.is_current_request(request_id):
-            logger.debug(f"⚡ [ActionExecutor] 忽略过期请求的 complete: {request_id}")
+            logger.trace(f"⚡ [ActionExecutor] 忽略过期请求的 complete: {request_id}")
             return
         if self._response_future and not self._response_future.done():
             self._response_future.set_result(full_response)

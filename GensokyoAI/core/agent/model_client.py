@@ -606,7 +606,7 @@ class ModelClient:
             content_text = content if isinstance(content, str) else ""
             # 非流式 usage（Provider 已映射到 UnifiedResponse.usage）是成本采样的
             # 非流式数据源；流式路径由 finish chunk 经 chat_stream 另行填充
-            timing.usage = response.usage
+            timing.usage = getattr(response, "usage", None)
             reasoning = (
                 getattr(response.message, "reasoning_content", None)
                 or getattr(response, "thinking", None)

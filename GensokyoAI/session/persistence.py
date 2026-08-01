@@ -291,7 +291,7 @@ class SessionPersistence:
 
         data = make_session_file_payload(session.to_dict(), existing_messages)
         self._atomic_write_json(path, data)
-        logger.debug(f"会话已保存: {path}")
+        logger.trace(f"会话已保存: {path}")
 
     async def save_session_async(self, session: SessionContext) -> None:
         """保存会话（异步 - 使用分片锁提高并发）"""
@@ -306,7 +306,7 @@ class SessionPersistence:
 
             data = make_session_file_payload(session.to_dict(), existing_messages)
             await self._atomic_write_json_async(path, data)
-        logger.debug(f"会话已异步保存: {path}")
+        logger.trace(f"会话已异步保存: {path}")
 
     def replace_messages(self, session_id: str, messages: list[dict]) -> None:
         """全量替换消息（同步），复用原子写入与备份逻辑。"""
@@ -328,7 +328,7 @@ class SessionPersistence:
                 if "session" in data:
                     data["session"]["total_turns"] = len(messages) // 2
                 self._atomic_write_json(session_file, data)
-                logger.debug(f"消息已保存: {session_id}, {len(messages)} 条")
+                logger.trace(f"消息已保存: {session_id}, {len(messages)} 条")
                 return
 
     async def async_save_message(self, session_id: str, messages: list[dict]) -> None:
@@ -345,7 +345,7 @@ class SessionPersistence:
                     if "session" in data:
                         data["session"]["total_turns"] = len(messages) // 2
                     await self._atomic_write_json_async(session_file, data)
-                    logger.debug(f"消息已异步保存: {session_id}, {len(messages)} 条")
+                    logger.trace(f"消息已异步保存: {session_id}, {len(messages)} 条")
                     return
 
             # 降级：遍历查找（同时更新索引）
@@ -359,7 +359,7 @@ class SessionPersistence:
                         if "session" in data:
                             data["session"]["total_turns"] = len(messages) // 2
                         await self._atomic_write_json_async(session_file, data)
-                        logger.debug(f"消息已异步保存: {session_id}, {len(messages)} 条")
+                        logger.trace(f"消息已异步保存: {session_id}, {len(messages)} 条")
                         return
 
             logger.warning(f"未找到会话文件: {session_id}")
@@ -374,7 +374,7 @@ class SessionPersistence:
             if session_file.exists():
                 data = self._read_session_file(session_file)
                 messages = data.get("messages", [])
-                logger.debug(f"加载消息: {session_id}, {len(messages)} 条")
+                logger.trace(f"加载消息: {session_id}, {len(messages)} 条")
                 return messages
 
         # 降级：遍历查找
@@ -385,7 +385,7 @@ class SessionPersistence:
                     self._add_to_index(char_dir.name, session_id)
                     data = self._read_session_file(session_file)
                     messages = data.get("messages", [])
-                    logger.debug(f"加载消息: {session_id}, {len(messages)} 条")
+                    logger.trace(f"加载消息: {session_id}, {len(messages)} 条")
                     return messages
         return []
 
@@ -399,7 +399,7 @@ class SessionPersistence:
             if session_file.exists():
                 data = await self._read_session_file_async(session_file)
                 messages = data.get("messages", [])
-                logger.debug(f"异步加载消息: {session_id}, {len(messages)} 条")
+                logger.trace(f"异步加载消息: {session_id}, {len(messages)} 条")
                 return messages
 
         # 降级：遍历查找
@@ -410,7 +410,7 @@ class SessionPersistence:
                     self._add_to_index(char_dir.name, session_id)
                     data = await self._read_session_file_async(session_file)
                     messages = data.get("messages", [])
-                    logger.debug(f"异步加载消息: {session_id}, {len(messages)} 条")
+                    logger.trace(f"异步加载消息: {session_id}, {len(messages)} 条")
                     return messages
         return []
 
@@ -446,7 +446,7 @@ class SessionPersistence:
             if session_file.exists():
                 session_file.unlink()
                 self._remove_from_index(session_id)
-                logger.debug(f"会话已删除: {session_id}")
+                logger.trace(f"会话已删除: {session_id}")
                 return True
 
         # 降级：遍历查找
@@ -456,7 +456,7 @@ class SessionPersistence:
                 if session_file.exists():
                     session_file.unlink()
                     self._remove_from_index(session_id)
-                    logger.debug(f"会话已删除: {session_id}")
+                    logger.trace(f"会话已删除: {session_id}")
                     return True
         return False
 
@@ -471,7 +471,7 @@ class SessionPersistence:
                 if session_file.exists():
                     await asyncio.to_thread(session_file.unlink)
                     self._remove_from_index(session_id)
-                    logger.debug(f"会话已异步删除: {session_id}")
+                    logger.trace(f"会话已异步删除: {session_id}")
                     return True
 
             # 降级：遍历查找
@@ -481,7 +481,7 @@ class SessionPersistence:
                     if session_file.exists():
                         await asyncio.to_thread(session_file.unlink)
                         self._remove_from_index(session_id)
-                        logger.debug(f"会话已异步删除: {session_id}")
+                        logger.trace(f"会话已异步删除: {session_id}")
                         return True
         return False
 

@@ -81,7 +81,7 @@ class CoreListeners:
             preview = f"[多模态消息，{len(user_input)} 个 parts]"
         else:
             preview = str(user_input)[:50]
-        logger.debug(f"收到消息: {preview}...")
+        logger.trace(f"收到消息: {preview}...")
 
         extra: dict[str, Any] = {}
         if event.data.get("prompt_injection_suspected"):
@@ -92,7 +92,7 @@ class CoreListeners:
         # 避免同一段舞台上下文被复制进角色私历造成串台；
         # Actor 自己生成的回复仍由 on_message_sent 正常写入。
         if event.data.get("record_in_working_memory") is False:
-            logger.debug("World 回合触发文本跳过写入私有工作记忆")
+            logger.trace("World 回合触发文本跳过写入私有工作记忆")
             return
 
         self.agent.working_memory.add_message("user", user_input, **extra)
@@ -110,24 +110,24 @@ class CoreListeners:
         if event.source == "initiative_timer" or event.data.get("initiative"):
             logger.info(f"🤖 记录主动发送的助手消息: {response[:60]}...")
         else:
-            logger.debug(f"记录并发送响应: {response[:60]}...")
+            logger.trace(f"记录并发送响应: {response[:60]}...")
 
     # ==================== 工具事件 ====================
 
     async def on_tool_call_started(self, event: Event) -> None:
         tool_name = event.data.get("name")
-        logger.debug(f"工具调用开始: {tool_name}")
+        logger.trace(f"工具调用开始: {tool_name}")
 
     async def on_tool_call_completed(self, event: Event) -> None:
         tool_name = event.data.get("name")
         result = event.data.get("result", "")
-        logger.debug(f"工具调用完成: {tool_name} -> {result[:50] if result else ''}...")
+        logger.trace(f"工具调用完成: {tool_name} -> {result[:50] if result else ''}...")
 
     # ==================== 持久化事件 ====================
 
     async def on_persistence_saved(self, event: Event) -> None:
         session_id = event.data.get("session_id", "")
-        logger.debug(f"会话已持久化: {session_id[:8] if session_id else ''}...")
+        logger.trace(f"会话已持久化: {session_id[:8] if session_id else ''}...")
 
     # ==================== 错误事件 ====================
 

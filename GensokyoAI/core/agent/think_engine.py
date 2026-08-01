@@ -511,7 +511,7 @@ class ThinkEngine:
             )
             content = response.message.content
             thought = content.strip() if isinstance(content, str) else ""
-            logger.debug(f"[ThinkEngine] 说话前思考结果: {thought[:100]}...")
+            logger.trace(f"[ThinkEngine] 说话前思考结果: {thought[:100]}...")
             return thought
         except Exception as error:
             logger.error(f"说话前思考失败: {error}")
@@ -590,7 +590,7 @@ class ThinkEngine:
                 decision = self._parse_speaking_drive(text, threshold=threshold)
                 if decision is not None:
                     emotion_line = self.emotion_state.context_line()
-                    logger.debug(
+                    logger.trace(
                         f"[ThinkEngine] 对话欲评估: total={decision.total_drive:.2f} "
                         f"(阈值 {threshold:.2f}"
                         + (f"={base_threshold:.2f}{adjust:+.2f}" if adjust else "")

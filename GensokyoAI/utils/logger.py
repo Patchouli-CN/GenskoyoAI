@@ -35,6 +35,7 @@ def _third_party_noise_filter(record) -> bool:
         return record["level"].no >= logger.level("WARNING").no
     return True
 
+
 # 移除默认配置
 logger.remove()
 
@@ -105,7 +106,7 @@ def setup_logging(
     """配置日志系统
 
     Args:
-        log_level: 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_level: 日志级别 (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_console: 是否输出到控制台
         log_file: 日志文件路径
         log_format: 文件日志格式
