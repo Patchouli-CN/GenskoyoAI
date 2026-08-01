@@ -109,6 +109,13 @@ class MemoryConfig(Struct):
     # 提炼「珍贵记忆」写入语义记忆（确定性触发，替代已删除的 AI 主动记忆工具）
     distill_enabled: bool = True
     distill_turns: int = 10
+    # 话题热度淘汰（§8.32，参考 Lumi_Nox decay）：读取时按半衰期现算话题热度，
+    # 低于阈值的话题对主动机制（静默思考游走）隐藏而非删除，被重新谈起时自然复活；
+    # 重要性达到 topic_pin_importance 的话题免疫衰减
+    topic_decay_enabled: bool = True
+    topic_half_life_hours: float = 72.0
+    topic_decay_threshold: float = 0.1
+    topic_pin_importance: float = 8.0
 
     topic_generation: TopicGenerationConfig = field(default_factory=TopicGenerationConfig)
 

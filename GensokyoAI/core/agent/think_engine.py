@@ -19,6 +19,7 @@ from typing import Any
 
 from msgspec import Struct, field
 
+from ...memory.decay import filter_active_topics
 from ...memory.semantic import SemanticMemoryManager
 from ...memory.types import Topic
 from ...utils.helpers import utc_now
@@ -232,6 +233,26 @@ class ThinkEngine:
         if not topics:
             logger.debug(f"🧠 [ThinkEngine] {self.character_name} 没有话题可思考")
             return
+
+        # 话题热度淘汰（memory.topic_decay_*）：冷话题对主动思考隐藏，
+        # 不被想起也不被删除，后续对话刷新时间戳后自然复活
+        memory_config = getattr(self.semantic_memory, "config", None)
+        if getattr(memory_config, "topic_decay_enabled", False):
+            active_topics = filter_active_topics(
+                topics,
+                half_life_hours=getattr(memory_config, "topic_half_life_hours", 72.0),
+                prune_threshold=getattr(memory_config, "topic_decay_threshold", 0.1),
+                pin_importance=getattr(memory_config, "topic_pin_importance", 8.0),
+            )
+            hidden_count = len(topics) - len(active_topics)
+            if hidden_count:
+                logger.debug(
+                    f"🧠 [ThinkEngine] {self.character_name} 有 {hidden_count} 个冷话题已被遗忘（未删除）"
+                )
+            topics = active_topics
+            if not topics:
+                logger.debug(f"🧠 [ThinkEngine] {self.character_name} 话题已全部冷却，没有可思考的")
+                return
 
         # 优先选择高情感值的话题，但刚刚思考过的话题会进入冷却
         threshold = self.config.emotional_trigger_threshold

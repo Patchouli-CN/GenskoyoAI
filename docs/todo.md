@@ -235,6 +235,23 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.32 话题热度淘汰器（2026-08-01，用户点单，参考 Lumi_Nox memory/decay.py）
+
+- 背景：原有「遗忘曲线」`_calculate_recall_weight` 只在检索打分里占 0.1 权重加成，
+  不会淘汰任何东西；`max_topics=50` 是死参数从未执行；ThinkEngine 思考游走不看热度，
+  老话题永远会被翻牌子。本节补上真正的读取时淘汰。
+- `GensokyoAI/memory/decay.py`（新）：`topic_heat`（以 max(last_updated, last_accessed)
+  按半衰期指数衰减，0.5^(age/half_life)）、`is_pinned`（importance ≥ pin 阈值免疫）、
+  `filter_active_topics`（隐藏而非删除，保序）。读取时现算、无后台任务；
+  冷话题被重新谈起时检索 `_refresh_topic` 刷新时间戳自然复活。
+- 接线：ThinkEngine `_long_term_think` 游走池先过滤冷话题（全冷则不思考）；
+  检索路径不做硬过滤（用户明确问起旧话题仍能回忆，只靠既有 recall_weight 软下沉）。
+- 配置（memory.*，均进 merge/validator/模板）：`topic_decay_enabled`（默认 true）、
+  `topic_half_life_hours`（默认 72，约 10 天无人提起即隐藏）、
+  `topic_decay_threshold`（默认 0.1）、`topic_pin_importance`（默认 8.0）。
+- 测试：tests/test_memory_decay.py 12 例（热度曲线/复活/pin/过滤保序/ThinkEngine
+  冷话题不思考、热话题照常、关闭开关、pin 存活）。基线：增量 56 passed，ruff/pyright 全绿。
+
 ## 8.31 /status 负载水位与闸门用量（2026-07-31，用户点单）
 
 - `RuntimeHost.get_system_status` 扩展：`gates`（跨 root 与全部租户服务聚合同名

@@ -258,6 +258,25 @@ class ConfigMerger:
                 "distill_turns",
                 override.distill_turns if override.distill_turns != 10 else base.distill_turns,
             ),
+            topic_decay_enabled=choose("topic_decay_enabled", override.topic_decay_enabled),
+            topic_half_life_hours=choose(
+                "topic_half_life_hours",
+                override.topic_half_life_hours
+                if override.topic_half_life_hours != 72.0
+                else base.topic_half_life_hours,
+            ),
+            topic_decay_threshold=choose(
+                "topic_decay_threshold",
+                override.topic_decay_threshold
+                if override.topic_decay_threshold != 0.1
+                else base.topic_decay_threshold,
+            ),
+            topic_pin_importance=choose(
+                "topic_pin_importance",
+                override.topic_pin_importance
+                if override.topic_pin_importance != 8.0
+                else base.topic_pin_importance,
+            ),
             topic_generation=self._merge_topic_generation(
                 base.topic_generation,
                 override.topic_generation,

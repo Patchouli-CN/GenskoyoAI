@@ -168,6 +168,10 @@ memory:
   auto_memory_model: null        # 自动记忆模型；null = 跟随主模型（当前无消费方，预留）
   distill_enabled: true          # 定期记忆蒸馏：每 distill_turns 轮对话后自动提炼珍贵记忆写入语义记忆
   distill_turns: 10
+  topic_decay_enabled: true      # 话题热度淘汰：冷话题对主动机制隐藏（不删除，被重新谈起时复活）
+  topic_half_life_hours: 72      # 话题热度半衰期（小时）：默认 3 天，约 10 天无人提起即隐藏
+  topic_decay_threshold: 0.1     # 热度低于此值即隐藏
+  topic_pin_importance: 8.0      # 重要性达到此值的话题免疫衰减（反复强化的核心记忆）
   
   # 话题生成配置
   topic_generation:

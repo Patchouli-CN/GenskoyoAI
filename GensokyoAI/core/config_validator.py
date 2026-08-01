@@ -645,6 +645,25 @@ class ConfigValidator:
         self._validate_numeric_range(
             "memory.distill_turns", data.get("distill_turns"), diagnostics, minimum=1
         )
+        self._validate_numeric_range(
+            "memory.topic_half_life_hours",
+            data.get("topic_half_life_hours"),
+            diagnostics,
+            minimum=0.1,
+        )
+        self._validate_numeric_range(
+            "memory.topic_decay_threshold",
+            data.get("topic_decay_threshold"),
+            diagnostics,
+            minimum=0,
+            maximum=1,
+        )
+        self._validate_numeric_range(
+            "memory.topic_pin_importance",
+            data.get("topic_pin_importance"),
+            diagnostics,
+            minimum=0,
+        )
         topic_generation = data.get("topic_generation")
         if topic_generation is not None:
             self._validate_object("memory.topic_generation", topic_generation, diagnostics)
