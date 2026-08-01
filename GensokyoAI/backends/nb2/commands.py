@@ -22,6 +22,7 @@ from ...commands import (
     PermissionLevel,
     command,
 )
+from ...core.agent.quota_health import QuotaHealth, QuotaLevel, compute_quota_health
 
 # nb2 指令本地注册表（CommandExecutor(registry=...) 消费）
 NB2_COMMANDS: dict[str, CommandDefinition] = {}
@@ -137,12 +138,18 @@ def _format_uptime(seconds: float) -> str:
 
 
 def _format_quota_health(data: dict[str, Any] | None, *, warn: float, crit: float) -> str:
-    """额度健康指数行：余额 ≥ warn 满分（🟢），≥ crit 偏低（🟡），否则告急（🔴）。"""
+    """额度健康行（静态阈值回落路径）：无消耗样本时使用 env 阈值。
+
+    动态路径（有消耗中位数）见 _format_quota_dynamic——阈值由框架
+    quota_health 按「余额还能撑多少次典型调用」统一计算。
+    """
     if data is None:
         return "额度：暂不可用（Provider 不支持或查询失败）"
     available = data.get("available_balance")
     if not isinstance(available, int | float):
         return f"额度信息：{data}"
+    if available <= 0:
+        return f"额度：🟣 耗尽（余额 ¥{available:.2f}）"
     index = min(100, max(0, round(available / warn * 100))) if warn > 0 else 100
     emoji = "🟢" if available >= warn else ("🟡" if available >= crit else "🔴")
     details = []
@@ -152,6 +159,24 @@ def _format_quota_health(data: dict[str, Any] | None, *, warn: float, crit: floa
             details.append(f"{label} ¥{value:.2f}")
     suffix = f"（{'，'.join(details)}）" if details else ""
     return f"额度：{emoji} 健康指数 {index}（余额 ¥{available:.2f}{suffix}）"
+
+
+_QUOTA_LEVEL_DISPLAY = {
+    QuotaLevel.HEALTHY: "🟢",
+    QuotaLevel.WARNING: "🟡",
+    QuotaLevel.CRITICAL: "🔴",
+    QuotaLevel.DEPLETED: "🟣",
+}
+
+
+def _format_quota_dynamic(health: QuotaHealth) -> str:
+    """额度健康行（动态阈值路径）：阈值 = 消耗中位成本 × 基准调用次数。"""
+    emoji = _QUOTA_LEVEL_DISPLAY[health.level]
+    return (
+        f"额度：{emoji} 健康指数 {health.index}"
+        f"（余额 ¥{health.balance:.2f}，中位单次 ¥{health.median_cost:.4f}，"
+        f"约可再聊 {health.remaining_calls:.0f} 次）"
+    )
 
 
 def _format_status(
@@ -169,7 +194,19 @@ def _format_status(
     lines = [f"系统状态：{level_text}（{level.get('reason', '—')}）"]
 
     if quota_fetched:
-        lines.append(_format_quota_health(quota, warn=quota_warn, crit=quota_crit))
+        # 动态阈值优先：有消耗中位数时按「余额还能撑多少次典型调用」算；
+        # 无样本（单价未配置/尚无调用）回落 env 静态阈值
+        balance = (quota or {}).get("available_balance")
+        median_cost = (status.get("cost") or {}).get("median_cost")
+        health = (
+            compute_quota_health(balance, median_cost)
+            if isinstance(balance, int | float) and median_cost
+            else None
+        )
+        if health is not None:
+            lines.append(_format_quota_dynamic(health))
+        else:
+            lines.append(_format_quota_health(quota, warn=quota_warn, crit=quota_crit))
 
     tenants = status["tenants"]
     # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解

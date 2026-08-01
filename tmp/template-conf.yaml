@@ -45,6 +45,12 @@ model:
   retry_backoff_factor: 2.0   # 指数退避倍率
   retry_status_codes: [500, 502, 503, 504] # 默认仅重试临时服务端错误；如需重试 429 可显式加入
 
+  # 单次调用成本估算单价（元/百万 token，按你的服务商价目填写）：
+  # 配置后 ModelClient 按 usage 采样单次成本，/status 的额度健康阈值会按
+  # 消耗中位数动态计算（余额还能撑多少次典型调用）；不配置则回落静态阈值
+  # price_input_per_million: 10.0
+  # price_output_per_million: 30.0
+
 # Embedding 模型配置（独立于主聊天模型，避免误用聊天模型调用 embeddings）
 # Claude 原生不支持 embeddings；当前用 claude-sonnet-4-6-thinking，先禁用语义记忆以免启动报错。
 # 如需恢复语义记忆，可改成 OpenAI 兼容的 embedding 模型（参照下方示例）。

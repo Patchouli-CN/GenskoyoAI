@@ -235,6 +235,30 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.40 额度健康动态阈值 + 紫色耗尽级（2026-08-01，用户定稿设计）
+
+- 设计（用户原话）：阈值动态计算、放框架中心模块统一算、ModelClient 提供
+  费用计算机制与消耗量、按中位数消耗算黄/红阈值、加紫色（消耗没了）。
+- **ModelClient 费用采样**：`model.price_input/output_per_million`（元/百万
+  token，schema/merge/validator 齐备，可空 = 不估算）；`_finish_timing`
+  统一收口处按 usage 估算单次成本（OpenAI prompt/completion 与 Claude
+  input/output 双键名兼容），滚动窗口 100 样本；`cost_stats()` 中位数/累计。
+- **框架统一算法** `core/agent/quota_health.py`：`compute_quota_health`
+  （纯函数）——warn = 中位成本 × 100 次、crit = × 20 次、余额 < 中位成本
+  （撑不起一次典型调用）= **DEPLETED（紫）**；指数 = 余额/warn 封顶 100；
+  无样本返回 None（绝不拿拍脑袋数字冒充动态阈值，调用方回落静态）。
+- **/status 接入**：host 全租户成本样本聚合（`status["cost"]`，与内心戏
+  延迟同构）；动态优先——`额度：🟡 健康指数 61（余额 ¥16.60，中位单次
+  ¥0.0270，约可再聊 614 次）`；无样本回落 env 静态阈值（静态路径余额 ≤ 0
+  也显示 🟣 耗尽）。
+- 测试：tests/test_quota_health.py 17 例（四级边界/耗尽边界/指数封顶/
+  无样本 None/双键名估算/中位数/动态优先/静态回落/紫色显示）。基线：
+  增量 132 passed，ruff / pyright 全绿。
+- 待用户配置：local.yaml 填服务商真实单价后动态路径才激活（模板已加注释示例）。
+
+建议 commit message（用户已授权提交）：
+`feat(core): 额度健康动态阈值——ModelClient 按单价×usage 采样单次成本，quota_health 按消耗中位数算黄/红阈值，新增紫色耗尽级`
+
 ## 8.39 /status 增强：额度健康指数 + 运行时长 + 版本 + 复读防护 + 记忆规模（2026-08-01，用户点单）
 
 - **额度健康指数**（用户点名）：/status 内嵌余额行（此前要单独 /quota）。

@@ -68,6 +68,10 @@ class ModelConfig(Struct):
     retry_initial_delay: float = 1.0
     retry_backoff_factor: float = 2.0
     retry_status_codes: list[int] = field(default_factory=lambda: [500, 502, 503, 504])
+    # 单次调用成本估算单价（元/百万 token）：配置后 ModelClient 按 usage 采样
+    # 单次成本，供额度健康按消耗中位数动态计算阈值；None = 不估算（无法动态）
+    price_input_per_million: float | None = None
+    price_output_per_million: float | None = None
 
 
 class EmbeddingConfig(Struct):

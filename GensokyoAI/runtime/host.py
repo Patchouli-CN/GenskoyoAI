@@ -270,8 +270,33 @@ class RuntimeHost:
             "gates": gates,
             "load_level": self._compute_load_level(gates, latency),
             "memory": self._collect_memory_totals(),
+            "cost": self._collect_cost_stats(),
             "uptime_seconds": time.monotonic() - self._started_at,
             "version": {"package": _package_version(), "protocol": RUNTIME_PROTOCOL_VERSION},
+        }
+
+    def _collect_cost_stats(self) -> dict[str, Any]:
+        """全租户单次调用成本样本聚合（元），供额度健康动态阈值。
+
+        与内心戏延迟同一道理：消耗分散在各租户 Agent 的 ModelClient 上，
+        合并全部样本后取中位数；单价未配置时永远 {"count": 0}（调用方回落）。
+        """
+        samples: list[float] = []
+        for service in self._service._tenant_services.values():
+            agent = service.state.agent
+            client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
+            if client is None:
+                continue
+            samples.extend(getattr(client, "_cost_samples", ()))
+        if not samples:
+            return {"count": 0}
+        ordered = sorted(samples)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        return {
+            "count": len(samples),
+            "median_cost": median,
+            "total_cost": sum(samples),
         }
 
     def _collect_memory_totals(self) -> dict[str, int]:
