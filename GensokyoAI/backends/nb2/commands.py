@@ -116,14 +116,16 @@ def _format_status(status: dict[str, Any]) -> str:
     lines.append(f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）")
     lines.append(f"处理中：{status['active_operations']} 个会话正在生成")
 
-    # 闸门用量：runtime 总闸常驻，其余只显示非空闲的（active/waiting > 0）
+    # 闸门用量：runtime（root 入口闸）常驻，其余只显示非空闲的（active/waiting > 0）
     gate_parts = []
     for gate in status.get("gates", []):
         if gate["name"] == "runtime" or gate["active"] or gate["waiting"]:
             waiting = f"（排队 {gate['waiting']}）" if gate["waiting"] else ""
-            gate_parts.append(
-                f"{gate['name']} {gate['active']}/{gate['max_concurrent']}{waiting}"
+            instances = gate.get("instances", 1)
+            capacity = (
+                f"{gate['max_concurrent']}×{instances}" if instances > 1 else str(gate["max_concurrent"])
             )
+            gate_parts.append(f"{gate['name']} {gate['active']}/{capacity}{waiting}")
     lines.append(f"闸门：{' · '.join(gate_parts) if gate_parts else '全部空闲'}")
 
     latency = status.get("latency") or {}

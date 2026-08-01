@@ -268,9 +268,13 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         assert status["tenants"] == {"groups": 2, "users": 1, "meta": 1, "other": 0}
         assert status["active_operations"] == 3
         assert status["latency"] == {"count": 0}  # 元租户未装配 Agent → 空延迟
-        # 闸门跨 root + 4 租户聚合：runtime 总容量 = 5 × 模板默认 4
+        # runtime 闸只取 root 入口闸（模板默认 4，不随租户扩容）；
+        # model 闸为每租户一套：instances = root + 4 租户
         runtime_gate = next(g for g in status["gates"] if g["name"] == "runtime")
-        assert runtime_gate["max_concurrent"] == 5 * 4
+        assert runtime_gate["max_concurrent"] == 4
+        assert runtime_gate["instances"] == 1
+        model_gate = next(g for g in status["gates"] if g["name"] == "model")
+        assert model_gate["instances"] == 5
         assert status["load_level"] == {"level": "healthy", "reason": "运行正常"}
 
 

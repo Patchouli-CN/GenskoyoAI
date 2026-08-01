@@ -129,9 +129,9 @@ class StatusCommandTests(unittest.TestCase):
                 "active_operations": 2,
                 "latency": {"count": 12, "median_ms": 3200.0, "avg_ms": 3500.0, "last_ms": 2100.0, "max_ms": 9000.0},
                 "gates": [
-                    {"name": "runtime", "max_concurrent": 16, "active": 2, "waiting": 0},
-                    {"name": "model", "max_concurrent": 8, "active": 2, "waiting": 1},
-                    {"name": "stream", "max_concurrent": 4, "active": 0, "waiting": 0},
+                    {"name": "runtime", "max_concurrent": 16, "active": 2, "waiting": 0, "instances": 1},
+                    {"name": "model", "max_concurrent": 2, "active": 2, "waiting": 1, "instances": 4},
+                    {"name": "stream", "max_concurrent": 4, "active": 0, "waiting": 0, "instances": 4},
                 ],
                 "load_level": {"level": "critical", "reason": "闸门利用率最高 100%，1 个请求排队中"},
             }
@@ -142,7 +142,7 @@ class StatusCommandTests(unittest.TestCase):
         self.assertIn("5 群 / 3 私聊（共 8 个会话租户）", text)
         self.assertIn("处理中：2 个会话正在生成", text)
         self.assertIn("runtime 2/16", text)
-        self.assertIn("model 2/8（排队 1）", text)
+        self.assertIn("model 2/2×4（排队 1）", text)
         self.assertNotIn("stream", text)  # 空闲闸门不显示
         self.assertIn("中位 3.2s", text)
         self.assertIn("近 12 次内心思考", text)

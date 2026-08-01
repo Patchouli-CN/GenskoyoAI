@@ -265,24 +265,40 @@ class RuntimeHost:
         }
 
     def _aggregate_gate_usage(self) -> list[dict[str, Any]]:
-        """跨 root 与全部租户服务聚合同名资源闸的用量。"""
+        """汇总资源闸用量。
+
+        runtime 闸只取 root（它是唯一系统入口闸，容量不随租户扩容）；
+        其余闸（model/stream/tool…）为每租户一套：active/waiting 求和，
+        max_concurrent 保留单实例上限并附 instances 实例数。
+        """
         gates_by_name: dict[str, dict[str, Any]] = {}
         services = [self._service, *self._service._tenant_services.values()]
         for service in services:
             for gate in getattr(service, "_resource_gates", {}).values():
                 snapshot = gate.snapshot()
+                if snapshot["name"] == "runtime":
+                    if service is self._service:
+                        gates_by_name["runtime"] = {
+                            "name": "runtime",
+                            "max_concurrent": snapshot["max_concurrent"],
+                            "active": snapshot["active"],
+                            "waiting": snapshot["waiting"],
+                            "instances": 1,
+                        }
+                    continue
                 entry = gates_by_name.setdefault(
                     snapshot["name"],
                     {
                         "name": snapshot["name"],
-                        "max_concurrent": 0,
+                        "max_concurrent": snapshot["max_concurrent"],
                         "active": 0,
                         "waiting": 0,
+                        "instances": 0,
                     },
                 )
-                entry["max_concurrent"] += snapshot["max_concurrent"]
                 entry["active"] += snapshot["active"]
                 entry["waiting"] += snapshot["waiting"]
+                entry["instances"] += 1
         return list(gates_by_name.values())
 
     def _compute_load_level(
@@ -298,8 +314,9 @@ class RuntimeHost:
         worst = 0.0
         queued = 0
         for gate in gates:
-            if gate["max_concurrent"] > 0:
-                worst = max(worst, gate["active"] / gate["max_concurrent"])
+            capacity = gate["max_concurrent"] * max(1, gate.get("instances", 1))
+            if capacity > 0:
+                worst = max(worst, gate["active"] / capacity)
             queued += gate["waiting"]
         if queued > 0 or worst >= 0.9:
             reason = f"闸门利用率最高 {worst:.0%}"
