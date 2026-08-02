@@ -118,7 +118,9 @@ class ReminderStoreTests(unittest.TestCase):
             reminder = _make_reminder(local_now() - timedelta(seconds=1))
             reminder.attempts = REMINDER_MAX_ATTEMPTS
             store.add(reminder)
+            # 重试耗尽的僵尸提醒：不返回，且被直接清出存储（不占 pending 配额）
             self.assertEqual(store.due(local_now()), [])
+            self.assertEqual(store.pending_count("qq-group-123"), 0)
 
 
 class ReminderToolTests(unittest.IsolatedAsyncioTestCase):

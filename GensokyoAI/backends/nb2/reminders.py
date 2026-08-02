@@ -102,13 +102,28 @@ class ReminderStore:
             self._save_locked()
 
     def due(self, now: datetime) -> list[Reminder]:
-        """到点且未超过重试上限的提醒（按到点时间升序）。"""
+        """到点且未超过重试上限的提醒（按到点时间升序）。
+
+        顺带清理重试耗尽的僵尸提醒：它们不会再被返回，若留着会永久
+        计入 pending_count 堵满租户配额（手改文件/旧版本残留可达）。
+        """
         with self._lock:
+            exhausted = [
+                key
+                for key, entry in self._entries.items()
+                if entry["attempts"] >= REMINDER_MAX_ATTEMPTS
+            ]
+            for key in exhausted:
+                logger.info(
+                    f"[nb2] 重试耗尽的提醒已清理: {self._entries[key].get('content', '')[:30]}"
+                )
+                del self._entries[key]
+            if exhausted:
+                self._save_locked()
             items = [
                 Reminder.from_dict(entry)
                 for entry in self._entries.values()
                 if datetime.fromisoformat(entry["due"]) <= now
-                and entry["attempts"] < REMINDER_MAX_ATTEMPTS
             ]
         return sorted(items, key=lambda item: item.due)
 
