@@ -16,6 +16,30 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.55 首次运行播种（新人体验）+ nb2 日志格式去重（2026-08-02，用户点单）
+
+- 起因：新人直接 `uv run python -m GensokyoAI.backends.nb2` 没有配置会
+  死在半路（nonebot 缺 DRIVER 抛 server_app 错）——用户「新人体验要做
+  好」。调查发现 CLI 早有播种（cli/main.py 从模板生成 config/local.yaml）
+  但适配器入口没有，nb2 env 也没有。
+- **播种统一**：`core/config_dirs.ensure_local_config`（CLI 原实现上收，
+  返回 (path, created) 供调用方自行展示）；`serve_adapters` 入口播种——
+  CLI 与全部适配器入口的 `config/local.yaml` 首次运行都会自动生成
+  （只播种一次，用户改过的绝不覆盖）。nb2 侧 `seed_local_env` 从
+  `tmp/nb2.env.example` 生成 `config/nb2/local.env`；解析优先级
+  `local.env` → `.env` → 根 `.env` 兜底（local.* 与 local.yaml 同风格，
+  用户点名的命名）。
+- **日志格式去重**（用户实机反馈）：`adapter.start` 曾在 nonebot.init
+  前就打日志——nonebot sink 与项目 sink 并存，一条消息两种格式各打
+  一遍。改为：加载阶段静默 → init 前后各 `logger.remove()` 一次
+  （suppress ValueError）→ setup_logging（失败保底加回 stderr sink，
+  顺带消化 CODE_INF 01#6）→ 之后统一单一格式发声。
+- 测试：6 例（播种一次/不覆盖/模板缺失不炸/local.env 优先/播种后
+  resolve 命中/CLI 既有用例回归）。增量 91 passed，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`feat(config): 首次运行播种——config/local.yaml 与 config/nb2/local.env 缺失时从模板自动生成（只播种一次）；nb2 日志格式去重（init 前后清 sink，延迟到 setup 后发声）`
+
 ## 8.54 config/{adapter}/ 私有配置目录约定（2026-08-02，用户定稿）
 
 - 设计（用户两轮纠偏后定稿）：`config/{adapter_name}/` 只是各适配器的

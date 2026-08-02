@@ -3,7 +3,6 @@
 
 import argparse
 import asyncio
-import shutil
 from pathlib import Path
 
 from rich.console import Console
@@ -11,6 +10,7 @@ from rich.console import Console
 from GensokyoAI.backends.console import ConsoleBackendBuilder
 from GensokyoAI.core.agent import Agent
 from GensokyoAI.core.config import ConfigLoader
+from GensokyoAI.core.config_dirs import ensure_local_config
 from GensokyoAI.utils.exec_hook import set_exechook
 from GensokyoAI.utils.request_utils import close_client_session
 
@@ -60,16 +60,11 @@ _COLOR_THEME = {
 
 def _ensure_local_config() -> Path:
     """首次启动：从发行模板生成本地配置（用户只改它，不碰 tmp/ 模板）。"""
-    config_dir = Path("config")
-    local_path = config_dir / "local.yaml"
-    if not local_path.exists():
-        template = Path("tmp/template-conf.yaml")
-        config_dir.mkdir(parents=True, exist_ok=True)
-        if template.exists():
-            shutil.copyfile(template, local_path)
-            console.print(
-                f"[green]✓ 已生成本地配置: {local_path}（后续请修改它，不要改 tmp/ 模板）[/]"
-            )
+    local_path, created = ensure_local_config()
+    if created:
+        console.print(
+            f"[green]✓ 已生成本地配置: {local_path}（后续请修改它，不要改 tmp/ 模板）[/]"
+        )
     return local_path
 
 

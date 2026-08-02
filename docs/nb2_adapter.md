@@ -38,15 +38,21 @@ pip install -e ".[nb2]"
 
 **适配器私有配置目录**（`config/{adapter_name}/` 约定）：nb2 的全部配置
 （含 NoneBot 自己的 `DRIVER`/`HOST`/`PORT`/`ONEBOT_ACCESS_TOKEN`）都住在
-`config/nb2/.env`——框架只约定目录，格式与加载器归适配器自己
+`config/nb2/`——框架只约定目录，格式与加载器归适配器自己
 （nb2 现行为 dotenv；以后换 yaml/toml 是适配器内部的事，核心零感知）。
 
 ```bash
-mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/.env
+mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/local.env
 ```
 
-项目根 `.env` 仍兜底读取（启动会打迁移提示）；`config/nb2/.env` 已在
-.gitignore 的 `.env` 规则覆盖下，不会入库。
+- **首次运行自动播种**：`config/nb2/local.env` 不存在时启动会从
+  `tmp/nb2.env.example` 生成一份（只播种一次，绝不覆盖）；框架侧
+  `config/local.yaml` 同理（CLI 与适配器入口都会播种）。
+- 解析优先级：`config/nb2/local.env` → `config/nb2/.env` → 项目根 `.env`
+  （兜底，启动打迁移提示）；`config/nb2/*.env` 已在 .gitignore 的
+  `.env` 规则覆盖下，不会入库。
+- 日志统一走 GensokyoAI 体系：nonebot/默认 sink 在 nonebot.init 前后
+  各清一次，我们自己的日志一律单一格式（不再有双格式重复行）。
 
 关键配置项（完整注释见 `tmp/nb2.env.example`）：
 

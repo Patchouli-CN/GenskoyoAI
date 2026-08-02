@@ -8,28 +8,48 @@ GensokyoAI 的 config/local.yaml 不接受未知顶层键，因此适配器配�
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ...core.config_dirs import adapter_config_dir
+from ...utils.logger import logger
 
 
 def resolve_env_file(root_dir: Path | None = None) -> tuple[Path | None, bool]:
-    """解析 nb2 的 dotenv 路径：适配器私有目录 `config/nb2/.env` 优先，
+    """解析 nb2 的 dotenv 路径：适配器私有目录 `config/nb2/` 下的
+    `local.env` / `.env` 优先（local.* 与框架 local.yaml 同风格），
     项目根 `.env` 兜底（迁移期，用完会打迁移提示）。
 
-    返回 (路径或 None, 是否走了根目录兜底)。两处都不存在返回 (None, False)。
+    返回 (路径或 None, 是否走了根目录兜底)。都不存在返回 (None, False)。
     框架只约定目录（core.config_dirs.adapter_config_dir），格式与加载
     归适配器自己——nb2 现行为 dotenv。
     """
-    private = adapter_config_dir("nb2", root_dir) / ".env"
-    if private.exists():
-        return private, False
+    base = adapter_config_dir("nb2", root_dir)
+    for name in ("local.env", ".env"):
+        candidate = base / name
+        if candidate.exists():
+            return candidate, False
     fallback = (root_dir or Path.cwd()) / ".env"
     if fallback.exists():
         return fallback, True
     return None, False
+
+
+def seed_local_env(root_dir: Path | None = None) -> Path:
+    """首次运行：从发行模板播种 `config/nb2/local.env`（只播种一次，绝不覆盖）。
+
+    模板缺失时返回目标路径但不报错（适配器按缺省继续）。
+    """
+    base = adapter_config_dir("nb2", root_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    target = base / "local.env"
+    template = (root_dir or Path.cwd()) / "tmp" / "nb2.env.example"
+    if template.exists():
+        shutil.copyfile(template, target)
+        logger.info(f"[nb2] 首次运行已生成配置: {target}（请修改它，不要改 tmp/ 模板）")
+    return target
 
 
 def _parse_bool(raw: str | None, default: bool) -> bool:

@@ -157,6 +157,61 @@ class AdapterConfigDirTests(unittest.TestCase):
         self.assertEqual(adapter._env_file, Path("custom.env"))
         self.assertIsNone(Nonebot2Adapter()._env_file)  # 默认走 resolve_env_file 约定
 
+    def test_local_env_preferred_over_dotenv(self):
+        from GensokyoAI.backends.nb2.config import resolve_env_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            private = root / "config" / "nb2"
+            private.mkdir(parents=True)
+            (private / ".env").write_text("A=1", encoding="utf-8")
+            (private / "local.env").write_text("A=2", encoding="utf-8")
+            env_file, is_fallback = resolve_env_file(root)
+            self.assertEqual(env_file, private / "local.env")  # local.* 风格优先
+            self.assertFalse(is_fallback)
+
+    def test_ensure_local_config_seeds_once(self):
+        from GensokyoAI.core.config_dirs import ensure_local_config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "tmp").mkdir()
+            (root / "tmp" / "template-conf.yaml").write_text(
+                "model:\n  name: seeded\n", encoding="utf-8"
+            )
+            path, created = ensure_local_config(root)
+            self.assertTrue(created)
+            self.assertEqual(path, root / "config" / "local.yaml")
+            self.assertIn("seeded", path.read_text(encoding="utf-8"))
+            # 第二次：已存在绝不覆盖
+            path.write_text("model:\n  name: user-edited\n", encoding="utf-8")
+            _, created_again = ensure_local_config(root)
+            self.assertFalse(created_again)
+            self.assertIn("user-edited", path.read_text(encoding="utf-8"))
+
+    def test_ensure_local_config_missing_template_no_crash(self):
+        from GensokyoAI.core.config_dirs import ensure_local_config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path, created = ensure_local_config(Path(tmpdir))
+            self.assertFalse(created)
+            self.assertFalse(path.exists())  # 只返回路径，不报错
+
+    def test_seed_local_env_from_template(self):
+        from GensokyoAI.backends.nb2.config import resolve_env_file, seed_local_env
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "tmp").mkdir()
+            (root / "tmp" / "nb2.env.example").write_text("GSK_A=1\n", encoding="utf-8")
+            target = seed_local_env(root)
+            self.assertEqual(target, root / "config" / "nb2" / "local.env")
+            self.assertEqual(target.read_text(encoding="utf-8"), "GSK_A=1\n")
+            # 播种后 resolve 直接命中（不再是 None）
+            env_file, is_fallback = resolve_env_file(root)
+            self.assertEqual(env_file, target)
+            self.assertFalse(is_fallback)
+
 
 class Nb2ConfigTests(unittest.TestCase):
     def test_defaults(self):

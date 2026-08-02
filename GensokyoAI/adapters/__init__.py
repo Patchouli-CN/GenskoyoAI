@@ -20,6 +20,7 @@ import asyncio
 from pathlib import Path
 from typing import Protocol
 
+from ..core.config_dirs import ensure_local_config
 from ..runtime.host import RuntimeHost
 from ..utils.logger import logger
 
@@ -42,6 +43,8 @@ class RuntimeAdapter(Protocol):
 
 async def serve_adapters(*adapters: RuntimeAdapter, root_dir: Path | None = None) -> None:
     """异步形态：创建宿主并运行所有适配器，直到被取消（供自定义入口组装）。"""
+    # 首次运行播种框架本地配置（config/local.yaml；只播种一次，绝不覆盖）
+    ensure_local_config(root_dir)
     host = RuntimeHost(root_dir)
     started: list[RuntimeAdapter] = []
     try:
