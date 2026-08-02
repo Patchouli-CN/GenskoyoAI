@@ -91,6 +91,8 @@ _watchdog.configure(napcat_dir=_napcat_dir)
 # 到点提醒：角色经 set_reminder 工具接活，tick 循环扫到点项后生成并 @ 投递
 _reminders = ReminderStore(_config.data_dir / "reminders.json")
 _reminder_task: asyncio.Task[None] | None = None
+# 后台任务强引用集（_learn_impression 等 fire-and-forget 任务防 GC 提前回收）
+_background_tasks: set[asyncio.Task[Any]] = set()
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = (
@@ -664,12 +666,16 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
     if _config.reminders_enabled:
         try:
             # 到点提醒工具按租户注入（闭包捕获租户 id；租户重建时 ensure 会再注册）
-            await host.register_tenant_tool(
+            registered = await host.register_tenant_tool(
                 agent_id,
                 _build_reminder_tool(agent_id),
                 name="set_reminder",
                 parallel_safe=False,
             )
+            if registered:
+                logger.debug(f"[nb2] 提醒工具已注入（{agent_id}）")
+            else:
+                logger.warning(f"[nb2] 提醒工具注入失败（{agent_id} 未装配）")
         except Exception as error:
             logger.warning(f"[nb2] 注册提醒工具失败（{agent_id}）: {error}")
     _initialized.add(agent_id)
@@ -803,7 +809,9 @@ async def _process_batch(
         logger.warning(f"[nb2] {agent_id} 返回了空回复")
         reply = "……（好像一下子不知道说什么了，再说一次试试？）"
     if _config.member_memory:
-        # 新群友：首轮交谈完成后后台生成第一印象（不阻塞回复；按批去重）
+        # 新群友：首轮交谈完成后后台生成第一印象（不阻塞回复；按批去重。
+        # 任务持强引用——事件循环对 task 只持弱引用，不存引用可能被 GC
+        # 提前回收，成员将在 _impression_inflight 里永久占位不再生成）
         seen: set[int] = set()
         for item in batch:
             if (
@@ -815,9 +823,11 @@ async def _process_batch(
             ):
                 seen.add(item.member_qq)
                 _impression_inflight.add(item.member_qq)
-                asyncio.create_task(
+                task = asyncio.create_task(
                     _learn_impression(item.member_name, item.member_qq, f"{text}\n{reply}")
                 )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
     await _send_segmented(matcher.send, reply)
 
 
