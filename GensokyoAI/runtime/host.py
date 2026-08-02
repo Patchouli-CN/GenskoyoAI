@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ..core.agent.quota_health import BurnRateSmoother, compute_burn_rate
 from ..core.config import ConfigLoader
 from ..core.config_schema import AppConfig
 from ..utils.logger import logger
@@ -72,6 +73,10 @@ class RuntimeHost:
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
         self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
         self._started_at = time.monotonic()  # /status 运行时长基准
+        # 全局日耗快升慢降平滑器（警戒时间）+ 是否见过成本样本
+        # （见过后窗口清零不再回落静态阈值，而是平滑衰减到 0）
+        self._cost_smoother = BurnRateSmoother()
+        self._cost_has_samples = False
         # 适配器工具模板：(函数, 名称, 是否并行安全)，注入当前及后续租户的工具注册表
         self._adapter_tools: list[tuple[Callable[..., Any], str | None, bool]] = []
 
@@ -276,27 +281,32 @@ class RuntimeHost:
         }
 
     def _collect_cost_stats(self) -> dict[str, Any]:
-        """全租户单次调用成本样本聚合（元），供额度健康动态阈值。
+        """全租户消耗速率聚合（元/天），供额度健康动态阈值。
 
-        与内心戏延迟同一道理：消耗分散在各租户 Agent 的 ModelClient 上，
-        合并全部样本后取中位数；单价未配置时永远 {"count": 0}（调用方回落）。
+        消耗样本（带时间戳）分散在各租户 Agent 的 ModelClient 上，全局合并
+        后由框架 quota_health.compute_burn_rate 统一折算日耗——不按租户
+        分开算（用户 2026-08-02 定稿）；速率经 BurnRateSmoother 快升慢降
+        （警戒时间：变慢不瞬间拉低阈值，全天静默也平滑衰减而非回落静态）。
+        单价未配置（从未见过样本）时永远 {"count": 0}（调用方回落静态阈值）。
         """
-        samples: list[float] = []
+        samples: list[tuple[float, float]] = []
         for service in self._service._tenant_services.values():
             agent = service.state.agent
             client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
             if client is None:
                 continue
             samples.extend(getattr(client, "_cost_samples", ()))
-        if not samples:
-            return {"count": 0}
-        ordered = sorted(samples)
-        mid = len(ordered) // 2
-        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        stats = compute_burn_rate(samples)
+        if stats["count"] == 0 and not self._cost_has_samples:
+            return stats  # 从未见过样本：无数据，调用方回落静态阈值
+        self._cost_has_samples = True
+        raw = stats.get("burn_per_day", 0.0)
         return {
-            "count": len(samples),
-            "median_cost": median,
-            "total_cost": sum(samples),
+            "count": stats["count"],
+            "total_cost": stats.get("total_cost", 0.0),
+            "window_hours": stats.get("window_hours", 0.0),
+            "raw_burn_per_day": raw,  # 未平滑的原始日耗（观测用）
+            "burn_per_day": self._cost_smoother.update(raw),  # 阈值基准
         }
 
     def _collect_memory_totals(self) -> dict[str, int]:

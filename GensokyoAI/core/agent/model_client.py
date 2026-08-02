@@ -22,6 +22,7 @@ from ..events import Event, EventBus, SystemEvent
 from ..exceptions import ModelError
 from .providers import BaseProvider, ProviderFactory
 from .providers.auth_utils import AuthRefreshError, sanitize_auth_data
+from .quota_health import compute_burn_rate
 from .types import (
     ImageGenerationRequest,
     ImageGenerationResult,
@@ -59,8 +60,9 @@ class ModelClient:
         self._embedding_config = embedding_config or EmbeddingConfig()
         # 最近模型调用耗时滚动窗口（(context, duration_ms)，供 /status 等观测入口）
         self._latency_samples: deque[tuple[str, float]] = deque(maxlen=50)
-        # 单次调用成本滚动窗口（元，按配置单价 × usage 估算；未配单价则始终为空）
-        self._cost_samples: deque[float] = deque(maxlen=100)
+        # 单次调用成本滚动窗口（(wall_ts, 元)，按配置单价 × usage 估算；
+        # 时间戳供 quota_health.compute_burn_rate 折算日耗；未配单价则始终为空）
+        self._cost_samples: deque[tuple[float, float]] = deque(maxlen=100)
         logger.debug(f"ModelClient 初始化完成，Provider: {config.provider}, 模型: {config.name}")
 
     def _estimate_call_cost(self, usage: dict[str, Any] | None) -> float | None:
@@ -101,19 +103,12 @@ class ModelClient:
         return (input_cost + completion * (price_out or 0.0)) / 1_000_000
 
     def cost_stats(self) -> dict[str, Any]:
-        """单次调用成本统计（元，滚动窗口）：中位数/均值/累计，供额度健康动态阈值。"""
-        samples = list(getattr(self, "_cost_samples", ()))
-        if not samples:
-            return {"count": 0}
-        ordered = sorted(samples)
-        mid = len(ordered) // 2
-        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
-        return {
-            "count": len(samples),
-            "median_cost": median,
-            "avg_cost": sum(samples) / len(samples),
-            "total_cost": sum(samples),
-        }
+        """本客户端消耗速率统计（元/天，近 24h 滚动窗口）。
+
+        与全局额度健康同一算法（quota_health.compute_burn_rate）；
+        无样本时 {"count": 0}。
+        """
+        return compute_burn_rate(getattr(self, "_cost_samples", ()))
 
     def _build_options(self) -> dict[str, Any]:
         """构建模型选项"""
@@ -321,11 +316,12 @@ class ModelClient:
         if not hasattr(self, "_latency_samples"):
             self._latency_samples = deque(maxlen=50)
         self._latency_samples.append((timing.context, timing.duration_ms))
-        # 单次成本采样（额度健康动态阈值的数据源；未配单价/无 usage 则无样本）
+        # 单次成本采样（额度健康动态阈值的数据源；未配单价/无 usage 则无样本。
+        # 带 wall 时间戳，供 quota_health.compute_burn_rate 折算单位时间消耗）
         if cost := self._estimate_call_cost(timing.usage):
             if not hasattr(self, "_cost_samples"):
                 self._cost_samples = deque(maxlen=100)
-            self._cost_samples.append(cost)
+            self._cost_samples.append((time.time(), cost))
         return timing
 
     def latency_stats(self, context: str | None = None) -> dict[str, Any]:

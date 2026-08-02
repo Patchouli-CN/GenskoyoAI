@@ -140,8 +140,8 @@ def _format_uptime(seconds: float) -> str:
 def _format_quota_health(data: dict[str, Any] | None, *, warn: float, crit: float) -> str:
     """额度健康行（静态阈值回落路径）：无消耗样本时使用 env 阈值。
 
-    动态路径（有消耗中位数）见 _format_quota_dynamic——阈值由框架
-    quota_health 按「余额还能撑多少次典型调用」统一计算。
+    动态路径（有消耗速率）见 _format_quota_dynamic——阈值由框架
+    quota_health 按「全局日耗还能撑几天」统一计算。
     """
     if data is None:
         return "额度：暂不可用（Provider 不支持或查询失败）"
@@ -170,12 +170,16 @@ _QUOTA_LEVEL_DISPLAY = {
 
 
 def _format_quota_dynamic(health: QuotaHealth) -> str:
-    """额度健康行（动态阈值路径）：阈值 = 消耗中位成本 × 基准调用次数。"""
+    """额度健康行（动态阈值路径）：阈值 = 全局日耗 × 基准天数。"""
     emoji = _QUOTA_LEVEL_DISPLAY[health.level]
+    if health.remaining_days >= 1:
+        span = f"{health.remaining_days:.1f} 天"
+    else:
+        span = f"{health.remaining_days * 24:.0f} 小时"
     return (
         f"额度：{emoji} 健康指数 {health.index}"
-        f"（余额 ¥{health.balance:.2f}，中位单次 ¥{health.median_cost:.4f}，"
-        f"约可再聊 {health.remaining_calls:.0f} 次）"
+        f"（余额 ¥{health.balance:.2f}，日耗 ¥{health.burn_per_day:.2f}，"
+        f"约可再撑 {span}）"
     )
 
 
@@ -194,13 +198,13 @@ def _format_status(
     lines = [f"系统状态：{level_text}（{level.get('reason', '—')}）"]
 
     if quota_fetched:
-        # 动态阈值优先：有消耗中位数时按「余额还能撑多少次典型调用」算；
+        # 动态阈值优先：有消耗速率时按「全局日耗还能撑几天」算；
         # 无样本（单价未配置/尚无调用）回落 env 静态阈值
         balance = (quota or {}).get("available_balance")
-        median_cost = (status.get("cost") or {}).get("median_cost")
+        burn_per_day = (status.get("cost") or {}).get("burn_per_day")
         health = (
-            compute_quota_health(balance, median_cost)
-            if isinstance(balance, int | float) and median_cost
+            compute_quota_health(balance, burn_per_day)
+            if isinstance(balance, int | float) and burn_per_day
             else None
         )
         if health is not None:
