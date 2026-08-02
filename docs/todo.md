@@ -16,6 +16,27 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.52 watchdog 回归极简：call main.bat + 只信 WS 回连（2026-08-02，用户拍板）
+
+- 第三轮实机失败后的自我实锤：§8.51 的「孵化期捕获 QQ pid」是我自己
+  造出来的误判——`Popen.pid` 是 cmd 的 pid，却在它的直接子进程里找
+  QQ（QQ 是 NapCatWinBootMain 的子进程，隔代永远找不到）；引导器
+  引导完即退、cmd 跟着退，按构造必然「秒退」，与实例冲突无关。
+  用户拍板：「重启，你直接让它执行我的 main.bat 就好了，不用那么麻烦」。
+- **定稿模型**：安全清理（按镜像名清 NapCatWinBootMain 引导器树 +
+  pause 残留 bat 窗口，绝不盲杀 QQ.exe；新旧登录冲突由 QQ 服务端
+  裁决——新登录踢旧登录）→ 沉降 3s → `cmd /c "chcp 65001 >nul &&
+  call main.bat"`（用户实证路径，改 bat 自动生效）→ 只信 WS 回连
+  （900s 超时告警）。
+- **全部砍掉**：QQ pid 捕获/tracked 状态文件（napcat_bot.json）/
+  pid_alive / find_child_qq / process_died 早判 / 秒退重试——这套进程
+  模型下 pid 探测必然误判，WS 才是唯一真相。
+- 测试：18 例（状态机全谱 + call main.bat 命令断言 + pause 窗口清理）。
+  ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`fix(nb2): watchdog 回归极简——恢复=安全清理+call main.bat+只信 WS 回连，砍掉必然误判的 pid 捕获/存活探测`
+
 ## 8.51 元租户删除（一次性脱稿生成）+ watchdog 进程模型定稿（2026-08-02，用户指导）
 
 - 背景（用户血压时刻）：§8.47 的 enable_think_engine 实测仍有 nb2-meta

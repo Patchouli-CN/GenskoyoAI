@@ -85,7 +85,6 @@ _watchdog = NapCatWatchdog(
     recover_timeout_seconds=_config.watchdog_recover_timeout,
     disconnect_grace_seconds=_config.watchdog_disconnect_grace,
     alert_path=_config.data_dir / "napcat_offline_alert.json",
-    state_path=_config.data_dir / "napcat_bot.json",
 )
 _watchdog.configure(napcat_dir=_napcat_dir)
 

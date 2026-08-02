@@ -95,24 +95,21 @@ NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自�
 
 1. **触发**：`bot_offline` 事件立即触发；WS 断开则等
    `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` 宽限期（NapCat 自己重连上就不动）。
-2. **精确杀**：守护只管理自己拉起的实例——启动时在孵化期捕获 bot QQ 的
-   pid 并持久化（`nb2_data/napcat_bot.json`），杀的时候
-   `taskkill /pid <qq_pid> /t` 精确收口，外加按镜像名清 NapCatWinBootMain
-   引导器树与旧实例卡在 `pause` 的 bat 窗口。**绝不盲杀 QQ.exe**（QQNT
-   多开进程互相收养，枚举无法区分 bot 与你的个人 QQ）；无追踪记录的外来
-   实例不做盲杀盲启（撞车必闪退，改为清晰告警）。
-3. **快速登录**：按 `launcher-win10-user.bat` 同等环境变量带 QQ 号重启
-   NapCat（本地缓存凭证静默重登，通常无需扫码；被杀过登录态时 NapCat
-   可能落到扫码页，此时请用 WebUI/手机扫一下）。
-4. **确认**：孵化期（30s）内秒退自动重试一次（外来实例冲突是已观察到的
-   成因，二次仍死则告警并提示手动清理旧实例）；之后以 WS 回连为准
-   （默认 900s，冷启动实测 6+ 分钟），已捕获的 QQ 中途死亡提前判死。
+2. **安全清理**：按镜像名清 NapCatWinBootMain 引导器树 + 旧实例卡在
+   `pause` 的 bat 窗口。**绝不盲杀 QQ.exe**——QQNT 多开进程互相收养，
+   枚举无法区分 bot 与你的个人 QQ；新旧登录冲突由 QQ 服务端裁决
+   （新登录踢旧登录）。
+3. **启动**：直接 `call main.bat`（你实证的路径，改 bat 自动生效），
+   独立控制台窗口、UTF-8 代码页（不乱码）。
+4. **确认**：只信 WS 回连（默认 `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` 900s，
+   冷启动实测 6+ 分钟），超时告警（哨兵 + ERROR）。
+   ※ 不做基于 pid 的存活探测：引导器拉起 QQ 即退，这类探测必然误判。
 5. **节制**：冷却 `GSK_NB2_WATCHDOG_COOLDOWN`（冷却期吞掉的触发会**排到期
    重试**，回连/关停自动取消，不会丢弃）+ 24h 上限
-   `GSK_NB2_WATCHDOG_MAX_RESTARTS` 次；超限/回连超时/重启失败则写
-   `nb2_data/napcat_offline_alert.json` 哨兵 + ERROR 日志，停手等人
-   （防无限重启激怒风控）；回连成功自动清除哨兵。仅 Windows 生效，
-   其他平台只告警不动手；适配器正常关停不会误触发。
+   `GSK_NB2_WATCHDOG_MAX_RESTARTS` 次；超限/超时写
+   `nb2_data/napcat_offline_alert.json` 哨兵停手等人（防无限重启激怒
+   风控）；回连成功自动清除哨兵。仅 Windows 生效，其他平台只告警；
+   适配器正常关停不会误触发。
 
 内置的默认附加要求（`GSK_NB2_EXTRA_PROMPT` 留空时生效）：
 
