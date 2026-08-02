@@ -12,6 +12,25 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...core.config_dirs import adapter_config_dir
+
+
+def resolve_env_file(root_dir: Path | None = None) -> tuple[Path | None, bool]:
+    """解析 nb2 的 dotenv 路径：适配器私有目录 `config/nb2/.env` 优先，
+    项目根 `.env` 兜底（迁移期，用完会打迁移提示）。
+
+    返回 (路径或 None, 是否走了根目录兜底)。两处都不存在返回 (None, False)。
+    框架只约定目录（core.config_dirs.adapter_config_dir），格式与加载
+    归适配器自己——nb2 现行为 dotenv。
+    """
+    private = adapter_config_dir("nb2", root_dir) / ".env"
+    if private.exists():
+        return private, False
+    fallback = (root_dir or Path.cwd()) / ".env"
+    if fallback.exists():
+        return fallback, True
+    return None, False
+
 
 def _parse_bool(raw: str | None, default: bool) -> bool:
     if raw is None or not raw.strip():

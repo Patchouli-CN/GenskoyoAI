@@ -18,6 +18,7 @@ from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
 from ...runtime.host import RuntimeHost
 from ...utils.logger import logger, setup_logging
+from .config import resolve_env_file
 
 # uvicorn 的 std logging 不加自己的 handler，全部传播到 root，
 # 经项目 LoguruHandler 桥接进 loguru（享受第三方噪音过滤）
@@ -29,22 +30,41 @@ class Nonebot2Adapter:
 
     name = "nonebot2"
 
-    def __init__(self, env_file: str | Path = ".env") -> None:
-        self._env_file = Path(env_file)
+    def __init__(self, env_file: str | Path | None = None, root_dir: Path | None = None) -> None:
+        # env_file 显式指定（向后兼容）；None 时按约定解析：
+        # config/nb2/.env 优先，根 .env 兜底（resolve_env_file）
+        self._env_file = Path(env_file) if env_file else None
+        self._root_dir = root_dir
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
 
     async def start(self, host: RuntimeHost) -> None:
-        # 先加载 .env：NoneBot 配置（HOST/PORT/DRIVER）与适配器 GSK_* 键都在里面
-        load_dotenv(self._env_file)
-        environment = os.environ.get("ENVIRONMENT")
-        if environment:
-            load_dotenv(
-                self._env_file.with_name(f"{self._env_file.name}.{environment}"), override=True
-            )
+        # 先加载 dotenv：NoneBot 配置（HOST/PORT/DRIVER）与适配器 GSK_* 键都在里面
+        if self._env_file is not None:
+            env_file, is_fallback = self._env_file, False
+        else:
+            env_file, is_fallback = resolve_env_file(self._root_dir)
+        if env_file is not None:
+            load_dotenv(env_file)
+            if is_fallback:
+                logger.warning(
+                    "[nb2] 正在使用项目根 .env——建议迁移到适配器私有配置目录 "
+                    f"config/nb2/.env（{env_file}）"
+                )
+            else:
+                logger.info(f"[nb2] 已加载配置文件: {env_file}")
+            environment = os.environ.get("ENVIRONMENT")
+            if environment:
+                load_dotenv(
+                    env_file.with_name(f"{env_file.name}.{environment}"), override=True
+                )
+        else:
+            logger.info("[nb2] 未找到 config/nb2/.env（或根 .env），使用全部默认配置")
         # nonebot 初始化日志只有前几行受其 log_level 过滤——压到 CRITICAL 让它们闭嘴
         os.environ.setdefault("LOG_LEVEL", "CRITICAL")
-        nonebot.init()
+        # nonebot 自己的配置（HOST/PORT/DRIVER/ONEBOT_ACCESS_TOKEN）也从同一
+        # 文件读：适配器相关配置全部住进 config/nb2/，根 .env 彻底退役
+        nonebot.init(_env_file=str(env_file) if env_file is not None else ".env")
         # nonebot 会挂自己的 loguru sink（格式自成一套、与项目重复）：直接全部清掉，
         # 日志统一走 GensokyoAI 体系（nonebot 的 WARNING+ 仍经我们的 sink 显示）
         logger.remove()

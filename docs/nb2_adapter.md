@@ -36,11 +36,17 @@ pip install -e ".[nb2]"
 
 ## 配置
 
-复制示例配置并按需修改：
+**适配器私有配置目录**（`config/{adapter_name}/` 约定）：nb2 的全部配置
+（含 NoneBot 自己的 `DRIVER`/`HOST`/`PORT`/`ONEBOT_ACCESS_TOKEN`）都住在
+`config/nb2/.env`——框架只约定目录，格式与加载器归适配器自己
+（nb2 现行为 dotenv；以后换 yaml/toml 是适配器内部的事，核心零感知）。
 
 ```bash
-cp tmp/nb2.env.example .env
+mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/.env
 ```
+
+项目根 `.env` 仍兜底读取（启动会打迁移提示）；`config/nb2/.env` 已在
+.gitignore 的 `.env` 规则覆盖下，不会入库。
 
 关键配置项（完整注释见 `tmp/nb2.env.example`）：
 

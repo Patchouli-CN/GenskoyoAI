@@ -6,6 +6,7 @@
 
 from .character_package import CharacterPackageOptions, CharacterPackageService
 from .character_validator import CharacterValidator
+from .config_dirs import adapter_config_dir
 from .config_env import apply_env_overrides
 from .config_loader import ConfigLoader
 from .config_merge import ConfigMerger
@@ -68,5 +69,6 @@ __all__ = [
     "WorldDirectorConfig",
     "WorldPersistenceConfig",
     "WorldTranscriptConfig",
+    "adapter_config_dir",
     "apply_env_overrides",
 ]

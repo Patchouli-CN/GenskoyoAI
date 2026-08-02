@@ -115,6 +115,49 @@ class MemberStoreTests(unittest.TestCase):
         self.assertEqual(store.get(789), "新")
 
 
+class AdapterConfigDirTests(unittest.TestCase):
+    """config/{adapter_name}/ 私有配置目录约定（框架只给目录，不管格式）。"""
+
+    def test_adapter_config_dir(self):
+        from GensokyoAI.core.config_dirs import adapter_config_dir
+
+        self.assertEqual(adapter_config_dir("nb2", Path("/proj")), Path("/proj/config/nb2"))
+        self.assertEqual(adapter_config_dir("cli", Path("/proj")), Path("/proj/config/cli"))
+
+    def test_resolve_env_file_prefers_private_dir(self):
+        from GensokyoAI.backends.nb2.config import resolve_env_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / ".env").write_text("A=1", encoding="utf-8")
+            # 只有根 .env：兜底 + 标记
+            env_file, is_fallback = resolve_env_file(root)
+            self.assertEqual(env_file, root / ".env")
+            self.assertTrue(is_fallback)
+            # 私有目录存在后：优先私有、不兜底
+            private = root / "config" / "nb2"
+            private.mkdir(parents=True)
+            (private / ".env").write_text("A=2", encoding="utf-8")
+            env_file, is_fallback = resolve_env_file(root)
+            self.assertEqual(env_file, private / ".env")
+            self.assertFalse(is_fallback)
+
+    def test_resolve_env_file_none_when_absent(self):
+        from GensokyoAI.backends.nb2.config import resolve_env_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_file, is_fallback = resolve_env_file(Path(tmpdir))
+            self.assertIsNone(env_file)
+            self.assertFalse(is_fallback)
+
+    def test_adapter_explicit_env_file_passthrough(self):
+        from GensokyoAI.backends.nb2.adapter import Nonebot2Adapter
+
+        adapter = Nonebot2Adapter(env_file="custom.env")
+        self.assertEqual(adapter._env_file, Path("custom.env"))
+        self.assertIsNone(Nonebot2Adapter()._env_file)  # 默认走 resolve_env_file 约定
+
+
 class Nb2ConfigTests(unittest.TestCase):
     def test_defaults(self):
         config = Nb2Config.from_env({}.get)

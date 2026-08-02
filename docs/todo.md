@@ -16,6 +16,28 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.54 config/{adapter}/ 私有配置目录约定（2026-08-02，用户定稿）
+
+- 设计（用户两轮纠偏后定稿）：`config/{adapter_name}/` 只是各适配器的
+  **私有配置目录**——格式（env/yaml/json/toml）与加载器完全归适配器
+  自己（有自有加载器框架让渡），框架只做路径约定、零格式耦合。
+  （第一版我曾提议框架统一 yaml schema，被用户点破「那还是耦合」。）
+- **框架侧**：`core/config_dirs.py` 一行 helper `adapter_config_dir`
+  （经 core/config.py 导出），职责到此为止。
+- **nb2 侧**：`resolve_env_file`（config/nb2/.env 优先、根 .env 兜底并
+  打迁移提示）；adapter.start 按解析结果 `load_dotenv` +
+  `nonebot.init(_env_file=...)`——**NoneBot 自己的 DRIVER/HOST/PORT/
+  ONEBOT_ACCESS_TOKEN 也住进 config/nb2/.env**，根 .env 彻底退役；
+  显式 env_file 参数向后兼容。`Nb2Config.from_env` 一行未动。
+- gitignore 的 `.env` 规则天然覆盖 config/nb2/.env；模板
+  tmp/nb2.env.example 头部改为「复制到 config/nb2/.env」。
+- 测试：4 例（目录解析/私有优先/兜底标记/缺失 None/显式透传）。
+  增量 71 passed，ruff / pyright 全绿。
+- 用户迁移：把根 `.env` 内容挪进 `config/nb2/.env` 即可（一行 mv）。
+
+建议 commit message（用户已授权直接提交）：
+`feat(config): config/{adapter}/ 私有配置目录约定——框架只给目录不管格式，nb2 配置（含 NoneBot 自身键）迁入 config/nb2/.env，根 .env 兜底带迁移提示`
+
 ## 8.53 watchdog 启动内化：硬编码 launcher 内容 + GSK_NB2_BOT_QQ（2026-08-02，用户点单）
 
 - 用户：main.bat 是自建的别人没有——把内容硬编码进去、QQ 号从配置注入。
