@@ -4,6 +4,7 @@
 
 import asyncio
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -33,6 +34,26 @@ _SHARD_COUNT = 16  # 锁分片数量（2 的幂方便位运算）
 def _get_shard_index(session_id: str) -> int:
     """根据 session_id 计算锁分片索引。"""
     return hash(session_id) % _SHARD_COUNT
+
+
+# 原子替换的瞬态错误重试：Windows 杀毒/索引器常对刚写入的文件抢一锁
+# （WinError 5 拒绝访问 / 32 共享冲突 / 33 锁冲突），偶发毫秒级，重试即愈合
+_REPLACE_MAX_ATTEMPTS = 5
+_REPLACE_RETRY_DELAY_SECONDS = 0.15
+_TRANSIENT_REPLACE_WINERRORS = {5, 32, 33}
+
+
+def _replace_with_retry(tmp_path: Path, path: Path) -> None:
+    """tmp_path.replace(path) 带退避重试（只重试 Windows 瞬态锁错误，其余原样抛出）。"""
+    for attempt in range(_REPLACE_MAX_ATTEMPTS):
+        try:
+            tmp_path.replace(path)
+            return
+        except OSError as error:
+            winerror = getattr(error, "winerror", None)
+            if winerror not in _TRANSIENT_REPLACE_WINERRORS or attempt == _REPLACE_MAX_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
 
 
 class SessionPersistence:
@@ -252,7 +273,7 @@ class SessionPersistence:
                 f.write(json_bytes)
             if backup_existing and path.exists():
                 shutil.copy2(path, self._backup_path(path))
-            tmp_path.replace(path)
+            _replace_with_retry(tmp_path, path)
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
