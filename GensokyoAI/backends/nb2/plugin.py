@@ -15,7 +15,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -42,7 +42,9 @@ from ...core.agent.prompts import (
     build_mute_break_judge_prompt,
     build_mute_forgive_context,
     build_reminder_attention_prompt,
+    build_reminder_cancelled_context,
     build_reminder_clarify_context,
+    build_reminder_none_pending_context,
     build_reminder_preregistered_context,
     build_reminder_trigger_context,
     build_repeat_annoyance_context,
@@ -61,7 +63,6 @@ from .reminders import (
     Reminder,
     ReminderStore,
     local_now,
-    parse_when,
 )
 from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
@@ -105,14 +106,6 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 _EXTRA_CONTEXTS = (
     [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
 )
-# 到点提醒能力提示：工具 schema 在消息墙里存在感太低，模型常注意不到——
-# 用一行上下文明说（约 30 token/轮，换来提醒功能真能用）
-if _config.reminders_enabled:
-    _EXTRA_CONTEXTS.append(
-        "【可用能力】你有 set_reminder 工具：当有人说「提醒我/喊我/到点叫我」"
-        "在什么时间做什么事时（比如「3分钟后叫我」「明天8点喊我」），立刻调用它"
-        "登记提醒——只登记，不用自己掐时间。不要只是口头答应而不调用。"
-    )
 
 # 指令执行器（框架 commands 体系）：本地注册表，解析/权限/执行/日志统一
 _command_executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
@@ -309,24 +302,29 @@ class _ReminderOutcome:
     content: str = ""
 
 
-def _register_reminder(agent_id: str, when: str, content: str, target_name: str) -> _ReminderOutcome:
-    """登记一条到点提醒（set_reminder 工具与 AttentionThings 代办共用）。"""
+def _register_reminder(
+    agent_id: str, due: datetime, content: str, target_name: str
+) -> _ReminderOutcome:
+    """登记一条到点提醒（唯一登记通道：AttentionThings 代办）。
+
+    due 必须是判定 LLM 输出的绝对时间（ISO 8601 解析后的 datetime）——
+    本函数只做范围校验，不做任何形式判断（正则解析已被用户砍掉）。
+    """
     now = local_now()
-    due = parse_when(when, now)
-    if due is None:
-        return _ReminderOutcome(False, "这个时间没看懂……换成「10分钟后」「15:30」「明天 08:00」这种说法再叫我吧。")
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=now.tzinfo)  # 裸 ISO 按本地时区
     if due - now < timedelta(seconds=REMINDER_TICK_SECONDS):
-        return _ReminderOutcome(False, "太近啦，30 秒内的事直接说就行，不用设提醒。")
+        return _ReminderOutcome(False, "太近或已过")
     if due - now > timedelta(days=30):
-        return _ReminderOutcome(False, "超过 30 天的提醒我记不住啦，近一点再叫我。")
+        return _ReminderOutcome(False, "太远（超过 30 天）")
     content_clean = content.strip()[:200]
     if not content_clean:
-        return _ReminderOutcome(False, "提醒的事是空的……要提醒什么呀？")
+        return _ReminderOutcome(False, "提醒的事是空的")
     if _reminders.pending_count(agent_id) >= _config.reminder_max_per_tenant:
-        return _ReminderOutcome(False, f"这里已经攒了 {_config.reminder_max_per_tenant} 条提醒了，先消化一些再加。")
+        return _ReminderOutcome(False, f"这里已经攒了 {_config.reminder_max_per_tenant} 条提醒了")
     target = _targets.get(agent_id)
     if target is None:
-        return _ReminderOutcome(False, "还不知道往哪儿说，先在群里/私聊里聊一句再设提醒吧。")
+        return _ReminderOutcome(False, "投递目标未知")
     kind, target_id = target
     remind_qq, remind_name = _resolve_remind_target(kind, target_id, target_name)
     reminder = Reminder(
@@ -369,28 +367,11 @@ def _resolve_remind_target(kind: str, target_id: int, target_name: str) -> tuple
     return None, name
 
 
-def _build_reminder_tool(agent_id: str) -> Callable[..., Awaitable[str]]:
-    """按租户构造 set_reminder 工具（闭包捕获租户 id，投递目标调用时现查）。"""
-
-    async def set_reminder(when: str, content: str, target_name: str = "") -> str:
-        """设置到点提醒：当有人说「提醒我」「喊我」「到点叫我」（remind me）
-        在什么时间做什么事时调用——比如"10 分钟后提醒我吃饭"、"明天早上 8 点
-        喊栗子起床"。when 是时间：相对（"10分钟后"、"2小时后"）、时刻
-        （"15:30"、"明天 08:00"）或日期时间（"2026-08-03 15:30"）；content 是
-        要提醒的事（一两句话说清）；target_name 是要提醒的群友昵称（消息里
-        【】中的名字），默认当前说话人。到点你会收到提示，用自己的口吻把提醒
-        说出来。你只负责登记，不用自己掐时间。"""
-        outcome = _register_reminder(agent_id, when, content, target_name)
-        return outcome.message
-
-    return set_reminder
-
-
 # ==================== 注意力事务（AttentionThings） ====================
 
 
 class _ReminderAttentionKind:
-    """AttentionThings 的第一个种类：到点提醒请求判定。
+    """AttentionThings 的第一个种类：到点提醒（请求/取消）判定。
 
     预筛恒真（用户 2026-08-02 定稿：「别代码里判断了，多个 LLM 自主判断
     又不会死」——代码关键词预筛会拦掉花式说法，全部交给 LLM 判定；
@@ -403,7 +384,7 @@ class _ReminderAttentionKind:
         return True
 
     def judge_prompt(self, text: str) -> str:
-        return build_reminder_attention_prompt(text)
+        return build_reminder_attention_prompt(text, local_now())
 
     def parse(self, raw: str) -> dict[str, Any] | None:
         try:
@@ -411,28 +392,46 @@ class _ReminderAttentionKind:
             data = json.loads(match.group(0) if match else raw)
         except Exception:
             return None
-        if not isinstance(data, dict) or data.get("is_reminder") is not True:
+        if not isinstance(data, dict):
             return None
-        when = str(data.get("when") or "").strip()
+        intent = data.get("intent")
+        if intent == "cancel":
+            return {"intent": "cancel", "scope": data.get("scope") or "latest"}
+        if intent != "reminder":
+            return None
         content = str(data.get("content") or "").strip()
-        if not when or not content:
+        if not content:
             return None
+        due: datetime | None = None
+        due_at = str(data.get("due_at") or "").strip()
+        if due_at:
+            try:
+                due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+            except ValueError:
+                due = None
         return {
-            "when": when,
+            "intent": "reminder",
+            "due": due,
             "content": content,
             "target_name": str(data.get("target_name") or "").strip(),
         }
 
 
 async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
-    """把 AttentionVerdict 处置为注入上下文（代办式：直接登记，不求模型调工具）。"""
+    """把 AttentionVerdict 处置为注入上下文（代办式：直接登记/取消，不求模型调工具）。"""
     if verdict.kind != "reminder":
         return None
+    intent = verdict.data.get("intent")
+    if intent == "cancel":
+        return await _dispatch_cancel(verdict, agent_id)
+    if intent != "reminder":
+        return None
+    due = verdict.data.get("due")
+    if due is None:
+        logger.info(f"[nb2] {agent_id} 注意力事务：提醒时间待确认")
+        return build_reminder_clarify_context("", verdict.data["content"])
     outcome = _register_reminder(
-        agent_id,
-        verdict.data["when"],
-        verdict.data["content"],
-        verdict.data.get("target_name", ""),
+        agent_id, due, verdict.data["content"], verdict.data.get("target_name", "")
     )
     if outcome.ok:
         logger.info(
@@ -442,11 +441,24 @@ async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
         return build_reminder_preregistered_context(
             outcome.due_text, outcome.remind_name, outcome.content
         )
-    # 判定为提醒请求但时间看不懂：让角色用口吻问清，而不是干瞪眼装没听见
-    logger.info(
-        f"[nb2] {agent_id} 注意力事务：提醒时间待确认（{verdict.data['when']!r}）"
-    )
-    return build_reminder_clarify_context(verdict.data["when"], verdict.data["content"])
+    # 时间太近/太远：让角色用口吻问清，而不是干瞪眼装没听见
+    logger.info(f"[nb2] {agent_id} 注意力事务：提醒时间待确认（{outcome.message}）")
+    return build_reminder_clarify_context(outcome.message, verdict.data["content"])
+
+
+async def _dispatch_cancel(verdict: Any, agent_id: str) -> str:
+    """取消代办：「不要提醒了」类请求命中时执行（用户点单的取消机制）。"""
+    if verdict.data.get("scope") == "all":
+        items = _reminders.cancel_all(agent_id)
+    else:
+        latest = _reminders.cancel_latest(agent_id)
+        items = [latest] if latest else []
+    if not items:
+        logger.info(f"[nb2] {agent_id} 注意力事务：取消命中但无待办提醒")
+        return build_reminder_none_pending_context()
+    contents = [item.content for item in items]
+    logger.info(f"[nb2] {agent_id} 注意力事务已代办取消 {len(items)} 条: {contents}")
+    return build_reminder_cancelled_context(contents)
 
 
 async def _inspect_attention(text: str, agent_id: str) -> list[str]:
@@ -788,21 +800,6 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
         except Exception as error:
             # 订阅失败只影响主动投递，不阻塞正常问答
             logger.warning(f"[nb2] 订阅主动消息事件失败（{agent_id}），主动投递暂不可用: {error}")
-    if _config.reminders_enabled:
-        try:
-            # 到点提醒工具按租户注入（闭包捕获租户 id；租户重建时 ensure 会再注册）
-            registered = await host.register_tenant_tool(
-                agent_id,
-                _build_reminder_tool(agent_id),
-                name="set_reminder",
-                parallel_safe=False,
-            )
-            if registered:
-                logger.debug(f"[nb2] 提醒工具已注入（{agent_id}）")
-            else:
-                logger.warning(f"[nb2] 提醒工具注入失败（{agent_id} 未装配）")
-        except Exception as error:
-            logger.warning(f"[nb2] 注册提醒工具失败（{agent_id}）: {error}")
     _initialized.add(agent_id)
     return session_id, revision
 

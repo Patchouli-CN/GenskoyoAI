@@ -1,22 +1,18 @@
 """到点提醒：存储与调度（nb2 适配器）。
 
-角色经 `set_reminder` 工具接活（"10 分钟后提醒我开会"），提醒落盘持久化
-（nb2_data/reminders.json，重启不丢）；插件的 tick 循环每 30 秒扫一次到点
-项，让角色用自己的口吻生成提醒文本并 @ 对方投递（见 plugin._fire_reminder）。
+登记通道只有一条：AttentionThings 注意力管线（判定全权交给 LLM，
+ThinkEngine 范式——本模块内**不允许出现任何形式判断代码**，时间一律
+以判定输出的 ISO 8601 绝对时间入库）。到点由 tick 循环让角色用自己的
+口吻生成提醒文本并 @ 对方投递（见 plugin._fire_reminder）。
 
 时间一律用时区感知的本地 datetime（项目约定：时区感知时间；提醒是「墙上
 时钟」语义，本地时区才是人话），落盘存 ISO 8601 字符串（可读、可手改）。
-
-时间解析 `parse_when` 支持：相对（"30秒后/10分钟后/2小时后/1天后"）、
-当天/明天/后天时刻（"15:30"、"明天 08:00"）、绝对日期时间
-（"2026-08-03 15:30"）——LLM 按工具 docstring 的格式产出，解析是确定性的。
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -147,6 +143,48 @@ class ReminderStore:
         with self._lock:
             return sum(1 for entry in self._entries.values() if entry["agent_id"] == agent_id)
 
+    def pending(self, agent_id: str) -> list[Reminder]:
+        """某租户全部待办提醒（按到点时间升序）。"""
+        with self._lock:
+            items = [
+                Reminder.from_dict(entry)
+                for entry in self._entries.values()
+                if entry["agent_id"] == agent_id
+            ]
+        return sorted(items, key=lambda item: item.due)
+
+    def cancel_latest(self, agent_id: str) -> Reminder | None:
+        """取消某租户最近创建的一条待办提醒（用户定稿的取消机制）。"""
+        with self._lock:
+            candidates = [
+                entry
+                for entry in self._entries.values()
+                if entry["agent_id"] == agent_id
+            ]
+            if not candidates:
+                return None
+            latest = max(candidates, key=lambda entry: entry["created_at"])
+            reminder = Reminder.from_dict(latest)
+            del self._entries[reminder.id]
+            self._save_locked()
+        logger.info(f"[nb2] {agent_id} 提醒已取消: {reminder.content[:30]}")
+        return reminder
+
+    def cancel_all(self, agent_id: str) -> list[Reminder]:
+        """取消某租户全部待办提醒，返回被取消的列表。"""
+        with self._lock:
+            ids = [
+                key
+                for key, entry in self._entries.items()
+                if entry["agent_id"] == agent_id
+            ]
+            items = [Reminder.from_dict(self._entries.pop(key)) for key in ids]
+            if items:
+                self._save_locked()
+        if items:
+            logger.info(f"[nb2] {agent_id} 全部 {len(items)} 条提醒已取消")
+        return items
+
     def _load(self) -> None:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -179,59 +217,3 @@ class ReminderStore:
         )
         os.replace(tmp_path, self._path)
 
-
-# ==================== 时间解析 ====================
-
-_RELATIVE_PATTERN = re.compile(
-    r"^\s*(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>秒|分钟|分|小时|天)\s*(?:后|之后)?\s*$"
-)
-_CLOCK_PATTERN = re.compile(r"^(?P<hour>\d{1,2})[:：](?P<minute>\d{1,2})(?:[:：]\d{1,2})?\s*$")
-_DATE_TIME_PATTERN = re.compile(
-    r"^\s*(?P<year>\d{4})[-/年](?P<month>\d{1,2})[-/月](?P<day>\d{1,2})[日号]?\s+"
-    r"(?P<hour>\d{1,2})[:：](?P<minute>\d{1,2})"
-)
-_DAY_OFFSETS = {"今天": 0, "明天": 1, "明日": 1, "后天": 2}
-_UNIT_SECONDS = {"秒": 1, "分钟": 60, "分": 60, "小时": 3600, "天": 86400}
-
-
-def parse_when(when: str, now: datetime) -> datetime | None:
-    """把 LLM 产出的时间描述解析为时区感知 datetime；无法解析返回 None。
-
-    - 相对："30秒后" / "10分钟后" / "2小时后" / "1天后"（支持小数）；
-    - 时刻："15:30"（今天，已过则明天）、"明天 08:00"、"后天 7:30"；
-    - 绝对："2026-08-03 15:30"（按 now 的时区）。
-    """
-    text = when.strip()
-    if not text:
-        return None
-    if match := _RELATIVE_PATTERN.match(text):
-        seconds = float(match.group("num")) * _UNIT_SECONDS[match.group("unit")]
-        return now + timedelta(seconds=seconds)
-    if match := _DATE_TIME_PATTERN.match(text):
-        try:
-            return datetime(
-                int(match.group("year")), int(match.group("month")),
-                int(match.group("day")), int(match.group("hour")),
-                int(match.group("minute")), tzinfo=now.tzinfo,
-            )
-        except ValueError:
-            return None
-    day_offset = 0
-    for word, offset in _DAY_OFFSETS.items():
-        if text.startswith(word):
-            day_offset = offset
-            text = text[len(word):].strip()
-            break
-    if match := _CLOCK_PATTERN.match(text):
-        try:
-            candidate = now.replace(
-                hour=int(match.group("hour")), minute=int(match.group("minute")),
-                second=0, microsecond=0,
-            )
-        except ValueError:  # "25:30" / "12:70" 这类非法时刻
-            return None
-        candidate += timedelta(days=day_offset)
-        if candidate <= now:  # 时刻已过 → 顺延一天
-            candidate += timedelta(days=1)
-        return candidate
-    return None

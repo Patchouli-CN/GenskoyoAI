@@ -16,6 +16,28 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.61 提醒全量重写：判定全权 LLM（ThinkEngine 范式）+ 取消机制（2026-08-02，用户砍令）
+
+- 起因（用户血压时刻）：parse_when 只认阿拉伯数字，「一分钟后」「十点钟」
+  等中文数字全挂——用户：「你这个 reminders 仍然全用 re，都说了全权交给
+  注意力类了……把这功能给我砍掉，全部重写，全用 AttentionThings 类来记，
+  和 ThinkEngine 如出一辙，就是为了解决 tool call 调用问题，全靠主模型会
+  受到上下文注意力的影响」。
+- **全砍**：`parse_when` 及全部时间正则（含我刚补的中文数字补丁——方向
+  就错了）、`set_reminder` 工具（_build_reminder_tool + 按租户注入 +
+  能力提示行 + register_tenant_tool 调用）。
+- **新形态**：判定 prompt 给当前时间，LLM 输出三态意图——`reminder`
+  （附 **ISO 8601 绝对到点时间**）/ `cancel`（用户补刀「不要提醒了」，
+  附 all/latest 范围）/ `none`；代码只做 ISO 解析与范围校验（30s~30d），
+  **判定层零代码判断**。时间太远/太近/缺失 → 「待确认」反问。
+- **取消机制**：ReminderStore 新增 pending / cancel_latest / cancel_all；
+  取消同样走代办 + 口吻转告（含「没有待办」如实回答）。
+- 测试重写：26 例（存储 CRUD/取消/持久化、三态判定解析、代办登记/取消/
+  待确认、投递全谱）。全套 122 passed，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`feat(attention): 提醒全量重写——判定全权 LLM（三态 intent + ISO 绝对时间，砍 parse_when 正则与 set_reminder 工具），新增取消机制（cancel_latest/cancel_all 代办）`
+
 ## 8.60 注意力判定去代码化：全量 LLM 判定 + 时间待确认补洞（2026-08-02，用户定稿）
 
 - 起因：22:25 代办已成功一次，但 22:34 花式说法（「两分钟后…」截断形态）

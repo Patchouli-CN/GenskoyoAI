@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 
 def build_roleplay_system_prompt(character_name: str, base_prompt: str) -> str:
     """在角色 system_prompt 后追加框架级角色扮演约束，确保严格以角色视角回应。"""
@@ -543,23 +545,31 @@ def build_reminder_trigger_context(target_label: str, content: str) -> str:
     )
 
 
-def build_reminder_attention_prompt(text: str) -> str:
+def build_reminder_attention_prompt(text: str, now: datetime) -> str:
     """提醒意图判定（AttentionThings reminder 种类的 judge_prompt）。
 
-    输入一段 QQ 消息文本（可能多行、每行开头【昵称】是不同说话人），
-    让模型只输出 JSON 判定：是否在**请求设置提醒**。宁可把像请求的判成
-    请求，也不要漏掉（判定原则：像就抓，别保守）。
+    判定全权交给 LLM（ThinkEngine 范式：判定不受主模型上下文注意力影响）：
+    给出当前时间，让模型输出三态意图（请求提醒 / 取消提醒 / 无），请求时
+    直接输出**绝对到点时间**（ISO 8601）。代码只做解析与范围校验，不做
+    任何形式判断（2026-08-02 用户砍掉正则解析定稿）。
     """
     return (
-        "判断下面的聊天消息里有没有人**请求设置到点提醒**（让别人在某时间提醒做某事）。\n"
-        "判定原则：**看起来像请求就抓住，不要漏**——口语、缩写、半截话都算\n"
-        "（如「3分钟后叫我」「明天8点」「10点半叫我起床」「两分钟后提醒我」）。\n"
-        "只有明确不是请求的才放行：询问已有提醒、聊「提醒」这个话题、明显玩笑。\n"
+        f"现在是 {now.strftime('%Y-%m-%d %H:%M:%S %A')}（本地时间）。\n"
+        "判断下面的聊天消息的意图（三选一）：\n"
+        "1. \"reminder\"——有人**请求设置到点提醒**（让别人在某时间提醒做某事；\n"
+        "   口语、缩写、半截话、中文数字都算，如「3分钟后叫我」「一分钟后提醒我」\n"
+        "   「明天8点」「十点半叫我起床」；看起来像就抓住，不要漏）；\n"
+        "2. \"cancel\"——有人**取消之前请求的提醒**（如「不要提醒了」「取消刚才的」\n"
+        "   「别提醒我了」）；\n"
+        "3. \"none\"——都不是（询问已有提醒、聊「提醒」话题、明显玩笑、普通聊天）。\n"
         "消息可能有多行，每行开头的【昵称】是说话人。\n"
         "只输出 JSON，不要输出任何其他内容：\n"
-        '{"is_reminder": true 或 false, "when": "请求中的时间原话（如 10分钟后/明天8点/15:30）", '
-        '"content": "要提醒的事（一两句话）", "target_name": "要提醒的人（昵称，默认当前说话人留空）"}\n'
-        "确定不是请求时：{\"is_reminder\": false}\n\n"
+        '{"intent": "reminder" 或 "cancel" 或 "none", '
+        '"due_at": "intent 为 reminder 时按当前时间换算的绝对到点时间'
+        '（ISO 8601，没有合适的具体时间就留空）", '
+        '"content": "要提醒的事（一两句话）", '
+        '"target_name": "要提醒的人（昵称，默认当前说话人留空）", '
+        '"scope": "intent 为 cancel 时：all（全部取消）或 latest（取消最近一条）"}\n\n'
         f"消息：\n{text}"
     )
 
@@ -567,13 +577,31 @@ def build_reminder_attention_prompt(text: str) -> str:
 def build_reminder_clarify_context(when: str, content: str) -> str:
     """提醒时间待确认（解析方：AttentionThings 判定命中但时间解析失败时注入）。
 
-    判定说是提醒请求但 parse_when 看不懂时间——让角色用口吻问清，
+    判定说是提醒请求但 due_at 缺失/超范围——让角色用口吻问清，
     而不是干瞪眼装没听见（「口头答应但没下文」的最后一块洞）。
     """
     return (
-        f"【待确认】对方似乎想要提醒（关于「{content}」），但时间说法「{when}」没看懂。"
-        "请用自己的口吻自然地问清具体时间（一两句话，比如「几分钟后还是几点呀」），"
-        "不要直接说「我会提醒你」却没有下文。"
+        f"【待确认】对方似乎想要提醒（关于「{content}」），但时间"
+        + (f"「{when}」" if when else "") +
+        "没看懂或太远/太近。请用自己的口吻自然地问清具体时间（一两句话，"
+        "比如「几分钟后还是几点呀」），不要直接说「我会提醒你」却没有下文。"
+    )
+
+
+def build_reminder_cancelled_context(items: list[str]) -> str:
+    """提醒已代办取消（解析方：AttentionThings 取消处置后随本轮注入）。"""
+    lines = "、".join(f"「{item}」" for item in items)
+    return (
+        f"【已代办】对方要取消的提醒**已经取消了**：{lines}。"
+        "请用自己的口吻告诉对方已取消（一两句话），不要再提及它们会到点提醒。"
+    )
+
+
+def build_reminder_none_pending_context() -> str:
+    """无可取消的待办提醒（解析方：取消请求命中但存储为空时注入）。"""
+    return (
+        "【已代办】对方想取消提醒，但目前**没有登记着的待办提醒**。"
+        "请用自己的口吻如实告诉对方（一两句话，别编造曾经有过的提醒）。"
     )
 
 

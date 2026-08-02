@@ -1,8 +1,8 @@
-"""到点提醒（backends/nb2/reminders + plugin 提醒链路）定向测试
+"""到点提醒（backends/nb2/reminders 存储 + plugin 注意力代办链路）定向测试
 
-parse_when / ReminderStore 为纯逻辑直测；工具闭包与投递路径经 nonebot.init
-后导入 plugin、以 mock 替换模块状态（_reminders/_targets/_member_names/
-get_bots/_generate_for_tenant）验证。
+判定全权归 LLM（AttentionThings）；本文件覆盖：ReminderStore CRUD/取消/
+持久化、提醒种类的判定解析（intent 三态 + ISO due_at）、代办登记/取消/
+待确认处置、到点投递。plugin 经 nonebot.init 导入，模块状态以 mock 替换。
 """
 
 import tempfile
@@ -21,47 +21,12 @@ from GensokyoAI.backends.nb2.reminders import (  # noqa: E402
     Reminder,
     ReminderStore,
     local_now,
-    parse_when,
 )
 from GensokyoAI.core.agent.attention import AttentionVerdict  # noqa: E402
 
 _TZ8 = timezone(timedelta(hours=8))
-_NOW = datetime(2026, 8, 2, 10, 0, 0, tzinfo=_TZ8)  # 周日 10:00
-
-
-class ParseWhenTests(unittest.TestCase):
-    def test_relative_units(self):
-        self.assertEqual(parse_when("30秒后", _NOW), _NOW + timedelta(seconds=30))
-        self.assertEqual(parse_when("10分钟后", _NOW), _NOW + timedelta(minutes=10))
-        self.assertEqual(parse_when("2小时后", _NOW), _NOW + timedelta(hours=2))
-        self.assertEqual(parse_when("1天后", _NOW), _NOW + timedelta(days=1))
-        self.assertEqual(parse_when("1.5小时", _NOW), _NOW + timedelta(hours=1.5))
-
-    def test_clock_today_and_rollover(self):
-        self.assertEqual(
-            parse_when("15:30", _NOW), datetime(2026, 8, 2, 15, 30, tzinfo=_TZ8)
-        )
-        # 时刻已过 → 顺延到明天
-        self.assertEqual(
-            parse_when("08:00", _NOW), datetime(2026, 8, 3, 8, 0, tzinfo=_TZ8)
-        )
-
-    def test_day_prefix(self):
-        self.assertEqual(
-            parse_when("明天 08:00", _NOW), datetime(2026, 8, 3, 8, 0, tzinfo=_TZ8)
-        )
-        self.assertEqual(
-            parse_when("后天 7:30", _NOW), datetime(2026, 8, 4, 7, 30, tzinfo=_TZ8)
-        )
-
-    def test_absolute_datetime(self):
-        self.assertEqual(
-            parse_when("2026-08-03 15:30", _NOW), datetime(2026, 8, 3, 15, 30, tzinfo=_TZ8)
-        )
-
-    def test_invalid_returns_none(self):
-        for bad in ("", "随便什么时候", "25:30", "12:70", "2026-13-01 10:00"):
-            self.assertIsNone(parse_when(bad, _NOW), bad)
+_DUE_SOON = local_now() + timedelta(minutes=10)
+_DUE_SOON_ISO = _DUE_SOON.isoformat()
 
 
 def _make_reminder(store_due: datetime, **overrides) -> Reminder:
@@ -123,56 +88,38 @@ class ReminderStoreTests(unittest.TestCase):
             self.assertEqual(store.due(local_now()), [])
             self.assertEqual(store.pending_count("qq-group-123"), 0)
 
+    def test_pending_and_cancel_latest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ReminderStore(Path(tmpdir) / "r.json")
+            now = local_now()
+            store.add(_make_reminder(now + timedelta(hours=1), id="old",
+                                       created_at=now - timedelta(hours=1)))
+            store.add(_make_reminder(now + timedelta(hours=2), id="new",
+                                       created_at=now))
+            self.assertEqual([item.id for item in store.pending("qq-group-123")],
+                             ["old", "new"])  # due 升序
+            # 取消最近创建的（不是最早到点的）
+            cancelled = store.cancel_latest("qq-group-123")
+            self.assertEqual(cancelled.id, "new")
+            self.assertEqual(store.pending_count("qq-group-123"), 1)
+            self.assertIsNone(store.cancel_latest("qq-user-999"))  # 无待办返回 None
 
-class ReminderToolTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._store = ReminderStore(Path(self._tmpdir.name) / "r.json")
-        self._patches = [
-            patch.object(plugin, "_reminders", self._store),
-            patch.object(plugin, "_targets", {"qq-group-123": ("group", 123)}),
-            patch.object(plugin, "_member_names", {(123, 456): "栗子"}),
-        ]
-        for patcher in self._patches:
-            patcher.start()
-
-    def tearDown(self):
-        for patcher in self._patches:
-            patcher.stop()
-        self._tmpdir.cleanup()
-
-    async def test_set_reminder_success(self):
-        tool = plugin._build_reminder_tool("qq-group-123")
-        result = await tool("10分钟后", "吃饭", "栗子")
-        self.assertIn("记下啦", result)
-        self.assertEqual(self._store.pending_count("qq-group-123"), 1)
-        reminder = self._store.due(local_now() + timedelta(minutes=11))[0]
-        self.assertEqual(reminder.remind_qq, 456)
-        self.assertEqual(reminder.content, "吃饭")
-        self.assertEqual(reminder.kind, "group")
-
-    async def test_set_reminder_bad_time(self):
-        tool = plugin._build_reminder_tool("qq-group-123")
-        self.assertIn("没看懂", await tool("随便", "吃饭"))
-        self.assertIn("太近", await tool("5秒后", "吃饭"))
-        self.assertEqual(self._store.pending_count("qq-group-123"), 0)
-
-    async def test_set_reminder_without_target(self):
-        with patch.object(plugin, "_targets", {}):
-            tool = plugin._build_reminder_tool("qq-group-123")
-            self.assertIn("还不知道往哪儿说", await tool("10分钟后", "吃饭"))
-
-    async def test_unknown_name_falls_back_to_no_at(self):
-        tool = plugin._build_reminder_tool("qq-group-123")
-        result = await tool("10分钟后", "开会", "不存在的人")
-        self.assertIn("记下啦", result)
-        reminder = self._store.due(local_now() + timedelta(minutes=11))[0]
-        self.assertIsNone(reminder.remind_qq)
-        self.assertEqual(reminder.remind_name, "不存在的人")
+    def test_cancel_all(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ReminderStore(Path(tmpdir) / "r.json")
+            store.add(_make_reminder(local_now() + timedelta(hours=1), id="a"))
+            store.add(_make_reminder(local_now() + timedelta(hours=2), id="b"))
+            store.add(_make_reminder(local_now() + timedelta(hours=3), id="c",
+                                     agent_id="qq-user-999", key="user:999",
+                                     kind="user", target_id=999))
+            items = store.cancel_all("qq-group-123")
+            self.assertEqual({item.id for item in items}, {"a", "b"})
+            self.assertEqual(store.pending_count("qq-group-123"), 0)
+            self.assertEqual(store.pending_count("qq-user-999"), 1)  # 别家不动
 
 
-class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
-    """AttentionThings reminder 种类 + 代办处置（不依赖主模型调工具）。"""
+class _AttentionCase(unittest.IsolatedAsyncioTestCase):
+    """提醒种类/代办共用的模块状态补丁（tmp 存储 + 群目标 + 名片缓存）。"""
 
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -190,28 +137,62 @@ class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
             patcher.stop()
         self._tmpdir.cleanup()
 
-    def test_candidate_prefilter(self):
+
+class ReminderAttentionParseTests(_AttentionCase):
+    """判定解析：intent 三态 + ISO due_at（判定全权 LLM，代码只解析）。"""
+
+    def test_candidate_always_true(self):
         kind = plugin._ReminderAttentionKind()
         # 用户定稿「别代码里判断」：预筛恒真，全部交给 LLM 判定
         self.assertTrue(kind.candidate("3分钟后叫我一下"))
         self.assertTrue(kind.candidate("今天天气怎么样"))
 
-    def test_parse_valid_and_invalid(self):
+    def test_parse_reminder_intent_with_iso_due(self):
         kind = plugin._ReminderAttentionKind()
         data = kind.parse(
-            '{"is_reminder": true, "when": "1分钟后", "content": "喊一下", "target_name": "栗子"}'
+            f'{{"intent": "reminder", "due_at": "{_DUE_SOON_ISO}", '
+            '"content": "喊一下", "target_name": "栗子"}'
+        )
+        self.assertEqual(data["intent"], "reminder")
+        self.assertEqual(data["content"], "喊一下")
+        self.assertEqual(data["target_name"], "栗子")
+        self.assertIsNotNone(data["due"])
+
+    def test_parse_reminder_without_due_or_bad_iso(self):
+        kind = plugin._ReminderAttentionKind()
+        data = kind.parse('{"intent": "reminder", "due_at": "", "content": "喊一下"}')
+        self.assertIsNone(data["due"])  # 待确认路径
+        data = kind.parse('{"intent": "reminder", "due_at": "不是日期", "content": "x"}')
+        self.assertIsNone(data["due"])
+
+    def test_parse_cancel_intent(self):
+        kind = plugin._ReminderAttentionKind()
+        self.assertEqual(
+            kind.parse('{"intent": "cancel", "scope": "all"}'),
+            {"intent": "cancel", "scope": "all"},
         )
         self.assertEqual(
-            data, {"when": "1分钟后", "content": "喊一下", "target_name": "栗子"}
+            kind.parse('{"intent": "cancel"}'),
+            {"intent": "cancel", "scope": "latest"},  # 默认最近一条
         )
-        self.assertIsNone(kind.parse('{"is_reminder": false}'))
-        self.assertIsNone(kind.parse("不是 JSON"))
-        self.assertIsNone(kind.parse('{"is_reminder": true, "when": "", "content": "x"}'))
 
+    def test_parse_none_and_garbage(self):
+        kind = plugin._ReminderAttentionKind()
+        self.assertIsNone(kind.parse('{"intent": "none"}'))
+        self.assertIsNone(kind.parse("不是 JSON"))
+        self.assertIsNone(kind.parse('{"intent": "reminder", "due_at": "", "content": ""}'))
+
+
+class ReminderAttentionDispatchTests(_AttentionCase):
     async def test_dispatch_registers_and_returns_directive(self):
         verdict = AttentionVerdict(
             kind="reminder",
-            data={"when": "10分钟后", "content": "吃饭", "target_name": "栗子"},
+            data={
+                "intent": "reminder",
+                "due": _DUE_SOON,
+                "content": "吃饭",
+                "target_name": "栗子",
+            },
         )
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
         self.assertIsNotNone(note)
@@ -222,21 +203,43 @@ class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reminder.remind_qq, 456)
         self.assertEqual(reminder.content, "吃饭")
 
-    async def test_dispatch_bad_time_returns_clarify_note(self):
+    async def test_dispatch_no_due_returns_clarify_note(self):
         verdict = AttentionVerdict(
-            kind="reminder", data={"when": "看不懂", "content": "x", "target_name": ""}
+            kind="reminder",
+            data={"intent": "reminder", "due": None, "content": "那个事", "target_name": ""},
         )
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
-        # 判定为提醒但时间看不懂：注入「问清时间」上下文，而不是干瞪眼
         self.assertIsNotNone(note)
         self.assertIn("待确认", note)
         self.assertEqual(self._store.pending_count("qq-group-123"), 0)
 
+    async def test_dispatch_cancel_latest(self):
+        self._store.add(_make_reminder(local_now() + timedelta(hours=1)))
+        verdict = AttentionVerdict(
+            kind="reminder", data={"intent": "cancel", "scope": "latest"}
+        )
+        note = await plugin._dispatch_attention(verdict, "qq-group-123")
+        self.assertIn("已代办", note)
+        self.assertIn("取消", note)
+        self.assertEqual(self._store.pending_count("qq-group-123"), 0)
 
-class ReminderDiscoverabilityTests(unittest.TestCase):
-    def test_capability_hint_in_extra_contexts(self):
-        # 工具 schema 在消息墙里存在感太低：能力提示行必须随每轮注入
-        self.assertTrue(any("set_reminder" in ctx for ctx in plugin._EXTRA_CONTEXTS))
+    async def test_dispatch_cancel_all(self):
+        store = self._store
+        store.add(_make_reminder(local_now() + timedelta(hours=1), id="a"))
+        store.add(_make_reminder(local_now() + timedelta(hours=2), id="b"))
+        verdict = AttentionVerdict(
+            kind="reminder", data={"intent": "cancel", "scope": "all"}
+        )
+        note = await plugin._dispatch_attention(verdict, "qq-group-123")
+        self.assertIn("取消", note)
+        self.assertEqual(store.pending_count("qq-group-123"), 0)
+
+    async def test_dispatch_cancel_with_nothing_pending(self):
+        verdict = AttentionVerdict(
+            kind="reminder", data={"intent": "cancel", "scope": "all"}
+        )
+        note = await plugin._dispatch_attention(verdict, "qq-group-123")
+        self.assertIn("没有登记", note)
 
 
 class FireReminderTests(unittest.IsolatedAsyncioTestCase):
