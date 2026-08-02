@@ -16,6 +16,41 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.49 CODE_INF 首轮四连修 + 提醒可发现性（2026-08-02，用户点单「一个个干掉」）
+
+- 背景：多 agent 全项目大调查产出 `ignore/CODE_INF.md`（88 条可疑点），
+  按优先级修掉 4 条（每条独立 commit）：
+- **06#1 工具注册表全局泄漏**：`registry.register()` 曾先写进程级全局表
+  再回取——适配器/租户闭包（set_reminder 捕获 agent_id）被之后新建
+  ToolRegistry 的 _load_builtin 吸进无关 Agent，同名互踩。修法：base.py
+  抽出纯函数 `build_tool_definition`（schema 生成单源），register 改实例级
+  构建，仅 @tool 装饰过的同一函数对象才复用全局定义。回归测试
+  test_tool_registry_isolation.py 3 例（`e16cea2`）。
+- **08#3 僵尸提醒堵配额**：重试耗尽的提醒既不投递也不删除，永久计入
+  pending_count 可堵满租户配额。修法：`ReminderStore.due()` 顺带清除并
+  记日志（`31c8bb1`）。
+- **02#10 印象任务弱引用**：`create_task(_learn_impression)` 未持强引用，
+  可被 GC 提前回收、成员在 inflight 集合永久占位。修法：模块级
+  `_background_tasks` 强引用集 + done_callback 自清（`bacc0ad`，顺带
+  带上此前未提交的注册结果日志）。
+- **07#1 episodic 旧键崩溃**：§5.6 删情景记忆后校验层只警告、加载层未
+  pop，`MemoryConfig(**data)` 裸 TypeError。修法：loader 按
+  `_REMOVED_MEMORY_EPISODIC_KEYS` 丢弃（与 initiative_timer 同一招），
+  回归测试 1 例（`1570a11`）。
+- **提醒可发现性**（15:39 实测模型不调 set_reminder 的收尾）：工具
+  docstring 加触发词（「提醒我/喊我/到点叫我/remind me」「只登记不掐
+  时间」）；`_EXTRA_CONTEXTS` 追加能力提示行（约 30 token/轮，提醒启用
+  时）；register_tenant_tool 结果有 debug/warning 日志（此前静默）。
+  测试 1 例断言提示行注入。
+- 另：§8.47 元租户轻量化经实机复现确认生效（agent.init 直调
+  enable_think_engine=False → think_engine=None），用户 15:39 日志里的
+  nb2-meta 思考引擎是改动前启动的旧进程。
+- 增量验证：各轮定向测试全绿（tools 46 / reminders 17 / nb2 85 / config
+  55 / 汇总 89 passed），ruff / pyright 全绿。
+
+建议 commit message（本条随末个 fix 一并入库）：
+`feat(nb2): 提醒可发现性——set_reminder docstring 加触发词、每轮注入能力提示行、注册结果日志化`
+
 ## 8.48 HealthCenter 健康总监控 + 砍动态阈值判定（计费保留）+ getattr 清理（2026-08-02，用户定稿）
 
 - 起因（用户三条）：①动态阈值「每次重启刷新就又变健康，判定错误没意义」

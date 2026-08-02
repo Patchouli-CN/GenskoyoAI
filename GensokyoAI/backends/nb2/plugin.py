@@ -98,6 +98,13 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 _EXTRA_CONTEXTS = (
     [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
 )
+# 到点提醒能力提示：工具 schema 在消息墙里存在感太低，模型常注意不到——
+# 用一行上下文明说（约 30 token/轮，换来提醒功能真能用）
+if _config.reminders_enabled:
+    _EXTRA_CONTEXTS.append(
+        "【可用能力】你有 set_reminder 工具：当有人说「提醒我/喊我/到点叫我」"
+        "在什么时间做什么事时，调用它登记提醒（只登记，不用自己掐时间）。"
+    )
 
 # 指令执行器（框架 commands 体系）：本地注册表，解析/权限/执行/日志统一
 _command_executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
@@ -302,12 +309,13 @@ def _build_reminder_tool(agent_id: str) -> Callable[..., Awaitable[str]]:
     """按租户构造 set_reminder 工具（闭包捕获租户 id，投递目标调用时现查）。"""
 
     async def set_reminder(when: str, content: str, target_name: str = "") -> str:
-        """设置到点提醒：当有人希望"过段时间/到某点提醒 XX 做某事"时调用（比如
-        "10 分钟后提醒我吃饭"、"明天早上 8 点喊栗子起床"）。when 是时间：相对
-        （"10分钟后"、"2小时后"）、时刻（"15:30"、"明天 08:00"）或日期时间
-        （"2026-08-03 15:30"）；content 是要提醒的事（一两句话说清）；target_name
-        是要提醒的群友昵称（消息里【】中的名字），默认当前说话人。到点你会收到
-        提示，用自己的口吻把提醒说出来。"""
+        """设置到点提醒：当有人说「提醒我」「喊我」「到点叫我」（remind me）
+        在什么时间做什么事时调用——比如"10 分钟后提醒我吃饭"、"明天早上 8 点
+        喊栗子起床"。when 是时间：相对（"10分钟后"、"2小时后"）、时刻
+        （"15:30"、"明天 08:00"）或日期时间（"2026-08-03 15:30"）；content 是
+        要提醒的事（一两句话说清）；target_name 是要提醒的群友昵称（消息里
+        【】中的名字），默认当前说话人。到点你会收到提示，用自己的口吻把提醒
+        说出来。你只负责登记，不用自己掐时间。"""
         now = local_now()
         due = parse_when(when, now)
         if due is None:

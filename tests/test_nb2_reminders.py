@@ -170,6 +170,12 @@ class ReminderToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reminder.remind_name, "不存在的人")
 
 
+class ReminderDiscoverabilityTests(unittest.TestCase):
+    def test_capability_hint_in_extra_contexts(self):
+        # 工具 schema 在消息墙里存在感太低：能力提示行必须随每轮注入
+        self.assertTrue(any("set_reminder" in ctx for ctx in plugin._EXTRA_CONTEXTS))
+
+
 class FireReminderTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
