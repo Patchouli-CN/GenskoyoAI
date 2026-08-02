@@ -16,6 +16,7 @@ import nonebot
 import uvicorn
 from dotenv import load_dotenv
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
+from nonebot.log import logger_id
 
 from ...runtime.host import RuntimeHost
 from ...utils.logger import logger, setup_logging
@@ -53,15 +54,15 @@ class Nonebot2Adapter:
         environment = os.environ.get("ENVIRONMENT")
         if environment:
             load_dotenv(env_file.with_name(f"{env_file.name}.{environment}"), override=True)
-        # nonebot 初始化日志只有前几行受其 log_level 过滤——压到 CRITICAL 让它们闭嘴
-        os.environ.setdefault("LOG_LEVEL", "CRITICAL")
-        # 清掉默认/nonebot 的 sink（init 前后各清一次，防其 init 时重新挂载）；
-        # 日志统一走 GensokyoAI 体系（nonebot 的 WARNING+ 仍经我们的 sink 显示）
+        # 移除 NoneBot 默认日志处理器（官方姿势：按 logger_id 精确摘除，
+        # 不动我们自己的 sink，也不需要 LOG_LEVEL=CRITICAL 环境变量压制）；
+        # init 前后各摘一次，防其 init 时重新挂载
         with contextlib.suppress(ValueError):
-            logger.remove()
+            logger.remove(logger_id)
+        # nonebot 自己的配置（HOST/PORT/DRIVER/ONEBOT_ACCESS_TOKEN）也从同一文件读
         nonebot.init(_env_file=str(env_file))
         with contextlib.suppress(ValueError):
-            logger.remove()
+            logger.remove(logger_id)
         try:
             setup_logging(log_file=Path("logs/GENSOKYOAI.log"))
         except Exception:

@@ -16,6 +16,22 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.56 日志摘除改官方姿势：logger.remove(logger_id)（2026-08-02，用户给文档）
+
+- 用户贴 NoneBot 官方文档：默认日志处理器应从 `nonebot.log` 导
+  `logger_id` 精确 `logger.remove(logger_id)`——「不用设置什么环境
+  变量，不用把 level 设置 critical 级别」。
+- 改法：adapter.start 的日志处理从「LOG_LEVEL=CRITICAL 压制 +
+  全量 logger.remove() ×2」改为 init 前后各 `logger.remove(logger_id)`
+  （suppress ValueError）——只摘 nonebot 默认 sink，不动我们自己的
+  sink；LOG_LEVEL 环境变量 hack 删除。setup_logging 幂等（只摘自己
+  追踪的 handler），init 后调用天然安全。本机实测 logger_id=1 可用。
+- 顺带：上一轮用户手改 import 的 typo（OneBotV11Adapterf）已修回。
+- 验证：ruff / 定向 56 passed。
+
+建议 commit message（用户已授权直接提交）：
+`refactor(nb2): 日志处理改官方姿势——logger.remove(logger_id) 精确摘除 nonebot 默认 sink，删除 LOG_LEVEL=CRITICAL 环境变量 hack`
+
 ## 8.55 首次运行播种（新人体验）+ nb2 日志格式去重（2026-08-02，用户点单）
 
 - 起因：新人直接 `uv run python -m GensokyoAI.backends.nb2` 没有配置会
