@@ -93,8 +93,65 @@ class ToolDefinition(Struct):
         }
 
 
-# 全局工具注册表（由 registry 管理）
+# 全局工具注册表（由 registry 管理）：只盛放内置工具（tool_builtin 模块
+# 导入时经 @tool 装饰器写入），供 ToolRegistry._load_builtin 白名单加载。
+# 运行时注入的适配器/租户工具**绝不入此表**（registry.register 改为本地
+# 构建）——否则闭包会泄漏给之后新建的所有注册表（多角色/多租户串台）。
 _TOOL_REGISTRY: dict[str, ToolDefinition] = {}
+
+
+def build_tool_definition(
+    func: Callable,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    parallel_safe: bool = True,
+) -> ToolDefinition:
+    """从函数签名与文档串构建 ToolDefinition（纯函数，不写任何全局表）。
+
+    schema 生成逻辑的单源：`tool()` 装饰器（内置工具，写全局表）与
+    `ToolRegistry.register()`（运行时注入，实例级）都走这里。
+    """
+    tool_name = name or func.__name__
+    tool_desc = description or (func.__doc__ or "").strip()
+
+    # 解析参数
+    sig = inspect.signature(func)
+    type_hints = get_type_hints(func)
+    parameters = {}
+
+    for param_name, param in sig.parameters.items():
+        param_type = type_hints.get(param_name, str)
+
+        # 映射 Python 类型到 JSON Schema
+        type_map = {
+            str: ToolParameterType.STRING,
+            int: ToolParameterType.INTEGER,
+            float: ToolParameterType.NUMBER,
+            bool: ToolParameterType.BOOLEAN,
+            list: ToolParameterType.ARRAY,
+            dict: ToolParameterType.OBJECT,
+        }
+        tool_type = type_map.get(param_type, ToolParameterType.STRING)
+
+        parameters[param_name] = ToolParameter(
+            name=param_name,
+            type=tool_type,
+            required=param.default is inspect.Parameter.empty,
+            default=None if param.default is inspect.Parameter.empty else param.default,
+        )
+
+    # 检查是否是异步函数
+    is_async = inspect.iscoroutinefunction(func)
+
+    return ToolDefinition(
+        name=tool_name,
+        description=tool_desc,
+        parameters=parameters,
+        func=func,
+        is_async=is_async,
+        parallel_safe=parallel_safe,
+    )
 
 
 def tool(
@@ -111,46 +168,9 @@ def tool(
 
     def decorator(func: Callable) -> Callable:
         tool_name = name or func.__name__
-        tool_desc = description or (func.__doc__ or "").strip()
-
-        # 解析参数
-        sig = inspect.signature(func)
-        type_hints = get_type_hints(func)
-        parameters = {}
-
-        for param_name, param in sig.parameters.items():
-            param_type = type_hints.get(param_name, str)
-
-            # 映射 Python 类型到 JSON Schema
-            type_map = {
-                str: ToolParameterType.STRING,
-                int: ToolParameterType.INTEGER,
-                float: ToolParameterType.NUMBER,
-                bool: ToolParameterType.BOOLEAN,
-                list: ToolParameterType.ARRAY,
-                dict: ToolParameterType.OBJECT,
-            }
-            tool_type = type_map.get(param_type, ToolParameterType.STRING)
-
-            parameters[param_name] = ToolParameter(
-                name=param_name,
-                type=tool_type,
-                required=param.default is inspect.Parameter.empty,
-                default=None if param.default is inspect.Parameter.empty else param.default,
-            )
-
-        # 检查是否是异步函数
-        is_async = inspect.iscoroutinefunction(func)
-
-        _TOOL_REGISTRY[tool_name] = ToolDefinition(
-            name=tool_name,
-            description=tool_desc,
-            parameters=parameters,
-            func=func,
-            is_async=is_async,
-            parallel_safe=parallel_safe,
+        _TOOL_REGISTRY[tool_name] = build_tool_definition(
+            func, name=name, description=description, parallel_safe=parallel_safe
         )
-
         return func
 
     return decorator

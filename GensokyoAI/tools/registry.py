@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..utils.logger import logger
-from .base import ToolDefinition, get_tool, list_tools, tool
+from .base import ToolDefinition, build_tool_definition, get_tool, list_tools
 
 
 class ToolRegistry:
@@ -34,16 +34,22 @@ class ToolRegistry:
         self._tools.update(list_tools())
 
     def register(self, func: Callable, name: str | None = None, parallel_safe: bool = True) -> None:
-        """注册工具（非装饰器方式）"""
+        """注册工具到本实例注册表（非装饰器方式）。
 
-        # tool() 装饰器返回原函数（用于装饰器场景），真正的 ToolDefinition
-        # 被登记进全局注册表，这里回取它，避免误用函数对象。
-        tool(name=name, parallel_safe=parallel_safe)(func)
+        实例级、不写进程级全局表：运行时注入的适配器/租户闭包（如
+        set_reminder 捕获 agent_id）若入全局表，会被之后新建注册表的
+        _load_builtin 吸进无关 Agent（多角色/多租户串台）。仅当 func
+        本身就是 @tool 装饰过的内置工具（全局表中同一个函数对象）时
+        复用其定义，保留装饰器给的描述。
+        """
         tool_name = name or func.__name__
-        definition = get_tool(tool_name)
-        if definition is None:
-            raise ValueError(f"工具注册失败: {tool_name}")
-        self._tools[tool_name] = definition
+        existing = get_tool(tool_name)
+        if existing is not None and existing.func is func:
+            self._tools[tool_name] = existing
+            return
+        self._tools[tool_name] = build_tool_definition(
+            func, name=name, parallel_safe=parallel_safe
+        )
 
     def get(self, name: str) -> ToolDefinition | None:
         """获取工具（仅查本实例注册表）。
