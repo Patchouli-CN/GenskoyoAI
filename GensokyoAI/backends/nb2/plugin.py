@@ -14,15 +14,17 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
-from nonebot import get_bots, get_driver, on_message
+from nonebot import get_bots, get_driver, on_message, on_notice
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
     Message,
     MessageEvent,
     MessageSegment,
+    NoticeEvent,
     PrivateMessageEvent,
 )
 from nonebot.matcher import Matcher
@@ -46,6 +48,7 @@ from .config import Nb2Config
 from .pending import PendingChat, PendingChatQueue, merge_batch
 from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
+from .watchdog import NapCatWatchdog
 
 _config = Nb2Config.from_env()
 _host: RuntimeHost | None = None  # 由 Nonebot2Adapter.start() 经 bind_host 注入
@@ -57,6 +60,20 @@ _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ�
 _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
 _impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（防并发重复生成）
 _repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按全局配置构建）
+
+# NapCat 掉线守护（bot_offline 事件 / WS 断开 → 杀进程树 → 快速登录 → 确认回连）
+_napcat_dir = _config.napcat_dir
+if not _napcat_dir.is_absolute():
+    _napcat_dir = (_config.root_dir or Path.cwd()) / _napcat_dir
+_watchdog = NapCatWatchdog(
+    enabled=_config.watchdog_enabled,
+    cooldown_seconds=_config.watchdog_cooldown_seconds,
+    max_restarts_per_day=_config.watchdog_max_restarts,
+    recover_timeout_seconds=_config.watchdog_recover_timeout,
+    disconnect_grace_seconds=_config.watchdog_disconnect_grace,
+    alert_path=_config.data_dir / "napcat_offline_alert.json",
+)
+_watchdog.configure(napcat_dir=_napcat_dir)
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = (
@@ -273,12 +290,40 @@ async def _on_startup() -> None:
         f"群友印象={'开' if _config.member_memory else '关'}, "
         f"引用上下文={'开' if _config.quote_context else '关'}, "
         f"复读防护={repeat_guard_desc}, "
+        f"掉线守护={'开' if _config.watchdog_enabled else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
+    )
+
+
+@_driver.on_bot_connect
+async def _on_bot_connect(bot: Bot) -> None:
+    _watchdog.notify_connected(int(bot.self_id))
+
+
+@_driver.on_bot_disconnect
+async def _on_bot_disconnect(bot: Bot) -> None:
+    _watchdog.notify_disconnected()
+
+
+def _is_bot_offline(event: NoticeEvent) -> bool:
+    # NapCat 扩展通知（onebot-adapter 无内置模型，退化为基础 NoticeEvent，
+    # 额外字段经 pydantic extra 保留）：账号被踢下线/登录态失效
+    return getattr(event, "notice_type", "") == "bot_offline"
+
+
+bot_offline_notice = on_notice(rule=Rule(_is_bot_offline), priority=1)
+
+
+@bot_offline_notice.handle()
+async def _handle_bot_offline(event: NoticeEvent) -> None:
+    _watchdog.notify_bot_offline(
+        str(getattr(event, "tag", "") or ""), str(getattr(event, "message", "") or "")
     )
 
 
 @_driver.on_shutdown
 async def _on_shutdown() -> None:
+    _watchdog.close()  # 正常关停不触发自动恢复（防止退出时反而把 NapCat 拉起来）
     # 宿主生命周期归 run_adapters 管（逆序 stop 后统一 host.close()），这里无需动作
     logger.debug("[nb2] nonebot 驱动已停止")
 

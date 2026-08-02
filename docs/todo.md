@@ -235,6 +235,42 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.44 NapCat 掉线守护：bot_offline 事件 + 自动快速登录恢复（2026-08-02，用户定稿）
+
+- 起因：账号被风控踢下线（`[KickedOffLine] 你的账号当前登录已失效，
+  请重新登录`）。NapCat 会把它包装成 OneBot `bot_offline` 通知事件推送
+  （NapCat 事件文档 BotOfflineEvent：tag + message）；onebot-adapter
+  2.4.6 无内置模型，但 json_to_event fallback 退化为基础 NoticeEvent
+  照常分发——适配器挂 `on_notice` 即可收到。
+- 关键事实（用户纠正）：NapCat.Shell 的 `main.bat` 走
+  `launcher-win10-user.bat <QQ号>` → `NapCatWinBootMain.exe` 快速登录，
+  本地缓存凭证静默重登、**无需扫码**——所以「登录已失效」也能全自动
+  恢复（推翻「重启必停在扫码界面」的判断）。
+- **watchdog.py（新）**：`NapCatWatchdog` 状态机——触发（bot_offline
+  事件立即 / WS 断开 60s 宽限期后未回连）→ 杀 NapCat 进程树
+  （PowerShell CIM 按父子关系只杀 NapCatWinBootMain 及子孙，**不学
+  KillQQ.bat 误伤个人 QQ**）→ 按 launcher 同等环境变量带 QQ 号重启
+  （独立控制台窗口，记 PID）→ 等 on_bot_connect 确认回连。节制：单
+  flight + 600s 冷却 + 24h 上限 5 次；超限/回连超时/重启失败写
+  `nb2_data/napcat_offline_alert.json` 哨兵 + ERROR 告警停手（防无限
+  重启激怒风控），回连成功清哨兵。trigger 入口即置 restarting（亲手
+  杀出的断开不误触发）；适配器 on_shutdown close() 防止退出时反而把
+  NapCat 拉起来。仅 win32 动手，其他平台只告警；winreg 条件导入。
+- 用户补刀：WS 断开时先 log warning（进入宽限期的提示）。
+- 配置（env，Nb2Config）：`GSK_NB2_WATCHDOG`（默认 true）/
+  `GSK_NB2_NAPCAT_DIR`（默认 ignore/NapCat.Shell）/
+  `WATCHDOG_COOLDOWN`（600）/`WATCHDOG_MAX_RESTARTS`（5）/
+  `WATCHDOG_RECOVER_TIMEOUT`（300）/`WATCHDOG_DISCONNECT_GRACE`（60）。
+- 测试：tests/test_nb2_watchdog.py 14 例（成功恢复/超时告警/冷却/
+  每日上限/非 Windows/未就绪/重启失败/关停停用/宽限期重连跳过/宽限期
+  后触发/重启中断连忽略/事件单 flight/配置解析）。基线：821 passed,
+  3 subtests passed，ruff / pyright 全绿。
+- 未做：Windows toast 等推送通道（哨兵文件 + ERROR 日志兜底）；
+  真实被踢后的端到端验证（需等一次风控自然发生）。
+
+建议 commit message（用户已授权提交）：
+`feat(nb2): NapCat 掉线守护——bot_offline 事件/断连宽限触发，定向杀进程树后快速登录自动恢复（冷却+每日上限+哨兵告警，不碰个人 QQ）`
+
 ## 8.43 额度健康改速率型：按全局单位时间总消耗算阈值（2026-08-02，用户定稿）
 
 - 设计变更（用户原话）：「按单位时间的总消耗来，消耗快警告阈值升高、

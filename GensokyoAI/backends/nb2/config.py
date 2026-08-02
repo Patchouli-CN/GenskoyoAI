@@ -28,6 +28,15 @@ def _parse_float(raw: str | None, default: float) -> float:
         return default
 
 
+def _parse_int(raw: str | None, default: int) -> int:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
 # QQ 聊天场景的默认风格要求（群友反馈：话少一点、按行分段、不要动作描写）；
 # 可用 GSK_NB2_EXTRA_PROMPT 覆盖
 DEFAULT_EXTRA_PROMPT = (
@@ -63,6 +72,14 @@ class Nb2Config:
     # /status 额度健康指数阈值（元）：余额 ≥ warn 为健康（指数 100），< crit 为告急
     quota_warn_yuan: float = 20.0
     quota_crit_yuan: float = 5.0
+    # NapCat 掉线守护（bot_offline 事件/WS 断开 → 杀进程树 → 快速登录 → 确认回连）；
+    # 节制：冷却期 + 每日上限，超限写哨兵文件告警停手（防无限重启激怒风控）
+    watchdog_enabled: bool = True
+    napcat_dir: Path = Path("ignore/NapCat.Shell")  # 相对 root_dir/cwd 或绝对路径
+    watchdog_cooldown_seconds: float = 600.0  # 两次自动重启的最小间隔
+    watchdog_max_restarts: int = 5  # 24h 内自动重启上限
+    watchdog_recover_timeout: float = 300.0  # 重启后等待回连的超时（超时告警）
+    watchdog_disconnect_grace: float = 60.0  # WS 断开的回连宽限期（NapCat 自己会重连）
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -98,4 +115,18 @@ class Nb2Config:
             ),
             quota_warn_yuan=_parse_float(get("GSK_NB2_QUOTA_WARN"), cls.quota_warn_yuan),
             quota_crit_yuan=_parse_float(get("GSK_NB2_QUOTA_CRIT"), cls.quota_crit_yuan),
+            watchdog_enabled=_parse_bool(get("GSK_NB2_WATCHDOG"), cls.watchdog_enabled),
+            napcat_dir=Path((get("GSK_NB2_NAPCAT_DIR") or "").strip() or cls.napcat_dir),
+            watchdog_cooldown_seconds=_parse_float(
+                get("GSK_NB2_WATCHDOG_COOLDOWN"), cls.watchdog_cooldown_seconds
+            ),
+            watchdog_max_restarts=_parse_int(
+                get("GSK_NB2_WATCHDOG_MAX_RESTARTS"), cls.watchdog_max_restarts
+            ),
+            watchdog_recover_timeout=_parse_float(
+                get("GSK_NB2_WATCHDOG_RECOVER_TIMEOUT"), cls.watchdog_recover_timeout
+            ),
+            watchdog_disconnect_grace=_parse_float(
+                get("GSK_NB2_WATCHDOG_DISCONNECT_GRACE"), cls.watchdog_disconnect_grace
+            ),
         )

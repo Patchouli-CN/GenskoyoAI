@@ -59,6 +59,30 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_OWNER_QQ` | 空 | OWNER 级指令白名单（逗号分隔 QQ 号）；仅影响 OWNER 级指令 |
 | `GSK_NB2_EXTRA_PROMPT` | 内置群聊风格要求 | 随每条回复注入的附加要求；留空用默认，可改写成自己的约束 |
 | `GSK_NB2_GROUP_WHITELIST` | 空（不限） | 逗号分隔的群号白名单 |
+| `GSK_NB2_WATCHDOG` | `true` | NapCat 掉线守护：被踢下线/断连后杀进程树并快速登录重连 |
+| `GSK_NB2_NAPCAT_DIR` | `ignore/NapCat.Shell` | NapCat.Shell 目录（相对 root_dir/cwd 或绝对路径） |
+| `GSK_NB2_WATCHDOG_COOLDOWN` | `600` | 两次自动重启的最小间隔（秒） |
+| `GSK_NB2_WATCHDOG_MAX_RESTARTS` | `5` | 24h 内自动重启上限，超限告警停手 |
+| `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `300` | 重启后等待回连的超时（秒），超时告警 |
+| `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` | `60` | WS 断开的回连宽限期（秒），NapCat 自己连上就不动 |
+
+## 掉线守护（NapCat Watchdog）
+
+账号被腾讯风控踢下线（NapCat 日志 `[KickedOffLine] 你的账号当前登录已失效`）时，
+NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自动恢复：
+
+1. **触发**：`bot_offline` 事件立即触发；WS 断开则等
+   `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` 宽限期（NapCat 自己重连上就不动）。
+2. **杀树**：只杀 `NapCatWinBootMain.exe` 及其全部子孙进程（PowerShell CIM
+   按父子关系定向）——**不会像 `KillQQ.bat` 那样误伤你开着的个人 QQ**。
+3. **快速登录**：按 `launcher-win10-user.bat` 同等环境变量带 QQ 号重启
+   NapCat（本地缓存凭证静默重登，**无需扫码**），独立控制台窗口、日志可见。
+4. **确认**：等 `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` 内协议端回连即恢复成功。
+5. **节制**：冷却 `GSK_NB2_WATCHDOG_COOLDOWN` + 24h 上限
+   `GSK_NB2_WATCHDOG_MAX_RESTARTS` 次；超限/回连超时/重启失败则写
+   `nb2_data/napcat_offline_alert.json` 哨兵 + ERROR 日志，停手等人
+   （防无限重启激怒风控）；回连成功自动清除哨兵。仅 Windows 生效，
+   其他平台只告警不动手；适配器正常关停不会误触发。
 
 内置的默认附加要求（`GSK_NB2_EXTRA_PROMPT` 留空时生效）：
 
