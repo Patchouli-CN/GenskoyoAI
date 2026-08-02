@@ -19,8 +19,8 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from ..core.agent.oneshot import OneShotGenerator
 from ..core.config import ConfigLoader
 from ..core.config_schema import AppConfig
 from ..core.health import compute_burn_rate
@@ -71,7 +71,8 @@ class RuntimeHost:
             auth_type="nb2-local",
         )
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
-        self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
+        # 一次性脱稿生成器（第一印象/破例判定/额度查询；懒加载，取代 nb2-meta 元租户）
+        self._meta_generator: OneShotGenerator | None = None
         self._started_at = time.monotonic()  # /status 运行时长基准
         # 适配器工具模板：(函数, 名称, 是否并行安全)，注入当前及后续租户的工具注册表
         self._adapter_tools: list[tuple[Callable[..., Any], str | None, bool]] = []
@@ -110,7 +111,6 @@ class RuntimeHost:
         session_id: str | None = None,
         *,
         disable_initiative: bool = True,
-        disable_think_engine: bool = False,
     ) -> tuple[str, int]:
         """初始化（或恢复）租户 Agent，返回 (session_id, revision)。
 
@@ -118,16 +118,10 @@ class RuntimeHost:
         消息投递通道的接入方必须如此，否则角色会产生「看不见的主动发言」，
         既空烧 token 又污染上下文。启用主动投递（subscribe_events）的调用方
         传 False。
-
-        `disable_think_engine=True` 时该租户不装配思考引擎——脱稿专用的
-        元租户（nb2-meta）用：它只在被调用时工作，不需要每 30 分钟空转的
-        长期思考（纯烧 token）。
         """
         params: dict[str, Any] = {"agent_id": agent_id, "character": character, "start": True}
         if session_id:
             params["session_id"] = session_id
-        if disable_think_engine:
-            params["enable_think_engine"] = False
         result = await self._call("agent.init", params)
         session = (result or {}).get("session") or {}
         sid = str(session.get("session_id") or "")
@@ -187,28 +181,14 @@ class RuntimeHost:
         return content, new_revision
 
     async def generate_meta_text(self, character: str, prompt: str) -> str:
-        """用元租户（agent_id="nb2-meta"）做一次性脱稿生成（群友印象等）。
+        """一次性脱稿生成（群友印象等）：不建租户、不进任何会话与记忆。
 
-        元租户与用户会话完全隔离，生成内容不进任何用户的对话历史；
-        会话 id 进程内缓存，revision 每次现取，重复调用不重建 Agent。
-        元租户不装配思考引擎与主动定时器——只在被调用时工作，零空转成本。
+        每角色缓存 ModelClient 与角色系统提示词；调用即走，成本只在当次。
+        （取代旧的 nb2-meta 元租户——白背 ThinkEngine/后台/持久化，已删除。）
         """
-        agent_id = "nb2-meta"
-        if self._meta_session_id is None:
-            session_id, _ = await self.ensure_agent(
-                agent_id, character, disable_initiative=True, disable_think_engine=True
-            )
-            self._meta_session_id = session_id
-        session_id = self._meta_session_id
-        revision = await self.fetch_revision(agent_id, session_id)
-        content, _ = await self.send_message(
-            agent_id,
-            session_id,
-            revision,
-            prompt,
-            idempotency_key=f"nb2-meta:{uuid4().hex[:12]}",
-        )
-        return content
+        if self._meta_generator is None:
+            self._meta_generator = OneShotGenerator(self._service.state.root_dir)
+        return await self._meta_generator.generate(character, prompt)
 
     async def register_adapter_tool(
         self, func: Callable[..., Any], *, name: str | None = None, parallel_safe: bool = False
@@ -427,16 +407,14 @@ class RuntimeHost:
         return {"level": "healthy", "reason": "运行正常"}
 
     async def get_quota(self, character: str) -> dict[str, Any] | None:
-        """查询 Provider 账户额度（账户级；借元租户的模型客户端，不支持返回 None）。"""
-        agent_id = "nb2-meta"
-        if self._meta_session_id is None:
-            session_id, _ = await self.ensure_agent(agent_id, character, disable_initiative=True)
-            self._meta_session_id = session_id
-        agent = self._tenant_agent(agent_id)
-        client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
-        if client is None:
+        """查询 Provider 账户额度（账户级；借一次性生成器的模型客户端，不支持返回 None）。"""
+        if self._meta_generator is None:
+            self._meta_generator = OneShotGenerator(self._service.state.root_dir)
+        try:
+            return await self._meta_generator.get_quota(character)
+        except Exception as error:
+            logger.warning(f"[host] 额度查询失败: {error}")
             return None
-        return await client.get_quota()
 
     # ==================== 主动消息事件（进程内队列推送） ====================
 

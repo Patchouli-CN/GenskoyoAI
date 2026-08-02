@@ -866,14 +866,11 @@ class RuntimeService(WorldOpsMixin):
         start: bool = True,
         model_overrides: dict[str, Any] | None = None,
         embedding_overrides: dict[str, Any] | None = None,
-        enable_think_engine: bool = True,
     ) -> dict[str, Any]:
         """Initialize the Agent and prepare a session.
 
         A current session must exist before ``Agent.start()`` because the semantic
-        memory and think engine are session-scoped. ``enable_think_engine=False``
-        assembles a lightweight agent without the think engine (meta tenants that
-        only do on-demand off-script generation).
+        memory and think engine are session-scoped.
         """
         async with self._lock:
             # 与 World 模式互斥：同一 RuntimeService 实例绝不同时持有两者
@@ -909,8 +906,6 @@ class RuntimeService(WorldOpsMixin):
                 character_file=char_file,
                 # 日志租户标签：多租户关闭时刷屏的同款日志按 agent_id 区分
                 label=self._tenant_key[1] if self._tenant_key else None,
-                # 脱稿专用元租户不装配思考引擎（空转纯烧 token）
-                enable_think_engine=enable_think_engine,
             )
 
             if session_id:

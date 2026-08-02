@@ -279,45 +279,39 @@ class RuntimeHostWrapperTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_ensure_agent_disable_think_engine_passes_flag(self):
+    def test_generate_meta_text_uses_one_shot_generator(self):
         async def run():
-            host = RuntimeHost()
-            calls = []
+            with tempfile.TemporaryDirectory() as tmpdir:
+                host = RuntimeHost(root_dir=Path(tmpdir))
+                calls = []
 
-            async def fake_call(method, params=None):
-                calls.append((method, dict(params or {})))
-                return {"session": {"session_id": "s-1", "revision": 0}}
+                class FakeGenerator:
+                    async def generate(self, character, prompt):
+                        calls.append((character, prompt))
+                        return "是个安静的人呢"
 
-            host._call = fake_call
-            await host.ensure_agent("nb2-meta", "KirisameMarisa", disable_think_engine=True)
-            self.assertFalse(calls[0][1]["enable_think_engine"])
-            # 默认不传该键（网络 schema 以服务端默认值为准，保持后向兼容）
-            await host.ensure_agent("qq-group-1", "KirisameMarisa")
-            self.assertNotIn("enable_think_engine", calls[2][1])
+                host._meta_generator = FakeGenerator()
+                text = await host.generate_meta_text("KirisameMarisa", "写第一印象")
+                self.assertEqual(text, "是个安静的人呢")
+                self.assertEqual(calls, [("KirisameMarisa", "写第一印象")])
+                # 一次性脱稿生成：不建 nb2-meta 租户（取代旧元租户）
+                self.assertNotIn(("nb2", "nb2-meta"), host._service._tenant_services)
 
         asyncio.run(run())
 
-    def test_generate_meta_text_uses_lightweight_meta_tenant(self):
+    def test_get_quota_delegates_to_one_shot_generator(self):
         async def run():
-            host = RuntimeHost()
-            calls = []
+            with tempfile.TemporaryDirectory() as tmpdir:
+                host = RuntimeHost(root_dir=Path(tmpdir))
 
-            async def fake_call(method, params=None):
-                calls.append((method, dict(params or {})))
-                if method == "agent.init":
-                    return {"session": {"session_id": "meta-s", "revision": 1}}
-                if method == "session.messages":
-                    return {"revision": 3}
-                if method == "agent.send_message":
-                    return {"content": "是个安静的人呢", "session": {"revision": 4}}
-                return {}
+                class FakeGenerator:
+                    async def get_quota(self, character):
+                        return {"available_balance": 16.6}
 
-            host._call = fake_call
-            text = await host.generate_meta_text("KirisameMarisa", "写第一印象")
-            self.assertEqual(text, "是个安静的人呢")
-            init_params = calls[0][1]
-            self.assertEqual(init_params["agent_id"], "nb2-meta")
-            self.assertFalse(init_params["enable_think_engine"])  # 元租户不装配思考引擎
+                host._meta_generator = FakeGenerator()
+                quota = await host.get_quota("KirisameMarisa")
+                self.assertEqual(quota["available_balance"], 16.6)
+                self.assertNotIn(("nb2", "nb2-meta"), host._service._tenant_services)
 
         asyncio.run(run())
 
@@ -376,69 +370,49 @@ class RuntimeHostWrapperTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_generate_meta_text_uses_isolated_meta_tenant(self):
-        """元租户脱稿生成：独立 agent_id、停用主动定时器、会话复用不重建。"""
+    def test_generate_meta_text_never_creates_meta_tenant(self):
+        """一次性脱稿生成：两次调用都不建 nb2-meta 租户（取代旧元租户隔离方案）。"""
 
         async def run():
-            host = RuntimeHost()
-            calls = []
+            with tempfile.TemporaryDirectory() as tmpdir:
+                host = RuntimeHost(root_dir=Path(tmpdir))
+                calls = []
 
-            async def fake_call(method, params=None):
-                calls.append((method, dict(params or {})))
-                if method == "agent.init":
-                    return {"session": {"session_id": "meta-s1", "revision": 0}}
-                if method == "session.messages":
-                    return {"revision": 3}
-                if method == "agent.send_message":
-                    return {"content": "这孩子挺有意思的", "session": {"revision": 4}}
-                return {}
+                class FakeGenerator:
+                    async def generate(self, character, prompt):
+                        calls.append(prompt)
+                        return "这孩子挺有意思的"
 
-            host._call = fake_call
-            text = await host.generate_meta_text("KirisameMarisa", "写印象")
-            self.assertEqual(text, "这孩子挺有意思的")
-            self.assertEqual(
-                [m for m, _ in calls],
-                ["agent.init", "initiative_timer.update", "session.messages", "agent.send_message"],
-            )
-            self.assertEqual(calls[0][1]["agent_id"], "nb2-meta")
-            self.assertEqual(calls[1][1]["enabled"], False)
-
-            # 第二次调用复用同一会话，不再走 init
-            calls.clear()
-            await host.generate_meta_text("KirisameMarisa", "再写一段")
-            self.assertEqual([m for m, _ in calls], ["session.messages", "agent.send_message"])
+                host._meta_generator = FakeGenerator()
+                text = await host.generate_meta_text("KirisameMarisa", "写印象")
+                self.assertEqual(text, "这孩子挺有意思的")
+                await host.generate_meta_text("KirisameMarisa", "再写一段")
+                self.assertEqual(calls, ["写印象", "再写一段"])
+                self.assertNotIn(("nb2", "nb2-meta"), host._service._tenant_services)
 
         asyncio.run(run())
 
-    def test_get_quota_via_meta_tenant_client(self):
-        """额度查询借元租户模型客户端；客户端缺失时返回 None。"""
+        asyncio.run(run())
+
+    def test_get_quota_via_one_shot_client(self):
+        """额度查询借一次性生成器的模型客户端；查询异常时返回 None。"""
 
         async def run():
-            with tempfile.TemporaryDirectory() as temp_dir:
-                root = Path(temp_dir)
-                service = RuntimeService(root)
-                child = RuntimeService(
-                    root,
-                    tenant_key=("nb2", "nb2-meta"),
-                    storage_root=service._tenant_storage_root("nb2", "nb2-meta"),
-                )
-                service._tenant_services[("nb2", "nb2-meta")] = child
+            host = RuntimeHost()
 
-                class _FakeClient:
-                    async def get_quota(self):
-                        return {"available_balance": 1.5}
+            class FakeGenerator:
+                async def get_quota(self, character):
+                    return {"available_balance": 1.5}
 
-                child.state.agent = SimpleNamespace(
-                    runtime_context=SimpleNamespace(model_client=_FakeClient())
-                )
-                host = RuntimeHost(user_id="nb2", service=service)
-                host._meta_session_id = "s-meta"  # 跳过 ensure_agent
-                self.assertEqual(
-                    await host.get_quota("KirisameMarisa"), {"available_balance": 1.5}
-                )
+            host._meta_generator = FakeGenerator()
+            self.assertEqual(await host.get_quota("KirisameMarisa"), {"available_balance": 1.5})
 
-                child.state.agent = SimpleNamespace(runtime_context=SimpleNamespace())
-                self.assertIsNone(await host.get_quota("KirisameMarisa"))
+            class BrokenGenerator:
+                async def get_quota(self, character):
+                    raise RuntimeError("provider 炸了")
+
+            host._meta_generator = BrokenGenerator()
+            self.assertIsNone(await host.get_quota("KirisameMarisa"))
 
         asyncio.run(run())
 

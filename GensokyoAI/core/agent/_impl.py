@@ -56,16 +56,12 @@ class Agent:
         setup_signal_handlers: bool = True,
         manage_initiative_timer: bool = True,
         label: str | None = None,
-        enable_think_engine: bool = True,
     ) -> None:
         # 可选依赖注入：多角色（World）模式下共享 ModelClient / resource_gates
         # 与稳定 actor_id / world_id；单角色模式为 None，保持自建行为。
         self._dependencies = dependencies
         # 日志租户标签（Runtime 多租户传 agent_id）：区分各租户刷屏的关闭日志
         self._log_label = label or ""
-        # 是否装配思考引擎：脱稿专用的元租户（nb2-meta）传 False——它只在被
-        # 调用时工作，每 30 分钟空转的长期思考纯烧 token（用户 2026-08-02 点单）
-        self._enable_think_engine = enable_think_engine
         # 是否注册进程级信号处理器。多 Actor 共存时同一事件循环每信号只保留
         # 一个处理器（last-wins）且其 shutdown 会直接 sys.exit，其余 Actor 的
         # 最终保存不会执行——World 装配 Actor 时应传 False，由 World 统一接管。
@@ -695,12 +691,8 @@ class Agent:
         await self.event_bus.start()
         await self._ensure_background_manager()
 
-        # 启动思考引擎（脱稿专用租户 enable_think_engine=False 时装配跳过）
-        if (
-            self._enable_think_engine
-            and self._think_engine is None
-            and self.semantic_memory is not None
-        ):
+        # 启动思考引擎
+        if self._think_engine is None and self.semantic_memory is not None:
             self._think_engine = ThinkEngine(
                 semantic_memory=self.semantic_memory,
                 model_client=self._model_client,
