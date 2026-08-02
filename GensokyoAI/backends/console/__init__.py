@@ -2,9 +2,9 @@
 # GensokyoAI/backends/console/__init__.py
 
 from . import commands as commands  # 导入命令模块以触发装饰器注册
-from ._impl import ConsoleBackend, ConsoleBackendBuilder
+from ._impl import ConsoleAdapter, ConsoleBackendBuilder
 
 __all__ = [
-    "ConsoleBackend",
+    "ConsoleAdapter",
     "ConsoleBackendBuilder",
 ]

@@ -50,7 +50,7 @@ GensokyoAI - 幻想乡 AI 角色扮演引擎
     - 流式和非流式响应支持
 
 🔌 **可扩展后端**
-    - 抽象后端基类 BaseBackend
+    - 适配器抽象基类 RuntimeAdapter（GensokyoAI.adapters）
     - 内置 Rich 美化的控制台后端
     - 可扩展为 WebUI、QQ 机器人等
 
@@ -146,7 +146,8 @@ __license__ = "Apache-2.0"
 __email__ = "3072252442@qq.com"
 
 # 导出主要类和函数
-from .backends import BaseBackend, ConsoleBackend, ConsoleBackendBuilder
+from .adapters import RuntimeAdapter
+from .backends import ConsoleAdapter, ConsoleBackendBuilder
 from .core.agent import Agent, StreamChunk
 from .core.config import AppConfig, CharacterConfig, ConfigLoader
 from .core.exceptions import (
@@ -171,8 +172,8 @@ __all__ = [
     "ConfigLoader",
     "CharacterConfig",
     # 后端
-    "BaseBackend",
-    "ConsoleBackend",
+    "RuntimeAdapter",
+    "ConsoleAdapter",
     "ConsoleBackendBuilder",
     # 异常
     "GensokyoError",

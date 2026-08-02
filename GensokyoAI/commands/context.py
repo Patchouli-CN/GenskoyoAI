@@ -4,15 +4,15 @@ from typing import TypeVar
 
 from msgspec import Struct
 
-from ..backends.base import BaseBackend
+from ..adapters import RuntimeAdapter
 from ..core.agent import Agent
 from .permission import PermissionLevel
 
 # 泛型变量
-T = TypeVar("T", bound="BaseBackend")
+T = TypeVar("T", bound="RuntimeAdapter")
 
 
-class CommandContext[T: "BaseBackend"](Struct, frozen=False):
+class CommandContext[T: "RuntimeAdapter"](Struct, frozen=False):
     """
     命令执行上下文
     """

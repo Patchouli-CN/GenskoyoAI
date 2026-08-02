@@ -2,9 +2,11 @@
 
 # GensokyoAI/backends/console/world_backend.py
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aioconsole
 from msgspec import to_builtins
@@ -13,6 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from ...adapters import RuntimeAdapter
 from ...commands import (
     CommandContext,
     CommandExecutor,
@@ -25,8 +28,10 @@ from ...core.events import Event, EventPriority, SystemEvent
 from ...utils.logger import logger
 from ...world.types import USER_OCCUPANT_ID
 from ...world.world import GensokyoWorld
-from ..base import BaseBackend
 from ._impl import ART
+
+if TYPE_CHECKING:
+    from ...runtime.host import RuntimeHost
 
 # World 模式下不可用的单角色会话命令（World 的存档管理走 /world 族命令）
 _AGENT_ONLY_COMMANDS = {"back", "new", "save", "sessions", "history", "timer"}
@@ -40,7 +45,7 @@ def _event_dict(data: Any) -> dict[str, Any]:
     return converted if isinstance(converted, dict) else {}
 
 
-class WorldConsoleBackend(BaseBackend):
+class WorldConsoleBackend(RuntimeAdapter):
     """World 控制台后端 - 每个角色用自己的名字发言，世界主动推进实时显示"""
 
     # /help 中隐藏的单角色专属命令（共享 help 实现读取此属性过滤）
@@ -142,7 +147,7 @@ class WorldConsoleBackend(BaseBackend):
 
     # ==================== 生命周期 ====================
 
-    async def start(self) -> None:
+    async def start(self, host: RuntimeHost | None = None) -> None:
         """启动：先显示欢迎面板，再让 World 开场（面板不被开场台词顶上去）"""
         self._show_welcome_panel()
         await self.world.start()

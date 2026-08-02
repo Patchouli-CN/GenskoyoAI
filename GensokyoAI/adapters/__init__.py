@@ -1,6 +1,6 @@
 """适配器约定：第三方接入 GensokyoAI 的公开组装面。
 
-一个适配器 = 实现 `RuntimeAdapter` 协议的类（QQ bot、Discord bot、Web UI……）。
+一个适配器 = 继承 `RuntimeAdapter` 基类的类（QQ bot、Discord bot、Web UI……）。
 适配器拿到进程内 `RuntimeHost`，自行决定如何驱动多租户会话；组装只需：
 
 ```python
@@ -17,8 +17,8 @@ run_adapters(Nonebot2Adapter())  # 想挂几个挂几个
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Protocol
 
 from ..core.config_dirs import ensure_local_config
 from ..runtime.host import RuntimeHost
@@ -27,18 +27,24 @@ from ..utils.logger import logger
 __all__ = ["RuntimeAdapter", "RuntimeHost", "run_adapters", "serve_adapters"]
 
 
-class RuntimeAdapter(Protocol):
-    """适配器协议：实现两个方法即可接入，无需继承。"""
+class RuntimeAdapter(ABC):
+    """适配器基类（唯一基类概念，2026-08-02 用户定稿：废弃 BaseBackend）。
 
-    name: str  # 适配器名（日志用）
+    契约：`name` + `start(host)` + `stop()`。经 `run_adapters` 组装的
+    适配器会收到进程内 RuntimeHost；独立入口的适配器传 None，自行装配依赖。
+    """
 
-    async def start(self, host: RuntimeHost) -> None:
+    name: str = "adapter"  # 适配器名（日志用）
+
+    @abstractmethod
+    async def start(self, host: RuntimeHost | None = None) -> None:
         """启动适配器。在此建立平台连接并把后台任务挂为 asyncio task（勿阻塞）。"""
-        ...
+        raise NotImplementedError
 
+    @abstractmethod
     async def stop(self) -> None:
         """停止适配器并释放平台连接。必须可重入、不得抛出。"""
-        ...
+        raise NotImplementedError
 
 
 async def serve_adapters(*adapters: RuntimeAdapter, root_dir: Path | None = None) -> None:

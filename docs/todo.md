@@ -16,6 +16,31 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.57 适配器基类统一：RuntimeAdapter 升格 ABC，BaseBackend 删除（2026-08-02，用户点单）
+
+- 问题：架构上有 `BaseBackend`（ABC，start/stop 无参）与 `RuntimeAdapter`
+  （Protocol，name/start(host)/stop）两套并行概念，且派生类大半不继承
+  （nb2 裸奔、web_server 全是模块级函数没有类）。用户拍板：「干脆全用
+  新的概念（RuntimeAdapter）」。
+- **RuntimeAdapter 升格 ABC**（`GensokyoAI/adapters/__init__.py`）：
+  `name` + `start(host: RuntimeHost | None = None)` + `stop()`；
+  run_adapters/serve_adapters 签名不变。`backends/base.py`（BaseBackend）
+  删除；`GensokyoAI/__init__.py`、`backends/__init__.py`、
+  `commands/context.py`（TypeVar bound）全部换挂。
+- **派生全部继承**：ConsoleAdapter / WorldConsoleBackend / Nonebot2Adapter
+  改挂 RuntimeAdapter（console 的 start 加 host=None 兼容参数，nb2 无
+  host 时明确报错）；web_server 新增 `WebAdapter`（封装 create_app +
+  AppRunner/TCPSite 生命周期，独立入口自建 service、组装入口复用宿主
+  service），main.py 改走 WebAdapter（行为不变）。
+- 连带修 §8.48 getattr 清理的两处假桩失形（test_runtime_multi_user 的
+  fake agent/client 补 semantic_memory/_cost_samples 同形字段）。
+- 测试：test_web_adapter.py（继承三角言 + /health 200 生命周期 + stop
+  可重入）、test_abstract_contracts 改 RuntimeAdapter 不可实例化。
+  增量 89 passed，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`refactor(adapters): 适配器基类统一——RuntimeAdapter 升格 ABC（name/start(host=None)/stop），BaseBackend 删除，console/nb2 继承补齐，web_server 新增 WebAdapter 封装 runner 生命周期`
+
 ## 8.56 日志摘除改官方姿势：logger.remove(logger_id)（2026-08-02，用户给文档）
 
 - 用户贴 NoneBot 官方文档：默认日志处理器应从 `nonebot.log` 导

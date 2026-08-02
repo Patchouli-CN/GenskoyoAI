@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 from nonebot.log import logger_id
 
+from ...adapters import RuntimeAdapter
 from ...runtime.host import RuntimeHost
 from ...utils.logger import logger, setup_logging
 from .config import resolve_env_file, seed_local_env
@@ -27,7 +28,7 @@ from .config import resolve_env_file, seed_local_env
 _UVICORN_LOG_CONFIG = {"version": 1, "disable_existing_loggers": False}
 
 
-class Nonebot2Adapter:
+class Nonebot2Adapter(RuntimeAdapter):
     """GensokyoAI RuntimeAdapter：QQ（NoneBot2 + OneBot 11）。"""
 
     name = "nonebot2"
@@ -40,7 +41,9 @@ class Nonebot2Adapter:
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task[None] | None = None
 
-    async def start(self, host: RuntimeHost) -> None:
+    async def start(self, host: RuntimeHost | None = None) -> None:
+        if host is None:
+            raise RuntimeError("Nonebot2Adapter 需要 RuntimeHost（经 run_adapters 组装传入）")
         # 先解析并加载 dotenv——此阶段不打日志：nonebot/默认 sink 还挂着，
         # 我们的日志会和他们的一前一后双格式重复（用户实机反馈）
         if self._env_file is not None:

@@ -274,14 +274,17 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         from types import SimpleNamespace
 
         client_a = SimpleNamespace(
-            _latency_samples=deque([("think_engine", 1000.0), ("chat", 9000.0)])
+            _latency_samples=deque([("think_engine", 1000.0), ("chat", 9000.0)]),
+            _cost_samples=deque(),  # 假客户端与真 ModelClient 同形状（§8.48 直接属性访问）
         )
         client_b = SimpleNamespace(
-            _latency_samples=deque([("think_engine", 2000.0), ("think_engine", 3000.0)])
+            _latency_samples=deque([("think_engine", 2000.0), ("think_engine", 3000.0)]),
+            _cost_samples=deque(),
         )
         for agent_id, client in (("qq-group-111", client_a), ("qq-group-222", client_b)):
             service._tenant_services[("nb2", agent_id)].state.agent = SimpleNamespace(
-                runtime_context=SimpleNamespace(model_client=client)
+                runtime_context=SimpleNamespace(model_client=client),
+                semantic_memory=None,  # 假 Agent 与真 Agent 同形状（§8.48 直接属性访问）
             )
         status = RuntimeHost(service=service).get_system_status()
         assert status["latency"]["count"] == 3

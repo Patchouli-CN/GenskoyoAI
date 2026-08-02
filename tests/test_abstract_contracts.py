@@ -2,14 +2,14 @@ from typing import Any, cast
 
 import pytest
 
-from GensokyoAI.backends.base import BaseBackend
+from GensokyoAI.adapters import RuntimeAdapter
 from GensokyoAI.background.workers.base import BaseWorker
 
 
-def test_base_backend_cannot_be_instantiated() -> None:
-    backend_class = cast(Any, BaseBackend)
+def test_runtime_adapter_cannot_be_instantiated() -> None:
+    adapter_class = cast(Any, RuntimeAdapter)
     with pytest.raises(TypeError):
-        backend_class()
+        adapter_class()
 
 
 def test_base_worker_cannot_be_instantiated() -> None:

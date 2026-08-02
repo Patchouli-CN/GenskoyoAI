@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import ipaddress
 from pathlib import Path
 
-from aiohttp import web
-
-from .http_adapter import create_app
+from .adapter import WebAdapter
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,16 +51,24 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+async def _serve(adapter: WebAdapter) -> None:
+    await adapter.start()
+    try:
+        await asyncio.Event().wait()  # 永久驻留，直至被取消
+    finally:
+        await adapter.stop()
+
+
 def main() -> None:
     args = parse_args()
-    web.run_app(
-        create_app(
-            root_dir=args.root.resolve(),
-            allowed_origins=args.allowed_origin,
-            allow_all_origins=args.allow_all_origins,
-            allow_remote_admin=args.allow_remote_admin,
-            require_auth=not _is_loopback_host(args.host),
-        ),
+    adapter = WebAdapter(
+        args.root.resolve(),
         host=args.host,
         port=args.port,
+        allowed_origins=args.allowed_origin,
+        allow_all_origins=args.allow_all_origins,
+        allow_remote_admin=args.allow_remote_admin,
+        require_auth=not _is_loopback_host(args.host),
     )
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(_serve(adapter))

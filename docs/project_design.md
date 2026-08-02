@@ -99,7 +99,7 @@
 
 ### 可扩展后端
 
-- 抽象后端基类 `BaseBackend`。
+- 适配器抽象基类 `RuntimeAdapter`（`GensokyoAI.adapters`；console/nb2/web_server 统一继承）。
 - 内置 Rich 美化的控制台后端。
 - 命令系统与后端解耦，易于扩展为 WebUI、QQ 机器人、Discord Bot 等。
 

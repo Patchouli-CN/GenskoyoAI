@@ -2,11 +2,13 @@
 
 # GensokyoAI/backends/console/_impl.py
 
+from __future__ import annotations
+
 import asyncio
 import mimetypes
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aioconsole
 from rich.console import Console as RichConsole
@@ -14,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from ...adapters import RuntimeAdapter
 from ...commands import CommandContext, CommandExecutor, CommandResult, CommandStatus
 from ...core.agent import Agent
 from ...core.agent.prompts import build_begin_scene_context
@@ -21,7 +24,9 @@ from ...core.events import Event, EventPriority, SystemEvent
 from ...utils.formatters import format_datetime, format_session_id
 from ...utils.helpers import safe_get
 from ...utils.logger import logger
-from ..base import BaseBackend
+
+if TYPE_CHECKING:
+    from ...runtime.host import RuntimeHost
 
 ART = r"""
    _____________   _______ ____  __ ____  ______
@@ -32,7 +37,7 @@ ART = r"""
 """
 
 
-class ConsoleBackend(BaseBackend):
+class ConsoleAdapter(RuntimeAdapter):
     """控制台后端 - 主动消息实时显示，Prompt.ask 负责输入"""
 
     def __init__(self, agent: Agent):
@@ -42,7 +47,7 @@ class ConsoleBackend(BaseBackend):
         self._use_stream = True
         self.console = RichConsole()
         self.cmd_executor = CommandExecutor(mode="smart")
-        self._cmd_context = CommandContext[ConsoleBackend](
+        self._cmd_context = CommandContext[ConsoleAdapter](
             agent=agent, backend=self, source="console", issuer="User"
         )
 
@@ -137,8 +142,8 @@ class ConsoleBackend(BaseBackend):
         """打印角色名前缀（流式/非流式共用）"""
         self.console.print(f"\n[{self.colors['assistant']}]{self._character_name}: [/]", end="")
 
-    async def start(self) -> None:
-        """启动"""
+    async def start(self, host: RuntimeHost | None = None) -> None:
+        """启动（host 对控制台无意义：独立入口自行装配 Agent）"""
         await self.agent.start()
         self._running = True
         logger.info("控制台后端已启动")
@@ -696,7 +701,7 @@ class ConsoleBackendBuilder:
     """控制台后端构建器 - 用于链式配置"""
 
     def __init__(self, agent: Agent):
-        self._backend = ConsoleBackend(agent)
+        self._backend = ConsoleAdapter(agent)
 
     def with_stream_mode(self, enabled: bool = True) -> ConsoleBackendBuilder:
         self._backend.set_stream_mode(enabled)
@@ -711,5 +716,5 @@ class ConsoleBackendBuilder:
             self._backend.set_color(element, color)
         return self
 
-    def build(self) -> ConsoleBackend:
+    def build(self) -> ConsoleAdapter:
         return self._backend

@@ -12,7 +12,7 @@ from ...utils.formatters import format_session_id
 from ...utils.helpers import safe_get
 
 if TYPE_CHECKING:
-    from ._impl import ConsoleBackend
+    from ._impl import ConsoleAdapter
 
 
 # ==================== 系统命令 ====================
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @command(name="exit", cmd_type=CommandType.SYSTEM, aliases=["quit"], description="退出程序")
 async def cmd_exit(ctx: CommandContext) -> CommandResult:
     """退出程序"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     backend._print_system_message("正在保存数据，再见！", style="info")
     backend._running = False
     return CommandResult.exit()
@@ -37,7 +37,7 @@ async def cmd_back(ctx: CommandContext) -> CommandResult:
 @command(name="new", cmd_type=CommandType.SYSTEM, description="创建新会话")
 async def cmd_new(ctx: CommandContext) -> CommandResult:
     """创建新会话"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     session = ctx.agent_inst.create_session()
     backend._prompt_context.clear()
     session_id_short = format_session_id(session.session_id)
@@ -59,7 +59,7 @@ async def cmd_save(ctx: CommandContext) -> CommandResult:
 @command(name="sessions", cmd_type=CommandType.SYSTEM, description="列出历史会话")
 async def cmd_sessions(ctx: CommandContext) -> CommandResult:
     """列出会话"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     sessions = ctx.agent_inst.session_manager.list_sessions()
     backend._show_sessions_panel(sessions)
     return CommandResult.success("sessions", f"共 {len(sessions)} 个历史会话")
@@ -68,7 +68,7 @@ async def cmd_sessions(ctx: CommandContext) -> CommandResult:
 @command(name="stream", cmd_type=CommandType.SYSTEM, description="切换流式输出")
 async def cmd_stream(ctx: CommandContext, mode: str = "toggle") -> CommandResult:
     """切换流式输出"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
 
     if mode in ("on", "true", "1", "enable"):
         backend._use_stream = True
@@ -88,7 +88,7 @@ async def cmd_stream(ctx: CommandContext, mode: str = "toggle") -> CommandResult
 @command(name="clear", cmd_type=CommandType.SYSTEM, description="清空提示词上下文")
 async def cmd_clear(ctx: CommandContext) -> CommandResult:
     """清空提示词上下文"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     count = len(backend._prompt_context)
     backend._prompt_context.clear()
     return CommandResult.success("clear", f"已清空 {count} 条提示词上下文")
@@ -97,7 +97,7 @@ async def cmd_clear(ctx: CommandContext) -> CommandResult:
 @command(name="errors", cmd_type=CommandType.SYSTEM, description="查看最近错误")
 async def cmd_errors(ctx: CommandContext) -> CommandResult:
     """查看系统错误状态"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     agent = ctx.agent_inst
 
     backend.console.print("[bold red]📊 错误统计[/]")
@@ -139,7 +139,7 @@ async def cmd_errors(ctx: CommandContext) -> CommandResult:
 @command(name="help", cmd_type=CommandType.SYSTEM, description="显示帮助信息")
 async def cmd_help(ctx: CommandContext) -> CommandResult:
     """显示帮助"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
 
     commands = backend.cmd_executor.list_commands()
     # World 等模式可声明本模式不可用的命令，帮助里不再展示（避免误导）
@@ -229,7 +229,7 @@ def _parse_timer_update_args(args: list[str]) -> tuple[int | None, str | None]:
 )
 async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
     """查看、修改、取消或立即触发主动定时器。"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     agent = ctx.agent_inst
     content = (cmd.content if cmd is not None else "").strip()
     parts = _split_command_content(content)
@@ -333,7 +333,7 @@ def _history_export_path(session_id: str, raw_path: str | None = None) -> Path:
 )
 async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
     """查看、导出、导入、删除、插入历史消息，或从指定位置重生成。"""
-    backend: ConsoleBackend = ctx.backend_inst
+    backend: ConsoleAdapter = ctx.backend_inst
     content = (cmd.content if cmd is not None else "").strip()
     parts = _split_command_content(content)
     action = parts[0].lower() if parts else "show"
@@ -452,7 +452,7 @@ def _make_chat_handler(cmd_name: str):
     @command(name=cmd_name, cmd_type=CommandType.CHAT, description=f"{cmd_name} 命令")
     async def handler(ctx: CommandContext, content: str = "") -> CommandResult:
         if content:
-            backend: ConsoleBackend = ctx.backend_inst
+            backend: ConsoleAdapter = ctx.backend_inst
             icon = _CHAT_ICONS.get(cmd_name, "")
             color = _CHAT_COLORS.get(cmd_name, "white")
             backend.console.print(f"[{color}]{icon} {content}[/]")
@@ -499,7 +499,7 @@ def _make_prompt_handler(cmd_name: str):
     )
     async def handler(ctx: CommandContext, content: str = "") -> CommandResult:
         if content:
-            backend: ConsoleBackend = ctx.backend_inst
+            backend: ConsoleAdapter = ctx.backend_inst
             prefix = _PROMPT_PREFIXES.get(cmd_name, "")
             icon = _PROMPT_ICONS.get(cmd_name, "")
             backend._prompt_context.append(f"{prefix}\n{content}")

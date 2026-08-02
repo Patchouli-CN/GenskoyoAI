@@ -98,7 +98,7 @@ Tool calling has been uniformly adapted for multiple providers: OpenAI / DeepSee
 
 ### Extensible Backend
 
-- Abstract backend base class `BaseBackend`.
+- Abstract adapter base class `RuntimeAdapter` (`GensokyoAI.adapters`; console/nb2/web_server all inherit).
 - Built-in Rich-beautified console backend.
 - Command system decoupled from backend, easily extended to WebUI, QQ bot, Discord Bot, etc.
 
