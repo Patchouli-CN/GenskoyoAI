@@ -192,9 +192,9 @@ class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_candidate_prefilter(self):
         kind = plugin._ReminderAttentionKind()
+        # 用户定稿「别代码里判断」：预筛恒真，全部交给 LLM 判定
         self.assertTrue(kind.candidate("3分钟后叫我一下"))
-        self.assertTrue(kind.candidate("十点钟提醒我"))
-        self.assertFalse(kind.candidate("今天天气怎么样"))
+        self.assertTrue(kind.candidate("今天天气怎么样"))
 
     def test_parse_valid_and_invalid(self):
         kind = plugin._ReminderAttentionKind()
@@ -222,12 +222,14 @@ class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reminder.remind_qq, 456)
         self.assertEqual(reminder.content, "吃饭")
 
-    async def test_dispatch_bad_time_returns_none(self):
+    async def test_dispatch_bad_time_returns_clarify_note(self):
         verdict = AttentionVerdict(
             kind="reminder", data={"when": "看不懂", "content": "x", "target_name": ""}
         )
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
-        self.assertIsNone(note)
+        # 判定为提醒但时间看不懂：注入「问清时间」上下文，而不是干瞪眼
+        self.assertIsNotNone(note)
+        self.assertIn("待确认", note)
         self.assertEqual(self._store.pending_count("qq-group-123"), 0)
 
 

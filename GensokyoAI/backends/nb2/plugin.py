@@ -42,6 +42,7 @@ from ...core.agent.prompts import (
     build_mute_break_judge_prompt,
     build_mute_forgive_context,
     build_reminder_attention_prompt,
+    build_reminder_clarify_context,
     build_reminder_preregistered_context,
     build_reminder_trigger_context,
     build_repeat_annoyance_context,
@@ -387,17 +388,19 @@ def _build_reminder_tool(agent_id: str) -> Callable[..., Awaitable[str]]:
 
 # ==================== 注意力事务（AttentionThings） ====================
 
-# 提醒意图候选预筛（免费）：只有像提醒的消息才花一次 LLM 判定
-_ATTENTION_CANDIDATE_RE = re.compile(r"提醒|叫我|喊我|到点|分钟后|小时后|别忘|记我")
-
 
 class _ReminderAttentionKind:
-    """AttentionThings 的第一个种类：到点提醒请求判定。"""
+    """AttentionThings 的第一个种类：到点提醒请求判定。
+
+    预筛恒真（用户 2026-08-02 定稿：「别代码里判断了，多个 LLM 自主判断
+    又不会死」——代码关键词预筛会拦掉花式说法，全部交给 LLM 判定；
+    candidate 钩子保留供未来种类使用）。
+    """
 
     name = "reminder"
 
     def candidate(self, text: str) -> bool:
-        return bool(_ATTENTION_CANDIDATE_RE.search(text))
+        return True
 
     def judge_prompt(self, text: str) -> str:
         return build_reminder_attention_prompt(text)
@@ -431,15 +434,19 @@ async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
         verdict.data["content"],
         verdict.data.get("target_name", ""),
     )
-    if not outcome.ok:
-        return None  # 判定命中但登记失败（时间看不懂等）：交给正常生成发挥
+    if outcome.ok:
+        logger.info(
+            f"[nb2] {agent_id} 注意力事务已代办：{outcome.due_text} 提醒 "
+            f"{outcome.remind_name}「{outcome.content[:30]}」"
+        )
+        return build_reminder_preregistered_context(
+            outcome.due_text, outcome.remind_name, outcome.content
+        )
+    # 判定为提醒请求但时间看不懂：让角色用口吻问清，而不是干瞪眼装没听见
     logger.info(
-        f"[nb2] {agent_id} 注意力事务已代办：{outcome.due_text} 提醒 "
-        f"{outcome.remind_name}「{outcome.content[:30]}」"
+        f"[nb2] {agent_id} 注意力事务：提醒时间待确认（{verdict.data['when']!r}）"
     )
-    return build_reminder_preregistered_context(
-        outcome.due_text, outcome.remind_name, outcome.content
-    )
+    return build_reminder_clarify_context(verdict.data["when"], verdict.data["content"])
 
 
 async def _inspect_attention(text: str, agent_id: str) -> list[str]:
