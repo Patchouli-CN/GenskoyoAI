@@ -27,12 +27,25 @@ def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
         "kill": lambda: None,
         "launch": lambda napcat_dir, qq_path, qq: 4242,
         "resolve_qq_path": lambda: Path("QQ.exe"),
+        "is_tree_alive": lambda pid: True,
+        # 测试加速：所有 sleep 截断到 20ms（含回连确认轮询与冷却重试）
+        "sleep": lambda seconds: asyncio.sleep(min(seconds, 0.02)),
         "platform": "win32",
     }
     options.update(overrides)
     watchdog = NapCatWatchdog(**options)
     watchdog.configure(napcat_dir=tmp)
     return watchdog
+
+
+async def _drive_trigger(watchdog: NapCatWatchdog, clock: list[float], reason: str) -> str:
+    """假时钟下驱动一次 trigger 到完成：假时钟冻结时 trigger 的回连确认轮询
+    永远等不到 deadline——测试侧手动拨钟直到任务结束（模拟时间流逝）。"""
+    task = asyncio.create_task(watchdog.trigger(reason))
+    while not task.done():
+        clock[0] += 0.05
+        await asyncio.sleep(0.01)
+    return task.result()
 
 
 class TriggerTests(unittest.IsolatedAsyncioTestCase):
@@ -72,13 +85,74 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cooldown_blocks_second_trigger(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            watchdog = _make_watchdog(Path(tmpdir), recover_timeout_seconds=0.01)
+            clock = [1000.0]
+            watchdog = _make_watchdog(
+                Path(tmpdir), recover_timeout_seconds=0.01, now=lambda: clock[0]
+            )
             watchdog.notify_connected(3779163297)
             watchdog._connected.clear()
-            first = await watchdog.trigger("a")
+            first = await _drive_trigger(watchdog, clock, "a")
             self.assertEqual(first, "recover_timeout")
             second = await watchdog.trigger("b")
             self.assertEqual(second, "cooldown")
+            # 冷却拒绝不再是丢弃：排了到期重试（仍离线才重试）
+            self.assertIsNotNone(watchdog._cooldown_retry_task)
+            watchdog.close()
+
+    async def test_cooldown_retry_fires_when_still_offline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls: list[str] = []
+            clock = [1000.0]
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                recover_timeout_seconds=0.01,
+                kill=lambda: calls.append("kill"),
+                now=lambda: clock[0],
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+            await _drive_trigger(watchdog, clock, "a")
+            self.assertEqual(await watchdog.trigger("b"), "cooldown")
+            await asyncio.sleep(0.06)  # retry 已醒，但时钟未走 → 续排下一轮
+            self.assertEqual(len(calls), 1)
+            clock[0] += 700.0  # 冷却期满（默认 600s）
+            await asyncio.sleep(0.15)
+            self.assertEqual(len(calls), 2)
+            watchdog.close()
+
+    async def test_cooldown_retry_cancelled_on_reconnect(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls: list[str] = []
+            clock = [1000.0]
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                recover_timeout_seconds=0.01,
+                kill=lambda: calls.append("kill"),
+                now=lambda: clock[0],
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+            await _drive_trigger(watchdog, clock, "a")
+            self.assertEqual(await watchdog.trigger("b"), "cooldown")
+            watchdog.notify_connected(3779163297)  # 回连：重试取消
+            clock[0] += 700.0
+            await asyncio.sleep(0.15)
+            self.assertEqual(len(calls), 1)
+            watchdog.close()
+
+    async def test_process_died_alerts_immediately(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                recover_timeout_seconds=60.0,  # 若误判会挂足 60s——进程树死应立即返回
+                is_tree_alive=lambda pid: False,
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+            result = await watchdog.trigger("bot_offline")
+            self.assertEqual(result, "process_died")
+            alert = json.loads((Path(tmpdir) / "alert.json").read_text(encoding="utf-8"))
+            self.assertEqual(alert["kind"], "process_died")
 
     async def test_daily_cap_stops_auto_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -196,6 +270,13 @@ class BotOfflineEventTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LaunchCommandTests(unittest.TestCase):
+    def test_kill_tree_ps_covers_pause_stuck_bat_consoles(self):
+        # 旧 main.bat 实例被杀后 cmd 卡在 pause：杀树脚本必须一并清理这些窗口
+        from GensokyoAI.backends.nb2.watchdog import _KILL_TREE_PS
+
+        self.assertIn("cmd.exe", _KILL_TREE_PS)
+        self.assertIn("launcher-win10", _KILL_TREE_PS)
+
     def test_launch_wraps_cmd_with_utf8_codepage(self):
         # 守护拉起的控制台必须先 chcp 65001（launcher bat 同款），否则中文日志乱码
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -229,7 +310,7 @@ class WatchdogConfigTests(unittest.TestCase):
         self.assertEqual(config.napcat_dir, Path("ignore/NapCat.Shell"))
         self.assertEqual(config.watchdog_cooldown_seconds, 600.0)
         self.assertEqual(config.watchdog_max_restarts, 5)
-        self.assertEqual(config.watchdog_recover_timeout, 300.0)
+        self.assertEqual(config.watchdog_recover_timeout, 900.0)
         self.assertEqual(config.watchdog_disconnect_grace, 60.0)
 
     def test_parse_from_env(self):

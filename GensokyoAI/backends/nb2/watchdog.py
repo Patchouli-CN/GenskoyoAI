@@ -34,6 +34,9 @@ if sys.platform == "win32":
 
 # 杀 NapCat 进程树：NapCatWinBootMain（注入启动器）+ 全部子孙（QQ.exe 及其渲染进程）。
 # 按父子关系定向收口，绝不像 KillQQ.bat 那样 taskkill /im QQ.exe 误伤个人 QQ。
+# 顺带清掉旧实例残留在 `pause` 上的 main.bat/launcher 控制台窗口
+# （cmd.exe 命令行含 NapCat.Shell / launcher-win10）——卡住的旧窗口会误导
+# 用户再开一个实例互踢（2026-08-02 实机日志）。
 _KILL_TREE_PS = (
     "$roots = @(Get-CimInstance Win32_Process -Filter \"Name='NapCatWinBootMain.exe'\""
     " | Select-Object -ExpandProperty ProcessId);"
@@ -45,9 +48,27 @@ _KILL_TREE_PS = (
     " foreach ($c in ($all | Where-Object ParentProcessId -eq $p)) {"
     " if ($targets.Add($c.ProcessId)) { $queue.Enqueue($c.ProcessId) } } }"
     " foreach ($t in $targets) { Stop-Process -Id $t -Force -ErrorAction SilentlyContinue }"
+    " $bats = @($all | Where-Object { $_.Name -eq 'cmd.exe' -and"
+    " $_.CommandLine -match 'NapCat\\.Shell|launcher-win10' });"
+    " foreach ($b in $bats) { Stop-Process -Id $b.ProcessId -Force -ErrorAction SilentlyContinue }"
+)
+
+# 进程树存活探测：启动器 PID 自身还在，或其子孙（QQ.exe/渲染进程）还在——
+# 用于确认「确实重启了」：闪退立刻判死，而不是干等回连超时。
+_TREE_ALIVE_PS = (
+    "$targetPid = {pid};"
+    " $all = Get-CimInstance Win32_Process;"
+    " if (@($all | Where-Object ProcessId -eq $targetPid).Count -gt 0) {{ exit 0 }}"
+    " $queue = New-Object System.Collections.Generic.Queue[int]; $queue.Enqueue($targetPid);"
+    " while ($queue.Count) {{ $p = $queue.Dequeue();"
+    " foreach ($c in ($all | Where-Object ParentProcessId -eq $p)) {{ exit 0 }} }}"
+    " exit 1"
 )
 
 _QQ_UNINSTALL_KEY = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ"
+
+# 回连确认的轮询间隔（秒）：进程树存活 + WS 回连双通道检查
+_RECOVER_POLL_SECONDS = 5.0
 
 
 def _resolve_qq_path() -> Path:
@@ -63,13 +84,24 @@ def _resolve_qq_path() -> Path:
 
 
 def _windows_kill_napcat_tree() -> None:
-    """杀掉 NapCat 注入启动器及其全部子孙进程（不存在则安静通过）。"""
+    """杀掉 NapCat 注入启动器及其全部子孙进程 + pause 残留控制台（不存在则安静通过）。"""
     subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", _KILL_TREE_PS],
         capture_output=True,
         timeout=30,
         check=False,
     )
+
+
+def _windows_is_tree_alive(pid: int) -> bool:
+    """启动器 PID 或其子孙是否还活着（确认 NapCat 确实重启成功/没闪退）。"""
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _TREE_ALIVE_PS.format(pid=pid)],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _windows_launch_napcat(napcat_dir: Path, qq_path: Path, bot_qq: int) -> int:
@@ -118,12 +150,13 @@ class NapCatWatchdog:
         enabled: bool = True,
         cooldown_seconds: float = 600.0,
         max_restarts_per_day: int = 5,
-        recover_timeout_seconds: float = 300.0,
+        recover_timeout_seconds: float = 900.0,
         disconnect_grace_seconds: float = 60.0,
         alert_path: Path | None = None,
         kill: Callable[[], None] = _windows_kill_napcat_tree,
         launch: Callable[[Path, Path, int], int] = _windows_launch_napcat,
         resolve_qq_path: Callable[[], Path] = _resolve_qq_path,
+        is_tree_alive: Callable[[int], bool] = _windows_is_tree_alive,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         now: Callable[[], float] = time.time,
         platform: str = sys.platform,
@@ -137,6 +170,7 @@ class NapCatWatchdog:
         self._kill = kill
         self._launch = launch
         self._resolve_qq_path = resolve_qq_path
+        self._is_tree_alive = is_tree_alive
         self._sleep = sleep
         self._now = now
         self._platform = platform
@@ -144,8 +178,10 @@ class NapCatWatchdog:
         self._bot_qq: int | None = None
         self._attempts: list[float] = []  # 近 24h 重启时间戳
         self._last_attempt = 0.0
+        self._trigger_active = False  # 恢复流程进行中（单 flight 旗标，不依赖任务身份）
         self._recover_task: asyncio.Task[Any] | None = None
         self._grace_task: asyncio.Task[None] | None = None
+        self._cooldown_retry_task: asyncio.Task[None] | None = None
         self._connected = asyncio.Event()
         self._closed = False
 
@@ -155,7 +191,7 @@ class NapCatWatchdog:
     def close(self) -> None:
         """进程退出时停用守护（防止适配器正常关停时反而把 NapCat 拉起来）。"""
         self._closed = True
-        for task in (self._recover_task, self._grace_task):
+        for task in (self._recover_task, self._grace_task, self._cooldown_retry_task):
             if task and not task.done():
                 task.cancel()
 
@@ -166,8 +202,9 @@ class NapCatWatchdog:
         was_offline = not self._connected.is_set()
         self._bot_qq = bot_qq
         self._connected.set()
-        if self._grace_task and not self._grace_task.done():
-            self._grace_task.cancel()
+        for task in (self._grace_task, self._cooldown_retry_task):
+            if task and not task.done():
+                task.cancel()
         if was_offline:
             logger.info(f"[nb2-watchdog] 协议端已回连（QQ {bot_qq}）")
         self._clear_alert()
@@ -203,27 +240,44 @@ class NapCatWatchdog:
 
     @property
     def _restarting(self) -> bool:
-        return self._recover_task is not None and not self._recover_task.done()
+        return self._trigger_active
 
     def _spawn_recovery(self, reason: str) -> None:
         if self._restarting:
             logger.info(f"[nb2-watchdog] 恢复流程进行中，忽略重复触发（{reason}）")
             return
-        self._recover_task = asyncio.create_task(self.trigger(reason))
+        # 立即占旗（而不是等任务起跑）：连续两个事件在同一拍到达时，
+        # 第二个必须看到「进行中」
+        self._trigger_active = True
+        self._recover_task = asyncio.create_task(self._run_trigger(reason))
 
     async def trigger(self, reason: str) -> str:
         """执行一次恢复（单 flight）；返回结果码供日志/测试断言。"""
-        # 无论从哪条路径进来（事件/宽限/直接调用），跑起来就算 restarting，
-        # 保证「我们亲手杀出的 WS 断开」与重复触发都能被识别
-        self._recover_task = asyncio.current_task()
+        # 单 flight 旗标：任何入口（事件/宽限/直接调用）并发触发都只跑一个，
+        # 且「我们亲手杀出的 WS 断开」能被识别（不靠任务身份，直接 await 也安全）
+        if self._trigger_active:
+            logger.info(f"[nb2-watchdog] 恢复流程进行中，忽略并发触发（{reason}）")
+            return "inflight"
+        self._trigger_active = True
+        return await self._run_trigger(reason)
+
+    async def _run_trigger(self, reason: str) -> str:
+        try:
+            return await self._trigger_inner(reason)
+        finally:
+            self._trigger_active = False
+
+    async def _trigger_inner(self, reason: str) -> str:
         if self._closed or not self.enabled:
             return "disabled"
         now = self._now()
         if now - self._last_attempt < self.cooldown_seconds:
+            remaining = self.cooldown_seconds - (now - self._last_attempt)
             logger.warning(
                 f"[nb2-watchdog] 冷却中（上次重启 {now - self._last_attempt:.0f}s 前），"
-                f"忽略本次触发（{reason}）"
+                f"{remaining:.0f}s 后自动重试（{reason}）"
             )
+            self._schedule_cooldown_retry(remaining, reason)
             return "cooldown"
         self._attempts = [ts for ts in self._attempts if now - ts <= 86400.0]
         if len(self._attempts) >= self.max_restarts_per_day:
@@ -253,18 +307,49 @@ class NapCatWatchdog:
         except Exception as error:
             self._alert("restart_failed", f"杀树/重启失败: {error}")
             return "restart_failed"
-        try:
-            await asyncio.wait_for(self._connected.wait(), self.recover_timeout_seconds)
-        except TimeoutError:
-            self._alert(
-                "recover_timeout",
-                f"重启后 {self.recover_timeout_seconds:.0f}s 未回连，"
-                "快速登录可能已失效——请检查 NapCat 是否需要重新扫码",
-            )
-            return "recover_timeout"
+        # 回连确认（双通道）：轮询进程树存活 + 等 WS 回连——进程闪退立刻判死
+        # （不干等超时），冷启动慢也不误报（超时给足，默认 15 分钟）
+        deadline = self._now() + self.recover_timeout_seconds
+        while not self._connected.is_set():
+            if self._now() >= deadline:
+                self._alert(
+                    "recover_timeout",
+                    f"重启后 {self.recover_timeout_seconds:.0f}s 未回连，"
+                    "快速登录可能已失效——请检查 NapCat 是否需要重新扫码",
+                )
+                return "recover_timeout"
+            if not await asyncio.to_thread(self._is_tree_alive, pid):
+                self._alert(
+                    "process_died",
+                    f"NapCat 进程树已退出（启动器 PID {pid}），疑似闪退——"
+                    "请查看 NapCat 控制台/日志确认原因",
+                )
+                return "process_died"
+            await self._sleep(_RECOVER_POLL_SECONDS)
         logger.info("[nb2-watchdog] 协议端已回连，自动恢复成功")
         self._clear_alert()
         return "restarted"
+
+    def _schedule_cooldown_retry(self, delay: float, reason: str) -> None:
+        """冷却期拒绝的触发排一个到期重试（仍离线才重试，回连/关停自动取消）。
+
+        从 retry 任务自身里再次排期是被允许的（retry 醒来后仍处冷却期时
+        续排下一轮）——否则重试链会在 retry 任务「未完成」的自我占用下断掉。
+        """
+        current = asyncio.current_task()
+        if (
+            self._cooldown_retry_task is not None
+            and not self._cooldown_retry_task.done()
+            and self._cooldown_retry_task is not current
+        ):
+            return  # 别的任务已排期，不重复
+
+        async def _retry() -> None:
+            await self._sleep(delay)
+            if not self._connected.is_set() and not self._closed:
+                self._spawn_recovery(f"{reason}（冷却期满重试）")
+
+        self._cooldown_retry_task = asyncio.create_task(_retry())
 
     # ==================== 告警（哨兵文件 + ERROR 日志） ====================
 

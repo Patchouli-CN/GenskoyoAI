@@ -75,7 +75,7 @@ class Nb2Config:
     napcat_dir: Path = Path("ignore/NapCat.Shell")  # 相对 root_dir/cwd 或绝对路径
     watchdog_cooldown_seconds: float = 600.0  # 两次自动重启的最小间隔
     watchdog_max_restarts: int = 5  # 24h 内自动重启上限
-    watchdog_recover_timeout: float = 300.0  # 重启后等待回连的超时（超时告警）
+    watchdog_recover_timeout: float = 900.0  # 重启后等待回连的超时（超时告警；冷启动实测可达 6+ 分钟）
     watchdog_disconnect_grace: float = 60.0  # WS 断开的回连宽限期（NapCat 自己会重连）
     # 到点提醒：角色经 set_reminder 工具接活，到点用自己的口吻 @ 人说出；
     # nb2_data/reminders.json 持久化（重启不丢），30s tick 扫到点项

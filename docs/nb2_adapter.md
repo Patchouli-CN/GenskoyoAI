@@ -63,7 +63,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_NAPCAT_DIR` | `ignore/NapCat.Shell` | NapCat.Shell 目录（相对 root_dir/cwd 或绝对路径） |
 | `GSK_NB2_WATCHDOG_COOLDOWN` | `600` | 两次自动重启的最小间隔（秒） |
 | `GSK_NB2_WATCHDOG_MAX_RESTARTS` | `5` | 24h 内自动重启上限，超限告警停手 |
-| `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `300` | 重启后等待回连的超时（秒），超时告警 |
+| `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `900` | 重启后等待回连的超时（秒），超时告警 |
 | `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` | `60` | WS 断开的回连宽限期（秒），NapCat 自己连上就不动 |
 | `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
@@ -96,11 +96,16 @@ NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自�
 1. **触发**：`bot_offline` 事件立即触发；WS 断开则等
    `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` 宽限期（NapCat 自己重连上就不动）。
 2. **杀树**：只杀 `NapCatWinBootMain.exe` 及其全部子孙进程（PowerShell CIM
-   按父子关系定向）——**不会像 `KillQQ.bat` 那样误伤你开着的个人 QQ**。
+   按父子关系定向）——**不会像 `KillQQ.bat` 那样误伤你开着的个人 QQ**；
+   顺带清掉旧实例卡在 `pause` 上的 main.bat/launcher 控制台窗口
+   （避免你误以为没启动再开一个、两个实例互踢）。
 3. **快速登录**：按 `launcher-win10-user.bat` 同等环境变量带 QQ 号重启
    NapCat（本地缓存凭证静默重登，**无需扫码**），独立控制台窗口、日志可见。
-4. **确认**：等 `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` 内协议端回连即恢复成功。
-5. **节制**：冷却 `GSK_NB2_WATCHDOG_COOLDOWN` + 24h 上限
+4. **确认（双通道）**：每 5s 轮询——进程树存活探测（闪退立刻告警
+   `process_died`，不干等超时）+ WS 回连；超时上限
+   `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT`（默认 900s，冷启动实测可达 6+ 分钟）。
+5. **节制**：冷却 `GSK_NB2_WATCHDOG_COOLDOWN`（冷却期吞掉的触发会**排到期
+   重试**，回连/关停自动取消，不会丢弃）+ 24h 上限
    `GSK_NB2_WATCHDOG_MAX_RESTARTS` 次；超限/回连超时/重启失败则写
    `nb2_data/napcat_offline_alert.json` 哨兵 + ERROR 日志，停手等人
    （防无限重启激怒风控）；回连成功自动清除哨兵。仅 Windows 生效，
