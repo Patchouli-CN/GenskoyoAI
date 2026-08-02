@@ -51,9 +51,12 @@ class BackgroundManager:
         max_workers: int = 3,
         max_queue_size: int = 100,
         event_bus: EventBus | None = None,
+        label: str | None = None,
     ):
         self.max_workers = max_workers
         self.max_queue_size = max_queue_size
+        # 日志租户后缀（Runtime 多租户下区分各租户的同款关闭日志）
+        self._log_suffix = f" (租户: {label})" if label else ""
 
         self._task_queue: asyncio.Queue[BackgroundTask] = asyncio.Queue(maxsize=max_queue_size)
 
@@ -187,7 +190,7 @@ class BackgroundManager:
             stats = self._stats.copy()
 
         logger.info(
-            f"后台管理器已停止 "
+            f"后台管理器已停止{self._log_suffix} "
             f"(提交: {stats['submitted']}, "
             f"完成: {stats['completed']}, "
             f"失败: {stats['failed']}, "
@@ -267,23 +270,23 @@ class BackgroundManager:
                             self._publish_worker_event("idle", worker_id)
 
                     except asyncio.CancelledError:
-                        logger.debug(f"工作器 {worker_id} 任务被取消")
+                        logger.debug(f"工作器 {worker_id} 任务被取消{self._log_suffix}")
                         raise
                     except Exception as e:
-                        logger.error(f"任务执行异常: {e}")
+                        logger.error(f"任务执行异常{self._log_suffix}: {e}")
                         self._publish_worker_event("failed", worker_id, task=task, error=e)
 
             except asyncio.CancelledError:
-                logger.debug(f"工作器 {worker_id} 已取消")
+                logger.debug(f"工作器 {worker_id} 已取消{self._log_suffix}")
                 break
             except TimeoutError:
                 continue
             except Exception as e:
-                logger.error(f"工作器 {worker_id} 发生未预期异常: {e}")
+                logger.error(f"工作器 {worker_id} 发生未预期异常{self._log_suffix}: {e}")
                 self._publish_worker_event("failed", worker_id, error=e)
                 continue
 
-        logger.debug(f"工作器 {worker_id} 已停止")
+        logger.debug(f"工作器 {worker_id} 已停止{self._log_suffix}")
 
     async def _update_stats(self, result: TaskResult) -> None:
         """更新统计信息"""

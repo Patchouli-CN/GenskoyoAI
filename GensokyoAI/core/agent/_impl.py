@@ -55,10 +55,13 @@ class Agent:
         dependencies: AgentDependencies | None = None,
         setup_signal_handlers: bool = True,
         manage_initiative_timer: bool = True,
+        label: str | None = None,
     ) -> None:
         # 可选依赖注入：多角色（World）模式下共享 ModelClient / resource_gates
         # 与稳定 actor_id / world_id；单角色模式为 None，保持自建行为。
         self._dependencies = dependencies
+        # 日志租户标签（Runtime 多租户传 agent_id）：区分各租户刷屏的关闭日志
+        self._log_label = label or ""
         # 是否注册进程级信号处理器。多 Actor 共存时同一事件循环每信号只保留
         # 一个处理器（last-wins）且其 shutdown 会直接 sys.exit，其余 Actor 的
         # 最终保存不会执行——World 装配 Actor 时应传 False，由 World 统一接管。
@@ -85,7 +88,7 @@ class Agent:
         self._init_action_components()
         self._publish_started_event()
 
-        logger.info(f"Agent 初始化完成，角色: {self.config.character.name}")  # type: ignore
+        logger.info(f"Agent 初始化完成，角色: {self.config.character.name}{self._tenant_suffix}")  # type: ignore
 
     # ==================== 初始化子方法 ====================
 
@@ -256,11 +259,17 @@ class Agent:
         return self._message_builder
 
     @property
+    def _tenant_suffix(self) -> str:
+        """日志租户后缀：Runtime 多租户下区分各租户刷屏的同款日志。"""
+        return f" (租户: {self._log_label})" if self._log_label else ""
+
+    @property
     def save_coordinator(self) -> SaveCoordinator:
         if self._save_coordinator is None:
             self._save_coordinator = SaveCoordinator(
                 session_manager=self.session_manager,
                 session_config=self.config.session,
+                label=self._log_label or None,
             )
             if self._background_manager:
                 self._save_coordinator.set_background_manager(self._background_manager)
@@ -702,6 +711,7 @@ class Agent:
                     if self.config.character is not None and self.config.character.emotion_baseline
                     else None
                 ),
+                log_label=self._log_label or None,
             )
             self._lazy_components.think_engine = self._think_engine
         if self._think_engine:
@@ -979,7 +989,7 @@ class Agent:
             logger.error(f"关闭时保存数据出错: {e}")
 
         await self.event_bus.stop()
-        logger.info("Agent 已关闭")
+        logger.info(f"Agent 已关闭{self._tenant_suffix}")
 
     async def shutdown(self) -> None:
         await self.lifecycle.shutdown()
@@ -994,6 +1004,6 @@ class Agent:
                 self._save_coordinator.set_background_manager(self._background_manager)
 
     def _create_background_manager(self) -> BackgroundManager:
-        manager = BackgroundManager(max_workers=2, max_queue_size=50)
+        manager = BackgroundManager(max_workers=2, max_queue_size=50, label=self._log_label or None)
         manager.register_persistence_worker(PersistenceWorker(self.session_manager.persistence))
         return manager

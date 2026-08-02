@@ -25,9 +25,12 @@ class SaveCoordinator:
         self,
         session_manager: SessionManager,
         session_config: SessionConfig,
+        label: str | None = None,
     ):
         self._session_manager = session_manager
         self._session_config = session_config
+        # 日志租户后缀（Runtime 多租户下区分各租户的同款保存日志）
+        self._log_suffix = f" (租户: {label})" if label else ""
 
         # 状态
         self._last_saved_content_hash: str = ""  # 用内容哈希去重
@@ -185,7 +188,8 @@ class SaveCoordinator:
             )
             if success:
                 logger.info(
-                    f"最终保存已完成 (轮数: {len(working_memory) // 2}, 消息数: {len(working_memory)})"
+                    f"最终保存已完成{self._log_suffix} "
+                    f"(轮数: {len(working_memory) // 2}, 消息数: {len(working_memory)})"
                 )
             return success
         finally:

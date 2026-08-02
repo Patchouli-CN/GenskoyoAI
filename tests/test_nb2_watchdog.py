@@ -10,9 +10,11 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from GensokyoAI.backends.nb2.config import Nb2Config
-from GensokyoAI.backends.nb2.watchdog import NapCatWatchdog
+from GensokyoAI.backends.nb2.watchdog import NapCatWatchdog, _windows_launch_napcat
 
 
 def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
@@ -191,6 +193,33 @@ class BotOfflineEventTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(watchdog._recover_task)
             await watchdog._recover_task
             self.assertEqual(calls, ["launch"])
+
+
+class LaunchCommandTests(unittest.TestCase):
+    def test_launch_wraps_cmd_with_utf8_codepage(self):
+        # 守护拉起的控制台必须先 chcp 65001（launcher bat 同款），否则中文日志乱码
+        with tempfile.TemporaryDirectory() as tmpdir:
+            captured: dict = {}
+
+            def fake_popen(args, **kwargs):
+                captured["args"] = args
+                captured["kwargs"] = kwargs
+                return SimpleNamespace(pid=1234)
+
+            with patch(
+                "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
+            ):
+                pid = _windows_launch_napcat(Path(tmpdir), Path("QQ.exe"), 3779163297)
+            self.assertEqual(pid, 1234)
+            args = captured["args"]
+            self.assertEqual(args[:2], ["cmd", "/c"])
+            command = args[2]
+            self.assertIn("chcp 65001", command)
+            self.assertIn("3779163297", command)
+            self.assertIn("NapCatWinBootMain.exe", command)
+            # loadNapCat.js 按 launcher 同款内容落盘
+            load_js = (Path(tmpdir) / "loadNapCat.js").read_text(encoding="utf-8")
+            self.assertIn("napcat.mjs", load_js)
 
 
 class WatchdogConfigTests(unittest.TestCase):

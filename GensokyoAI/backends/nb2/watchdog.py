@@ -89,13 +89,14 @@ def _windows_launch_napcat(napcat_dir: Path, qq_path: Path, bot_qq: int) -> int:
     )
     if not load_js.exists() or load_js.read_text(encoding="utf-8").strip() != content:
         load_js.write_text(content, encoding="utf-8")
+    # 经 cmd 先把新控制台代码页切到 UTF-8（launcher bat 里的 chcp 65001 同款），
+    # 否则守护拉起的 NapCat 控制台默认 GBK，中文日志全是乱码
+    command = (
+        f'chcp 65001 >nul && "{env["NAPCAT_LAUNCHER_PATH"]}" '
+        f'"{qq_path}" "{env["NAPCAT_INJECT_PATH"]}" {bot_qq}'
+    )
     process = subprocess.Popen(
-        [
-            env["NAPCAT_LAUNCHER_PATH"],
-            str(qq_path),
-            env["NAPCAT_INJECT_PATH"],
-            str(bot_qq),
-        ],
+        ["cmd", "/c", command],
         cwd=napcat_dir,
         env=env,
         # 独立控制台窗口：存活不依赖本进程，日志对用户可见（与手动启动一致）

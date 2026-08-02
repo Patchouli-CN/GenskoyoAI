@@ -900,7 +900,13 @@ class RuntimeService(WorldOpsMixin):
                 config.session.save_path.mkdir(parents=True, exist_ok=True)
             self._apply_model_overrides(config.model, model_overrides)
             self._apply_embedding_overrides(config.embedding, embedding_overrides)
-            agent = Agent(config=config, config_file=config_file, character_file=char_file)
+            agent = Agent(
+                config=config,
+                config_file=config_file,
+                character_file=char_file,
+                # 日志租户标签：多租户关闭时刷屏的同款日志按 agent_id 区分
+                label=self._tenant_key[1] if self._tenant_key else None,
+            )
 
             if session_id:
                 if not agent.resume_session(session_id):

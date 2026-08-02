@@ -235,6 +235,29 @@ provider 转换属组装逻辑，不搬。
 建议 commit message（待用户授权后提交）：
 `feat(nb2): 新增 NoneBot2 QQ 适配器（进程内多租户宿主 + 主动消息事件推送），initiative_timer.update 支持 enabled 开关`
 
+## 8.45 关闭日志租户标签 + 守护重启控制台乱码修复（2026-08-02，用户点单）
+
+- 问题：多租户关停时刷屏的同款关闭日志（思考引擎/后台管理器/工作器/
+  最终保存/Agent 已关闭）没有租户身份，分不清哪行是哪户。
+- **label 透传**：Agent 新增可选 `label` 参数（`_log_label` +
+  `_tenant_suffix`），构造 ThinkEngine（`log_label`）/ BackgroundManager
+  （`label`）/ SaveCoordinator（`label`）时透传；RuntimeService 租户创建
+  Agent 时传 `self._tenant_key[1]`（agent_id，如 qq-group-263402786）；
+  本地/CLI（tenant_key=None）不传，日志与此前完全一致。
+- 生效行：Agent 初始化/已关闭、思考引擎启动/停止（`, 租户: x` 嵌进原有
+  括号内）、后台管理器已停止与工作器取消/停止/异常、最终保存已完成。
+- **乱码修复**（§8.44 守护连带）：launcher bat 里有 `chcp 65001` 把
+  控制台切 UTF-8，守护直接拉起 exe 时新控制台是默认 GBK → 中文日志
+  全乱码。`_windows_launch_napcat` 改经 `cmd /c "chcp 65001 >nul && …"`
+  启动（CREATE_NEW_CONSOLE 不变）。
+- 测试：tests/test_tenant_log_labels.py 4 例（四组件后缀有/无 label）+
+  test_nb2_watchdog.py 增 LaunchCommandTests（cmd 包装/chcp 65001/QQ 号/
+  loadNapCat.js 落盘）。基线：826 passed, 3 subtests passed，
+  ruff / pyright 全绿。
+
+建议 commit message（待用户授权后提交）：
+`feat(runtime): 关闭日志带租户标签——Agent/ThinkEngine/BackgroundManager/SaveCoordinator 透传 label，租户创建传 agent_id；watchdog 启动命令补 chcp 65001 修控制台乱码`
+
 ## 8.44 NapCat 掉线守护：bot_offline 事件 + 自动快速登录恢复（2026-08-02，用户定稿）
 
 - 起因：账号被风控踢下线（`[KickedOffLine] 你的账号当前登录已失效，

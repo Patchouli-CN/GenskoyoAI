@@ -146,6 +146,7 @@ class ThinkEngine:
         debug_silent_output: bool = False,
         motivation_weights: MotivationWeightsConfig | None = None,
         emotion_baseline: Emotion | None = None,
+        log_label: str | None = None,
     ) -> None:
         self.semantic_memory = semantic_memory
         self.model_client = model_client
@@ -154,6 +155,8 @@ class ThinkEngine:
         self.config = config
         self.initiative_timer_config = initiative_timer_config
         self.debug_silent_output = debug_silent_output
+        # 日志租户后缀（Runtime 多租户下区分各租户的同款日志）
+        self._log_suffix = f", 租户: {log_label}" if log_label else ""
         # 四维心情权重（角色卡 motivation_weights）；None = 通用人格基线
         self._motivation_weights = motivation_weights or MotivationWeightsConfig()
         # 八维情绪状态机（角色卡 emotion_baseline 为初始/衰减基线）：
@@ -194,7 +197,7 @@ class ThinkEngine:
         self._running = True
         self._long_term_task = asyncio.create_task(self._long_term_loop())
         logger.info(
-            f"🧠 [ThinkEngine] 思考引擎已启动 (角色: {self.character_name}, "
+            f"🧠 [ThinkEngine] 思考引擎已启动 (角色: {self.character_name}{self._log_suffix}, "
             f"长期思考间隔: {self.config.think_interval_minutes}分钟)"
         )
 
@@ -205,7 +208,7 @@ class ThinkEngine:
             self._long_term_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._long_term_task
-        logger.info(f"🧠 [ThinkEngine] 思考引擎已停止 (角色: {self.character_name})")
+        logger.info(f"🧠 [ThinkEngine] 思考引擎已停止 (角色: {self.character_name}{self._log_suffix})")
 
     # ==================== 长期思考（定时话题游走）====================
 
