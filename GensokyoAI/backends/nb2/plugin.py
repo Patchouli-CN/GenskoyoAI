@@ -14,8 +14,10 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from nonebot import get_bots, get_driver, on_message, on_notice
 from nonebot.adapters.onebot.v11 import (
@@ -37,6 +39,7 @@ from ...core.agent.prompts import (
     build_mute_break_context,
     build_mute_break_judge_prompt,
     build_mute_forgive_context,
+    build_reminder_trigger_context,
     build_repeat_annoyance_context,
     build_repeat_farewell_context,
 )
@@ -46,6 +49,14 @@ from ...utils.logger import logger
 from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
 from .pending import PendingChat, PendingChatQueue, merge_batch
+from .reminders import (
+    REMINDER_MAX_ATTEMPTS,
+    REMINDER_TICK_SECONDS,
+    Reminder,
+    ReminderStore,
+    local_now,
+    parse_when,
+)
 from .repeat_guard import RepeatGuard, RepeatVerdict
 from .store import MemberStore, SessionStore
 from .watchdog import NapCatWatchdog
@@ -74,6 +85,10 @@ _watchdog = NapCatWatchdog(
     alert_path=_config.data_dir / "napcat_offline_alert.json",
 )
 _watchdog.configure(napcat_dir=_napcat_dir)
+
+# 到点提醒：角色经 set_reminder 工具接活，tick 循环扫到点项后生成并 @ 投递
+_reminders = ReminderStore(_config.data_dir / "reminders.json")
+_reminder_task: asyncio.Task[None] | None = None
 
 # 随每条回复注入的附加要求（GSK_NB2_EXTRA_PROMPT），只影响当轮回复、不写入会话
 _EXTRA_CONTEXTS = (
@@ -263,6 +278,183 @@ async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
         logger.exception(f"[nb2] 主动消息投递失败（{agent_id}）")
 
 
+# ==================== 到点提醒 ====================
+
+
+def _resolve_remind_target(kind: str, target_id: int, target_name: str) -> tuple[int | None, str]:
+    """把 LLM 给的昵称解析成要 @ 的 QQ（群名片缓存反查）；找不到则不 @、只带名字。"""
+    name = target_name.strip().replace("【", "").replace("】", "")
+    if kind == "user":
+        return target_id, name or "你"
+    if not name:
+        return None, "大家"
+    for (group_id, qq), cached in _member_names.items():
+        if group_id == target_id and cached == name:
+            return qq, name
+    return None, name
+
+
+def _build_reminder_tool(agent_id: str) -> Callable[..., Awaitable[str]]:
+    """按租户构造 set_reminder 工具（闭包捕获租户 id，投递目标调用时现查）。"""
+
+    async def set_reminder(when: str, content: str, target_name: str = "") -> str:
+        """设置到点提醒：当有人希望"过段时间/到某点提醒 XX 做某事"时调用（比如
+        "10 分钟后提醒我吃饭"、"明天早上 8 点喊栗子起床"）。when 是时间：相对
+        （"10分钟后"、"2小时后"）、时刻（"15:30"、"明天 08:00"）或日期时间
+        （"2026-08-03 15:30"）；content 是要提醒的事（一两句话说清）；target_name
+        是要提醒的群友昵称（消息里【】中的名字），默认当前说话人。到点你会收到
+        提示，用自己的口吻把提醒说出来。"""
+        now = local_now()
+        due = parse_when(when, now)
+        if due is None:
+            return "这个时间没看懂……换成「10分钟后」「15:30」「明天 08:00」这种说法再叫我吧。"
+        if due - now < timedelta(seconds=REMINDER_TICK_SECONDS):
+            return "太近啦，30 秒内的事直接说就行，不用设提醒。"
+        if due - now > timedelta(days=30):
+            return "超过 30 天的提醒我记不住啦，近一点再叫我。"
+        content_clean = content.strip()[:200]
+        if not content_clean:
+            return "提醒的事是空的……要提醒什么呀？"
+        if _reminders.pending_count(agent_id) >= _config.reminder_max_per_tenant:
+            return f"这里已经攒了 {_config.reminder_max_per_tenant} 条提醒了，先消化一些再加。"
+        target = _targets.get(agent_id)
+        if target is None:
+            return "还不知道往哪儿说，先在群里/私聊里聊一句再设提醒吧。"
+        kind, target_id = target
+        remind_qq, remind_name = _resolve_remind_target(kind, target_id, target_name)
+        reminder = Reminder(
+            id=uuid4().hex[:12],
+            agent_id=agent_id,
+            key=f"{kind}:{target_id}",
+            kind=kind,
+            target_id=target_id,
+            remind_qq=remind_qq,
+            remind_name=remind_name,
+            content=content_clean,
+            due=due,
+            created_at=now,
+        )
+        _reminders.add(reminder)
+        due_text = due.strftime("%m月%d日 %H:%M")
+        logger.info(
+            f"[nb2] {agent_id} 新增提醒：{due_text} 提醒 {remind_name}"
+            f"「{content_clean[:30]}」（{reminder.id}）"
+        )
+        return f"记下啦：{due_text} 提醒 {remind_name}「{content_clean}」，到点我会来说。"
+
+    return set_reminder
+
+
+async def _generate_for_tenant(
+    agent_id: str, key: str, text: str, contexts: list[str], idempotency_key: str
+) -> str:
+    """租户会话生成（session/revision 舞蹈）：未初始化先 ensure，RPC 失败重建
+    租户同键重试一次（幂等安全）；resource.limit_exceeded 直接上抛不重建。"""
+    entry = _store.get(key)
+    if entry is None or agent_id not in _initialized:
+        session_id, revision = await _ensure_agent(agent_id, entry)
+        _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
+    else:
+        session_id = str(entry["session_id"])
+        revision = int(entry["revision"])
+    try:
+        reply, new_revision = await _host_send(
+            agent_id, session_id, revision, text, idempotency_key, contexts
+        )
+    except RuntimeRpcError as error:
+        if error.code == "resource.limit_exceeded":
+            raise
+        logger.warning(f"[nb2] 发送失败 [{error.code}]，重建租户会话后重试: {error}")
+        session_id, revision = await _ensure_agent(agent_id, None)
+        _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
+        reply, new_revision = await _host_send(
+            agent_id, session_id, revision, text, idempotency_key, contexts
+        )
+    _store.update_revision(key, new_revision)
+    return reply
+
+
+async def _fire_reminder(reminder: Reminder) -> None:
+    """到点投递：让角色用自己的口吻生成提醒文本（走租户会话，角色记得答应过），
+    群聊 @ 目标分段发送；失败计入重试（下轮 tick 再来），超上限放弃。"""
+    bots = get_bots()
+    if not bots:
+        attempts = _reminders.bump_attempts(reminder.id)
+        if attempts >= REMINDER_MAX_ATTEMPTS:
+            logger.warning(f"[nb2] 提醒 {reminder.id} 协议端长期未连接，放弃投递")
+            _reminders.mark_done(reminder.id)
+        return
+    bot = next(iter(bots.values()))
+    target_label = f"【{reminder.remind_name}】" if reminder.remind_name else "对方"
+    contexts = [
+        *_EXTRA_CONTEXTS,
+        build_reminder_trigger_context(target_label, reminder.content),
+    ]
+    try:
+        reply = await _generate_for_tenant(
+            reminder.agent_id,
+            reminder.key,
+            f"【提醒触发】时间到了，该提醒 {target_label}：{reminder.content}",
+            contexts,
+            f"nb2-reminder:{reminder.id}",
+        )
+    except Exception as error:
+        attempts = _reminders.bump_attempts(reminder.id)
+        logger.warning(f"[nb2] 提醒 {reminder.id} 生成失败（第 {attempts} 次）: {error}")
+        if attempts >= REMINDER_MAX_ATTEMPTS:
+            logger.warning(f"[nb2] 提醒 {reminder.id} 生成屡败，放弃投递")
+            _reminders.mark_done(reminder.id)
+        return
+    if not reply.strip():
+        reply = f"喂——{reminder.remind_name}，{reminder.content}！"
+
+    async def _send(message: Message) -> None:
+        if reminder.kind == "group":
+            await bot.send_group_msg(group_id=reminder.target_id, message=message)
+        else:
+            await bot.send_private_msg(user_id=reminder.target_id, message=message)
+
+    send = _send
+    if reminder.kind == "group" and reminder.remind_qq is not None:
+        # @ 拼进首条分段（@ 后补个空格，避免和文字粘在一起）
+        at_prefix = MessageSegment.at(reminder.remind_qq)
+        first = True
+
+        async def _send_with_at(message: Message) -> None:
+            nonlocal first
+            if first:
+                message = Message([at_prefix, MessageSegment.text(" ")]) + message
+                first = False
+            await _send(message)
+
+        send = _send_with_at
+    try:
+        await _send_segmented(send, reply)
+    except Exception as error:
+        attempts = _reminders.bump_attempts(reminder.id)
+        logger.warning(f"[nb2] 提醒 {reminder.id} 投递失败（第 {attempts} 次）: {error}")
+        if attempts >= REMINDER_MAX_ATTEMPTS:
+            logger.warning(f"[nb2] 提醒 {reminder.id} 投递屡败，放弃")
+            _reminders.mark_done(reminder.id)
+        return
+    _reminders.mark_done(reminder.id)
+    logger.info(
+        f"[nb2] 提醒已投递（{reminder.agent_id} → {reminder.remind_name}"
+        f"「{reminder.content[:30]}」）"
+    )
+
+
+async def _reminder_loop() -> None:
+    """30s tick 扫到点提醒（到点精度 ±30s，对聊天提醒足够）。"""
+    while True:
+        await asyncio.sleep(REMINDER_TICK_SECONDS)
+        try:
+            for reminder in _reminders.due(local_now()):
+                await _fire_reminder(reminder)
+        except Exception:
+            logger.exception("[nb2] 提醒调度循环出错")
+
+
 _driver = get_driver()
 
 
@@ -272,6 +464,9 @@ async def _on_startup() -> None:
     if _config.member_memory:
         # 让角色可以自行更新群友印象（注入当前及后续租户的工具注册表）
         await host.register_adapter_tool(update_member_impression)
+    global _reminder_task
+    if _config.reminders_enabled:
+        _reminder_task = asyncio.create_task(_reminder_loop())
     global _repeat_guard
     guard_config = host.get_app_config().repeat_guard
     if guard_config.enabled:
@@ -291,6 +486,7 @@ async def _on_startup() -> None:
         f"引用上下文={'开' if _config.quote_context else '关'}, "
         f"复读防护={repeat_guard_desc}, "
         f"掉线守护={'开' if _config.watchdog_enabled else '关'}, "
+        f"到点提醒={'开' if _config.reminders_enabled else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -324,6 +520,8 @@ async def _handle_bot_offline(event: NoticeEvent) -> None:
 @_driver.on_shutdown
 async def _on_shutdown() -> None:
     _watchdog.close()  # 正常关停不触发自动恢复（防止退出时反而把 NapCat 拉起来）
+    if _reminder_task is not None and not _reminder_task.done():
+        _reminder_task.cancel()
     # 宿主生命周期归 run_adapters 管（逆序 stop 后统一 host.close()），这里无需动作
     logger.debug("[nb2] nonebot 驱动已停止")
 
@@ -456,6 +654,17 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
         except Exception as error:
             # 订阅失败只影响主动投递，不阻塞正常问答
             logger.warning(f"[nb2] 订阅主动消息事件失败（{agent_id}），主动投递暂不可用: {error}")
+    if _config.reminders_enabled:
+        try:
+            # 到点提醒工具按租户注入（闭包捕获租户 id；租户重建时 ensure 会再注册）
+            await host.register_tenant_tool(
+                agent_id,
+                _build_reminder_tool(agent_id),
+                name="set_reminder",
+                parallel_safe=False,
+            )
+        except Exception as error:
+            logger.warning(f"[nb2] 注册提醒工具失败（{agent_id}）: {error}")
     _initialized.add(agent_id)
     return session_id, revision
 
@@ -570,34 +779,14 @@ async def _process_batch(
     if len(batch) > 1:
         contexts.append(build_multi_speaker_context(len(batch)))
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
-    reply = ""
     try:
-        entry = _store.get(key)
-        if entry is None or agent_id not in _initialized:
-            session_id, revision = await _ensure_agent(agent_id, entry)
-            _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
-        else:
-            session_id = str(entry["session_id"])
-            revision = int(entry["revision"])
-        try:
-            reply, new_revision = await _host_send(
-                agent_id, session_id, revision, text, idempotency_key, contexts
-            )
-        except RuntimeRpcError as error:
-            if error.code == "resource.limit_exceeded":
-                await matcher.send(MessageSegment.text("幻想乡现在有点忙，稍后再叫我吧。"))
-                return
-            # 租户丢失 / 会话失效：重建租户后同键重试一次（幂等安全）
-            logger.warning(f"[nb2] 发送失败 [{error.code}]，重建租户会话后重试: {error}")
-            session_id, revision = await _ensure_agent(agent_id, None)
-            _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
-            reply, new_revision = await _host_send(
-                agent_id, session_id, revision, text, idempotency_key, contexts
-            )
-        _store.update_revision(key, new_revision)
+        reply = await _generate_for_tenant(agent_id, key, text, contexts, idempotency_key)
     except RuntimeRpcError as error:
-        logger.error(f"[nb2] Runtime 调用失败 [{error.code}]: {error}")
-        await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
+        if error.code == "resource.limit_exceeded":
+            await matcher.send(MessageSegment.text("幻想乡现在有点忙，稍后再叫我吧。"))
+        else:
+            logger.error(f"[nb2] Runtime 调用失败 [{error.code}]: {error}")
+            await matcher.send(MessageSegment.text("呜……出了点问题，请稍后再试。"))
         return
     except Exception:
         logger.exception("[nb2] 处理消息时出现未预期错误")

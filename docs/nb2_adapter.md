@@ -65,6 +65,23 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_WATCHDOG_MAX_RESTARTS` | `5` | 24h 内自动重启上限，超限告警停手 |
 | `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `300` | 重启后等待回连的超时（秒），超时告警 |
 | `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` | `60` | WS 断开的回连宽限期（秒），NapCat 自己连上就不动 |
+| `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
+| `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
+
+## 到点提醒（Reminder）
+
+对 bot 说「10 分钟后提醒我吃饭」「明天早上 8 点喊栗子起床」即可。链路：
+
+1. **接活**：每个租户注入 `set_reminder(when, content, target_name)` 工具
+   （角色自己决定调用）；时间解析是确定性的——相对（"10分钟后"）、时刻
+   （"15:30"、"明天 08:00"）、日期时间（"2026-08-03 15:30"）。
+2. **持久化**：`nb2_data/reminders.json`（时区感知本地时间，ISO 落盘）；
+   重启自动恢复待办，逾期超 24h 作废。
+3. **到点**：30s tick 扫到点项 → 走该租户会话让角色**用自己的口吻**生成
+   提醒文本（角色记得自己答应过），群聊 @ 目标分段发送、私聊直发。
+4. **容错**：协议端未连接/生成失败/投递失败都计入重试（下轮 tick 再来），
+   约 20 分钟仍失败则放弃并记日志；每租户待办上限
+   `GSK_NB2_REMINDER_MAX_PER_TENANT` 条。
 
 ## 掉线守护（NapCat Watchdog）
 

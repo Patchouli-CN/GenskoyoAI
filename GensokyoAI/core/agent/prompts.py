@@ -528,3 +528,16 @@ def build_multi_speaker_context(count: int) -> str:
         "（开头的【昵称】是各自说话人）。请在一条回复里把他们都回应到，"
         "用昵称分清对谁说话，不要只回答最后一个。"
     )
+
+
+def build_reminder_trigger_context(target_label: str, content: str) -> str:
+    """到点提醒触发（解析方：无，随提醒触发的这轮注入 system_contexts）。
+
+    nb2 到点提醒（reminders）到时间后让角色用自己的口吻把答应过的提醒说出来，
+    而不是发一条干巴巴的系统通知。
+    """
+    return (
+        f"【到点提醒】你之前答应提醒 {target_label}「{content}」，现在时间到了。"
+        "用你自己的口吻、像你自己突然想起来一样自然地提醒 TA，一两句话即可，"
+        "不要提到系统、提醒器或工具。"
+    )

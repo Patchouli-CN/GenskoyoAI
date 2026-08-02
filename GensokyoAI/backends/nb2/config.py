@@ -80,6 +80,10 @@ class Nb2Config:
     watchdog_max_restarts: int = 5  # 24h 内自动重启上限
     watchdog_recover_timeout: float = 300.0  # 重启后等待回连的超时（超时告警）
     watchdog_disconnect_grace: float = 60.0  # WS 断开的回连宽限期（NapCat 自己会重连）
+    # 到点提醒：角色经 set_reminder 工具接活，到点用自己的口吻 @ 人说出；
+    # nb2_data/reminders.json 持久化（重启不丢），30s tick 扫到点项
+    reminders_enabled: bool = True
+    reminder_max_per_tenant: int = 20  # 每个群/私聊的待办提醒上限（防滥用烧 token）
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -128,5 +132,9 @@ class Nb2Config:
             ),
             watchdog_disconnect_grace=_parse_float(
                 get("GSK_NB2_WATCHDOG_DISCONNECT_GRACE"), cls.watchdog_disconnect_grace
+            ),
+            reminders_enabled=_parse_bool(get("GSK_NB2_REMINDERS"), cls.reminders_enabled),
+            reminder_max_per_tenant=_parse_int(
+                get("GSK_NB2_REMINDER_MAX_PER_TENANT"), cls.reminder_max_per_tenant
             ),
         )

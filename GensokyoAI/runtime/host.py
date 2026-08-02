@@ -221,6 +221,23 @@ class RuntimeHost:
             if agent is not None:
                 agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
 
+    async def register_tenant_tool(
+        self,
+        agent_id: str,
+        func: Callable[..., Any],
+        *,
+        name: str | None = None,
+        parallel_safe: bool = False,
+    ) -> bool:
+        """把工具只注入指定租户（闭包可捕获该租户的上下文，如 nb2 到点提醒
+        需要知道自己属于哪个群）；租户未装配返回 False。租户被驱逐重建后
+        需重新调用（适配器的 ensure 流程是自然的再注册点）。"""
+        agent = self._tenant_agent(agent_id)
+        if agent is None:
+            return False
+        agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
+        return True
+
     def _tenant_agent(self, agent_id: str) -> Any:
         """取租户当前装配的 Agent（runtime 包内契约），未装配返回 None。"""
         service = self._service._tenant_services.get((self._principal.user_id, agent_id))

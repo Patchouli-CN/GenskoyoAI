@@ -16,6 +16,35 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.46 nb2 到点提醒：set_reminder 工具 + 角色口吻 @ 投递（2026-08-02，用户点单）
+
+- 玩法（用户原话）：「到点提醒……用里面的工具注入来实现……到点了 at
+  一下被提醒人，用角色的口吻」。
+- **接活**：每个租户经 `host.register_tenant_tool`（host 新 API，闭包
+  捕获租户 id）注入 `set_reminder(when, content, target_name)`，角色
+  自己决定调用；租户驱逐重建时 ensure 流程再注册。target_name 经群名片
+  缓存反查 QQ（找不到则不 @、只带名字）。
+- **reminders.py（新）**：`parse_when` 确定性解析（相对"10分钟后"/
+  时刻"15:30·明天 08:00"/绝对"2026-08-03 15:30"，非法时刻返回 None 不
+  炸）；`ReminderStore`（reminders.json 原子写持久化，重启恢复待办、
+  逾期 24h 作废、attempts 重置）。时间全链路时区感知本地 datetime
+  （ISO 落盘）——用户纠偏「datetime 是好用的工具，干嘛 time.time」，
+  顺手对齐项目时区感知约定。
+- **到点投递**：30s tick 扫到点项 → 走该租户会话生成（角色记得答应过，
+  注入 build_reminder_trigger_context）→ 群聊 @ 拼首条分段发送/私聊
+  直发；未连接/生成失败/投递失败计入 attempts 下轮再试，40 次（约 20
+  分钟）放弃；每租户待办上限 20（GSK_NB2_REMINDER_MAX_PER_TENANT）。
+- 连带重构：`_process_batch` 的 session/revision 舞蹈抽成
+  `_generate_for_tenant`（提醒路径复用；resource.limit_exceeded 不重建
+  直接上抛，行为与旧实现等价）。配置：`GSK_NB2_REMINDERS`（默认 true）。
+- 测试：tests/test_nb2_reminders.py 17 例（时间解析全格式+非法输入/
+  存储 CRUD 持久化过期重置/工具成功·坏时间·无目标·无名回退/群投递带
+  @·私聊无 @·无连接重试·屡败放弃）。增量验证 63 passed，
+  ruff / pyright 全绿（本轮起改增量验证，用户指示）。
+
+建议 commit message（用户已授权提交）：
+`feat(nb2): 到点提醒——set_reminder 工具按租户注入，30s tick 到点后角色口吻生成并 @ 投递（持久化重启不丢，失败重试上限放弃）`
+
 ## 8.45 关闭日志租户标签 + 守护重启控制台乱码修复（2026-08-02，用户点单）
 
 - 问题：多租户关停时刷屏的同款关闭日志（思考引擎/后台管理器/工作器/
