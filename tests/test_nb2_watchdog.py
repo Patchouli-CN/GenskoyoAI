@@ -296,7 +296,8 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertIn("NapCatWinBootMain.exe", _KILL_AUX_PS)
 
     def test_launch_hardcodes_main_bat_content(self):
-        # 启动 = 硬编码 main.bat 内容：call launcher-win10-user.bat -q <QQ号>
+        # 启动 = main.bat 实证内容：call launcher-win10-user.bat <QQ号>（位置参数，
+        # 非 -q）；配置了密码回退变量时显式 set 进命令行
         with tempfile.TemporaryDirectory() as tmpdir:
             captured: dict = {}
 
@@ -305,16 +306,46 @@ class LaunchCommandTests(unittest.TestCase):
                 captured["kwargs"] = kwargs
                 return SimpleNamespace(pid=1234)
 
-            with patch(
-                "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
+            with (
+                patch(
+                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
+                ),
+                patch.dict(
+                    "os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False
+                ),
             ):
                 pid = _windows_launch_napcat(Path(tmpdir), 3779163297)
             self.assertEqual(pid, 1234)
             args = captured["args"]
             self.assertEqual(args[:2], ["cmd", "/c"])
-            self.assertIn("chcp 65001", args[2])
-            self.assertIn("launcher-win10-user.bat -q 3779163297", args[2])
+            command = args[2]
+            self.assertIn("chcp 65001", command)
+            self.assertIn("set ACCOUNT=3779163297", command)
+            self.assertIn("set NAPCAT_QUICK_PASSWORD_MD5=abc123", command)
+            self.assertIn("call launcher-win10-user.bat 3779163297", command)
+            self.assertNotIn("-q ", command)  # -q 形式 NapCat 4.18.13 不识别
             self.assertEqual(captured["kwargs"]["cwd"], Path(tmpdir))
+
+    def test_launch_without_password_env_omits_set(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            captured: dict = {}
+
+            def fake_popen(args, **kwargs):
+                captured["args"] = args
+                return SimpleNamespace(pid=1234)
+
+            with (
+                patch(
+                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
+                ),
+                patch.dict(
+                    "os.environ", {}, clear=True
+                ),
+            ):
+                _windows_launch_napcat(Path(tmpdir), 3779163297)
+            command = captured["args"][2]
+            self.assertNotIn("NAPCAT_QUICK_PASSWORD", command)
+            self.assertIn("call launcher-win10-user.bat 3779163297", command)
 
 
 class WatchdogConfigTests(unittest.TestCase):

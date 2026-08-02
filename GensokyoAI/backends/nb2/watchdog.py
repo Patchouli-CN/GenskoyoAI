@@ -9,9 +9,11 @@
 NapCatWinBootMain 是一次性引导器（拉起 QQ 即退）、QQNT 多开进程互相收养
 ——**进程枚举根本无法可靠识别 bot 的 QQ，一切基于 pid 的存活/捕获探测
 都必然误判**（第三轮「秒退」正是探测逻辑自己造的）。因此：
-- 启动 = 硬编码 main.bat 的内容（`launcher-win10-user.bat -q <QQ号>`
-  快速登录；launcher bat 是 NapCat.Shell 发行自带，不依赖用户自建脚本），
-  QQ 号由 GSK_NB2_BOT_QQ 配置注入（未配则由首次连接的 self_id 兜底）；
+- 启动 = main.bat 实证内容（`launcher-win10-user.bat <QQ号>` **位置参数**
+  ——`-q` 形式 NapCat 4.18.13 不识别），QQ 号由 GSK_NB2_BOT_QQ 配置注入
+  （未配则由首次连接的 self_id 兜底）；命令行同步显式 set
+  NAPCAT_QUICK_PASSWORD_MD5 / NAPCAT_QUICK_PASSWORD（取自已加载的
+  dotenv），登录态作废时 NapCat 自动密码回退重登（可能触发腾讯验证码）；
 - 清理只做安全集合：按镜像名清 NapCatWinBootMain 引导器树 + 旧实例卡在
   `pause` 的 bat 窗口（绝不盲杀 QQ.exe，个人 QQ 绝对安全；新旧登录冲突
   由 QQ 服务端裁决——新登录踢旧登录）；
@@ -27,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -79,15 +82,26 @@ async def _windows_kill_aux() -> None:
 
 
 def _windows_launch_napcat(napcat_dir: Path, bot_qq: int) -> int:
-    """硬编码 main.bat 的内容：`launcher-win10-user.bat -q <QQ号>` 快速登录。
+    """按 main.bat 实证内容启动 NapCat（快速登录），返回 cmd 进程 PID。
 
-    launcher bat 是 NapCat.Shell 发行自带的（不依赖用户自建脚本），
-    环境变量/QQ 路径/loadNapCat.js 全由 bat 自己处理。
+    命令 = `launcher-win10-user.bat <QQ号>`（**位置参数**——`-q` 形式
+    NapCat 4.18.13 不识别（实机日志「没有 -q 指令」），main.bat 的位置
+    参数才是被验证的形态）。同时把密码回退变量显式 set 进命令行
+    （NAPCAT_QUICK_PASSWORD_MD5 / NAPCAT_QUICK_PASSWORD，取自已加载的
+    dotenv 环境）：登录态被风控作废时 NapCat 自动走密码回退重登
+    （可能触发腾讯验证码，需人工完成一次）。
     """
     # 经 cmd 先把新控制台代码页切到 UTF-8（bat 里的 chcp 65001 同款），
     # 否则守护拉起的 NapCat 控制台默认 GBK，中文日志全是乱码
+    extras = f"set ACCOUNT={bot_qq}&& "
+    quick_md5 = os.environ.get("NAPCAT_QUICK_PASSWORD_MD5", "").strip()
+    quick_plain = os.environ.get("NAPCAT_QUICK_PASSWORD", "").strip()
+    if quick_md5:
+        extras += f"set NAPCAT_QUICK_PASSWORD_MD5={quick_md5}&& "
+    elif quick_plain:
+        extras += f"set NAPCAT_QUICK_PASSWORD={quick_plain}&& "
     process = subprocess.Popen(
-        ["cmd", "/c", f"chcp 65001 >nul && call launcher-win10-user.bat -q {bot_qq}"],
+        ["cmd", "/c", f"chcp 65001 >nul && {extras}call launcher-win10-user.bat {bot_qq}"],
         cwd=napcat_dir,
         # 独立控制台窗口：存活不依赖本进程，日志对用户可见（与手动启动一致）
         creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,

@@ -16,6 +16,26 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.58 快速登录形式修正：位置参数 + 密码回退显式注入（2026-08-02，端到端实测定案）
+
+- 用户报：配置了 NAPCAT_QUICK_PASSWORD_MD5 但 NapCat 仍说「未配置回退
+  密码」。端到端实测（本机真启动两轮）：①`-q 3779163297` 形式 NapCat
+  4.18.13 直接打回「**没有 -q 指令指定快速登录**」——§8.53 内化的
+  `-q` 是错误形式，main.bat 的位置参数才是被验证的形态（昨天 3 秒恢复
+  用的就是它）；②改正为位置参数后日志逐行证明链路全通：「正在快速登录
+  → 登录态已失效 → **正在尝试密码回退登录**（MD5 生效）→ 正在密码登录
+  → 需要验证码」。密码登录触发腾讯验证码属预期（此前已提示），需人工
+  完成一次 proofWater 验证。
+- 定稿：watchdog 启动命令 = `chcp 65001 >nul && set ACCOUNT=<QQ> &&
+  set NAPCAT_QUICK_PASSWORD_MD5=<已加载的 dotenv 值> && call
+  launcher-win10-user.bat <QQ>`（未配密码则省略对应 set）。
+- env 模板补 ACCOUNT / NAPCAT_QUICK_PASSWORD_MD5 / NAPCAT_QUICK_PASSWORD
+  三个注释键；测试 20 例（位置参数/无 -q/密码 set 显式注入/未配省略）。
+  ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`fix(nb2): 快速登录改位置参数形式（-q 形式 NapCat 4.18.13 不识别），密码回退变量显式 set 进启动命令`
+
 ## 8.57 适配器基类统一：RuntimeAdapter 升格 ABC，BaseBackend 删除（2026-08-02，用户点单）
 
 - 问题：架构上有 `BaseBackend`（ABC，start/stop 无参）与 `RuntimeAdapter`
