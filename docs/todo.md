@@ -16,6 +16,44 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.51 元租户删除（一次性脱稿生成）+ watchdog 进程模型定稿（2026-08-02，用户指导）
+
+- 背景（用户血压时刻）：§8.47 的 enable_think_engine 实测仍有 nb2-meta
+  思考引擎日志、watchdog 两轮修复后 NapCat 重启仍秒退。用户指导：
+  ①不要 meta 租户，隔离性靠一次性 LLM 调用（不进 session）；②进程
+  管理用 aiosubprocess。
+- **深度诊断（闪退根因坐实）**：NapCatWinBootMain 是一次性引导器
+  （拉起 QQ 即退，当前进程表查无此物）；QQNT 多开时进程互相收养
+  （个人 QQ 652 下挂着 QQEX 23320）——**靠进程枚举根本无法区分哪个
+  QQ.exe 是 bot 的**。此前所有「杀树」在 launcher 退出后全是空操作
+  （roots 找不到），旧 bot QQ 一直活着，每次重启都撞单实例锁秒退。
+  旁证：cache/qrcode.png 16:04 生成——昨天那次「恢复成功」其实是
+  快速登录失败落到扫码页、用户手动扫的。
+- **meta 租户删除**：新 `core/agent/oneshot.py` OneShotGenerator——
+  每角色缓存 ModelClient + 角色系统提示词，`generate`（system+user
+  一次性脱稿）与 `get_quota`（账户额度，原借元租户客户端）都走它；
+  不建租户、不进任何会话与记忆。§8.47 的 enable_think_engine 全链
+  （Agent/service.init/ensure_agent）回滚删除；runtime_data 里
+  nb2-meta 的残留 manifest 目录已清理（下次启动不再复活僵尸租户）。
+- **watchdog 进程模型定稿**：只精确管理自己拉起的实例——孵化期捕获
+  launcher 的 QQ 子进程 pid 并持久化 `nb2_data/napcat_bot.json`，杀
+  = `taskkill /pid <qq_pid> /t`（等死透 ≤15s）+ 按镜像名清引导器树
+  + pause 残留 bat 窗口；**绝不盲杀 QQ.exe**（个人 QQ 绝对安全）。
+  无追踪记录的外来实例不做盲杀盲启；秒退（外来冲突）自动重试一次，
+  仍死则告警并明确提示手动清理旧实例。全部进程探测改 asyncio 子进程
+  （aiosubprocess），去掉 to_thread 线程池绕行。
+- 测试：watchdog 测试 23 例（精确杀传参/追踪状态读写损坏/捕获后中途
+  死亡/秒退重试/flash 一次后复活 + 既有状态机用例）；oneshot 5 例
+  （系统提示词装配/缓存/zh_cn 解析/缺失报错/quota 委托）；host 层
+  元租户用例全部改写为不建租户断言（临时 root 避开生产 manifest）。
+  合计 130 passed，ruff / pyright 全绿。
+- 遗留说明：当前 bot 处于人工关停态；升级后手动 main.bat 拉起一次
+  （或扫码一次），此后守护进入「可精确管理」状态。
+
+建议 commit message（用户已授权直接提交，两条）：
+`refactor(core): 元租户删除——OneShotGenerator 一次性脱稿生成（不进会话不建租户），enable_think_engine 链路回滚`
+`fix(nb2): watchdog 进程模型定稿——只精确管理守护拉起的实例（追踪 QQ pid 精确杀），外来实例不盲杀盲启，探测全改 aiosubprocess`
+
 ## 8.50 watchdog 恢复可靠性三连修（2026-08-02，实机日志驱动）
 
 - 实机现象：bot_offline → 杀树重启 → 300s 超时误报人工介入 → 6.4 分钟才

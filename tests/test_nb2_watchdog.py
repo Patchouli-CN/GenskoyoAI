@@ -1,7 +1,7 @@
 """NapCat 掉线守护（backends/nb2/watchdog）状态机定向测试
 
-外部动作（杀树/启动/查 QQ 路径/睡眠/时钟）全部注入假实现，
-只验证触发→节制→重启→确认恢复的状态流转与告警行为。
+外部动作（精确杀/启动/存活探测/QQ 捕获/QQ 路径/睡眠/时钟）全部注入假实现，
+只验证触发→节制→精确杀→孵化捕获→确认恢复的状态流转与告警行为。
 """
 
 import asyncio
@@ -17,6 +17,10 @@ from GensokyoAI.backends.nb2.config import Nb2Config
 from GensokyoAI.backends.nb2.watchdog import NapCatWatchdog, _windows_launch_napcat
 
 
+async def _noop(*args):
+    return None
+
+
 def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
     options = {
         "cooldown_seconds": 600.0,
@@ -24,11 +28,13 @@ def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
         "recover_timeout_seconds": 0.2,
         "disconnect_grace_seconds": 0.05,
         "alert_path": tmp / "alert.json",
-        "kill": lambda: None,
+        "state_path": tmp / "bot.json",
+        "kill": _noop,
         "launch": lambda napcat_dir, qq_path, qq: 4242,
+        "pid_alive": lambda pid: _noop_alive(pid),
+        "find_child_qq": lambda pid: _noop_qq(pid),
         "resolve_qq_path": lambda: Path("QQ.exe"),
-        "is_tree_alive": lambda pid: True,
-        # 测试加速：所有 sleep 截断到 20ms（含回连确认轮询与冷却重试）
+        # 测试加速：所有 sleep 截断到 20ms（含孵化轮询与冷却重试）
         "sleep": lambda seconds: asyncio.sleep(min(seconds, 0.02)),
         "platform": "win32",
     }
@@ -36,6 +42,14 @@ def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
     watchdog = NapCatWatchdog(**options)
     watchdog.configure(napcat_dir=tmp)
     return watchdog
+
+
+async def _noop_alive(pid: int) -> bool:
+    return True
+
+
+async def _noop_qq(pid: int) -> int:
+    return 987654  # 默认孵化期总能捕获到 bot QQ（写入追踪状态）
 
 
 async def _drive_trigger(watchdog: NapCatWatchdog, clock: list[float], reason: str) -> str:
@@ -54,7 +68,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             calls: list[str] = []
             watchdog = _make_watchdog(
                 Path(tmpdir),
-                kill=lambda: calls.append("kill"),
+                kill=lambda qq_pid: calls.append(f"kill:{qq_pid}") or _noop(),
                 launch=lambda d, p, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
@@ -68,7 +82,33 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             result = await watchdog.trigger("bot_offline: kicked 登录已失效")
             await task
             self.assertEqual(result, "restarted")
-            self.assertEqual(calls, ["kill", "launch"])
+            self.assertEqual(calls, ["kill:None", "launch"])  # 无追踪记录时不盲杀
+            # 捕获的 QQ pid 已持久化（后续精确管理的把手）
+            tracked = json.loads((Path(tmpdir) / "bot.json").read_text(encoding="utf-8"))
+            self.assertEqual(tracked["qq_pid"], 987654)
+
+    async def test_tracked_bot_killed_precisely(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "bot.json").write_text(
+                json.dumps({"qq_pid": 7777, "launcher_pid": 1}), encoding="utf-8"
+            )
+            kills: list[int | None] = []
+
+            async def kill(qq_pid):
+                kills.append(qq_pid)
+
+            watchdog = _make_watchdog(Path(tmpdir), kill=kill)
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+
+            async def reconnect() -> None:
+                await asyncio.sleep(0.05)
+                watchdog.notify_connected(3779163297)
+
+            task = asyncio.create_task(reconnect())
+            await watchdog.trigger("bot_offline")
+            await task
+            self.assertEqual(kills, [7777])  # 精确杀追踪的 bot QQ，不碰别的
 
     async def test_recover_timeout_alerts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -79,7 +119,6 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "recover_timeout")
             alert = json.loads((Path(tmpdir) / "alert.json").read_text(encoding="utf-8"))
             self.assertEqual(alert["kind"], "recover_timeout")
-            # 回连后哨兵清除
             watchdog.notify_connected(3779163297)
             self.assertFalse((Path(tmpdir) / "alert.json").exists())
 
@@ -106,7 +145,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.01,
-                kill=lambda: calls.append("kill"),
+                launch=lambda d, p, q: calls.append("launch") or 4242,
                 now=lambda: clock[0],
             )
             watchdog.notify_connected(3779163297)
@@ -127,7 +166,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.01,
-                kill=lambda: calls.append("kill"),
+                launch=lambda d, p, q: calls.append("launch") or 4242,
                 now=lambda: clock[0],
             )
             watchdog.notify_connected(3779163297)
@@ -139,20 +178,6 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.15)
             self.assertEqual(len(calls), 1)
             watchdog.close()
-
-    async def test_process_died_alerts_immediately(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            watchdog = _make_watchdog(
-                Path(tmpdir),
-                recover_timeout_seconds=60.0,  # 若误判会挂足 60s——进程树死应立即返回
-                is_tree_alive=lambda pid: False,
-            )
-            watchdog.notify_connected(3779163297)
-            watchdog._connected.clear()
-            result = await watchdog.trigger("bot_offline")
-            self.assertEqual(result, "process_died")
-            alert = json.loads((Path(tmpdir) / "alert.json").read_text(encoding="utf-8"))
-            self.assertEqual(alert["kind"], "process_died")
 
     async def test_daily_cap_stops_auto_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -175,7 +200,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 platform="linux",
-                kill=lambda: calls.append("kill"),
+                launch=lambda d, p, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
             watchdog._connected.clear()
@@ -210,12 +235,99 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog.close()
             self.assertEqual(await watchdog.trigger("bot_offline"), "disabled")
 
+    async def test_flash_exit_once_then_relaunch_recovers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            launches: list[int] = []
+            captures = {"count": 0}
+
+            def launch(d, p, q):
+                launches.append(1)
+                return 4000 + len(launches)
+
+            async def find_child_qq(pid):
+                captures["count"] += 1
+                return None if pid == 4001 else 4002  # 第一次启动见不到 QQ
+
+            async def pid_alive(pid):
+                return pid != 4001  # 第一次启动的 launcher 已退（秒退）
+
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                launch=launch,
+                find_child_qq=find_child_qq,
+                pid_alive=pid_alive,
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+
+            async def reconnect() -> None:
+                await asyncio.sleep(0.1)
+                watchdog.notify_connected(3779163297)
+
+            task = asyncio.create_task(reconnect())
+            result = await watchdog.trigger("bot_offline")
+            await task
+            self.assertEqual(result, "restarted")
+            self.assertEqual(len(launches), 2)  # 秒退后自动重试了一次
+            watchdog.close()
+
+    async def test_process_died_alerts_after_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            launches: list[int] = []
+
+            def launch(d, p, q):
+                launches.append(1)
+                return 4242
+
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                recover_timeout_seconds=60.0,
+                launch=launch,
+                find_child_qq=_none_qq,  # 永远见不到 QQ
+                pid_alive=_none_alive,  # launcher 也活不成（两次都秒退）
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+            result = await watchdog.trigger("bot_offline")
+            self.assertEqual(result, "process_died")
+            self.assertEqual(len(launches), 2)  # 秒退自动重试过一次
+            alert = json.loads((Path(tmpdir) / "alert.json").read_text(encoding="utf-8"))
+            self.assertEqual(alert["kind"], "process_died")
+
+    async def test_captured_qq_dying_mid_wait_alerts_early(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                recover_timeout_seconds=60.0,
+                pid_alive=lambda pid: _dead(pid),  # 捕获后 QQ 很快死掉
+            )
+            watchdog.notify_connected(3779163297)
+            watchdog._connected.clear()
+            result = await watchdog.trigger("bot_offline")
+            self.assertEqual(result, "process_died")
+            alert = json.loads((Path(tmpdir) / "alert.json").read_text(encoding="utf-8"))
+            self.assertEqual(alert["kind"], "process_died")
+
+
+async def _none_qq(pid):
+    return None
+
+
+async def _none_alive(pid):
+    return False
+
+
+async def _dead(pid):
+    return False
+
 
 class DisconnectGraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_within_grace_skips_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             calls: list[str] = []
-            watchdog = _make_watchdog(Path(tmpdir), kill=lambda: calls.append("kill"))
+            watchdog = _make_watchdog(
+                Path(tmpdir), launch=lambda d, p, q: calls.append("launch") or 4242
+            )
             watchdog.notify_connected(3779163297)
             watchdog.notify_disconnected()
             await asyncio.sleep(0.01)
@@ -229,12 +341,13 @@ class DisconnectGraceTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.05,
-                kill=lambda: calls.append("kill"),
+                launch=lambda d, p, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
             watchdog.notify_disconnected()
             await asyncio.sleep(0.3)  # 宽限期 + 恢复超时都过了
-            self.assertEqual(calls, ["kill"])
+            self.assertEqual(calls, ["launch"])
+            watchdog.close()
 
     async def test_disconnect_during_restart_ignored(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -246,6 +359,7 @@ class DisconnectGraceTests(unittest.IsolatedAsyncioTestCase):
             watchdog.notify_disconnected()  # 我们亲手杀的 → 不应再排队
             self.assertIsNone(watchdog._grace_task)
             await task
+            watchdog.close()
 
 
 class BotOfflineEventTests(unittest.IsolatedAsyncioTestCase):
@@ -267,15 +381,31 @@ class BotOfflineEventTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(watchdog._recover_task)
             await watchdog._recover_task
             self.assertEqual(calls, ["launch"])
+            watchdog.close()
+
+
+class TrackedStateTests(unittest.TestCase):
+    def test_load_tracked_roundtrip_and_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watchdog = _make_watchdog(Path(tmpdir))
+            self.assertIsNone(watchdog._load_tracked())  # 文件不存在
+            watchdog._save_tracked(qq_pid=4321, launcher_pid=1234)
+            tracked = watchdog._load_tracked()
+            self.assertEqual(tracked["qq_pid"], 4321)
+            self.assertEqual(tracked["launcher_pid"], 1234)
+            # 损坏文件 → None（不炸）
+            (Path(tmpdir) / "bot.json").write_text("{bad json", encoding="utf-8")
+            self.assertIsNone(watchdog._load_tracked())
 
 
 class LaunchCommandTests(unittest.TestCase):
-    def test_kill_tree_ps_covers_pause_stuck_bat_consoles(self):
-        # 旧 main.bat 实例被杀后 cmd 卡在 pause：杀树脚本必须一并清理这些窗口
-        from GensokyoAI.backends.nb2.watchdog import _KILL_TREE_PS
+    def test_kill_aux_ps_covers_pause_stuck_bat_consoles(self):
+        # 旧 main.bat 实例被杀后 cmd 卡在 pause：辅助杀脚本必须一并清理这些窗口
+        from GensokyoAI.backends.nb2.watchdog import _KILL_AUX_PS
 
-        self.assertIn("cmd.exe", _KILL_TREE_PS)
-        self.assertIn("launcher-win10", _KILL_TREE_PS)
+        self.assertIn("cmd.exe", _KILL_AUX_PS)
+        self.assertIn("launcher-win10", _KILL_AUX_PS)
+        self.assertIn("NapCatWinBootMain.exe", _KILL_AUX_PS)
 
     def test_launch_wraps_cmd_with_utf8_codepage(self):
         # 守护拉起的控制台必须先 chcp 65001（launcher bat 同款），否则中文日志乱码
