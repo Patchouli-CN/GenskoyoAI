@@ -16,6 +16,61 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.48 HealthCenter 健康总监控 + 砍动态阈值判定（计费保留）+ getattr 清理（2026-08-02，用户定稿）
+
+- 起因（用户三条）：①动态阈值「每次重启刷新就又变健康，判定错误没意义」
+  ——砍；②框架核心模块加 HealthCenter 总监控类，判定收口、关键条件走
+  yaml；③减少自家对象上的 getattr/setattr 防御链（直接调用才优雅）。
+  补充指令：计费功能保留（单价 × usage 成本采样不删）。
+- **砍判定留计费**：删 `core/agent/quota_health.py`（compute_quota_health
+  动态判定 + BurnRateSmoother 平滑器 + host 平滑状态全去）；保留
+  ModelClient `_estimate_call_cost`/`_cost_samples` 与四个 price_* 配置键，
+  `compute_burn_rate` 迁入 `core/health.py`——计量仅观测展示（/status
+  日耗后缀），不再参与任何健康等级。
+- **HealthCenter（新 `core/health.py`）**：健康判定统一收口；
+  `evaluate_quota` 按 yaml `health:` 节静态阈值（HealthConfig：
+  quota_warn_yuan 20 / quota_crit_yuan 5）出 🟢🟡🔴🟣⚫ 五级 + 指数，
+  重启不漂移；loader/validator/merge 三节全接线（未知字段校验、crit ≤
+  warn 跨字段校验、合并逐字段 choose）。
+- **连带修 latent bug**：`ConfigMerger.merge` 此前根本没合并 repeat_guard
+  /health 两节——yaml 里的自定义被静默丢回默认（repeat_guard 因默认值
+  恰好可用而从未暴露）。本轮两节都补上逐字段合并。
+- **getattr 清理**：host 三个聚合器（成本/延迟/记忆）从
+  `getattr(getattr(agent,...),...)` 防御链改为 `agent is None` 单检 +
+  直接属性访问；cmd_status 的 `getattr(config, "quota_warn_yuan"...)`
+  随 env 键删除一并消失。NapCat 事件边界（pydantic extra）与
+  __new__ 测试桩的防御性 getattr 保留（那是对外部/鸭子类型的正当防御）。
+- **nb2 侧**：Nb2Config 删 quota_warn_yuan/quota_crit_yuan + GSK_NB2_QUOTA_*
+  env 键；/status 额度行经 ctx.metadata 注入的 HealthCenter 判定，
+  日耗计量附加展示：`额度：🟢 健康指数 100（余额 ¥36.50（现金 ¥30.00，代金券 ¥6.50，日耗 ¥1.63））`。
+- 测试：test_quota_health.py → test_health_center.py 重写（静态五级边界/
+  自定义阈值/yaml health: 节端到端加载/日耗折算/成本估算/全租户合并）；
+  test_nb2_commands.py 走 HealthCenter；删 env 额度键解析测试。增量
+  137 passed，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`refactor(core): HealthCenter 健康总监控——额度判定收口 yaml health: 节静态阈值，砍动态阈值判定（计费计量保留仅观测），ConfigMerger 补 repeat_guard/health 合并，host getattr 链清理`
+
+## 8.47 元租户轻量化：nb2-meta 不装配思考引擎（2026-08-02，用户点单）
+
+- 问题（用户发现）：`nb2-meta` 元租户只用于脱稿生成（群友第一印象/
+  破例判定），却按全功能 Agent 装配——ThinkEngine 每 30 分钟空转长期
+  思考，纯烧 token。用户问「第一印象生成下沉到适配器内可以吗」。
+- 结论：不必下沉——元租户的价值正是隔离（生成不进任何用户会话）；
+  贵的是它白背的 ThinkEngine，关掉即可，空转成本归零。
+- 实现：`Agent.__init__` 新增 `enable_think_engine`（默认 True，start
+  时跳过装配）；`RuntimeService.init` 同名参数透传（RPC schema 按签名
+  自动生成，网络路径免费获得）；`RuntimeHost.ensure_agent` 加
+  `disable_think_engine`（与 disable_initiative 同风格，默认 False
+  不影响现有调用方）；`generate_meta_text` 传 True——元租户现在
+  无思考引擎、无主动定时器，只在被调用时工作。
+- 测试：test_nb2_adapter.py 增 2 例（disable_think_engine 参数透传+
+  默认不带键后向兼容 / generate_meta_text 元租户轻量化）。增量验证
+  48+21 passed，ruff / pyright 全绿。
+
+建议 commit message（待用户授权后提交）：
+`feat(runtime): 元租户轻量化——Agent/init/ensure_agent 加 enable_think_engine 开关，nb2-meta 脱稿租户不再空转思考引擎`
+
 ## 8.46 nb2 到点提醒：set_reminder 工具 + 角色口吻 @ 投递（2026-08-02，用户点单）
 
 - 玩法（用户原话）：「到点提醒……用里面的工具注入来实现……到点了 at

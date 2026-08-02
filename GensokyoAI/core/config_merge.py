@@ -7,10 +7,12 @@ from typing import Any
 from .config_schema import (
     AppConfig,
     EmbeddingConfig,
+    HealthConfig,
     InitiativeTimerConfig,
     LogLevel,
     MemoryConfig,
     ModelConfig,
+    RepeatGuardConfig,
     ResourceControlConfig,
     SceneConfig,
     SessionConfig,
@@ -83,6 +85,8 @@ class ConfigMerger:
             base.initiative_timer,
             override.initiative_timer,
         )
+        result.repeat_guard = self._merge_repeat_guard(base.repeat_guard, override.repeat_guard)
+        result.health = self._merge_health(base.health, override.health)
         result.resource_control = self._merge_resource_control(
             base.resource_control,
             override.resource_control,
@@ -701,6 +705,66 @@ class ConfigMerger:
                 if override.drive_threshold != defaults.drive_threshold
                 else base.drive_threshold,
             ),
+        )
+
+    def _merge_health(self, base: HealthConfig, override: HealthConfig) -> HealthConfig:
+        """合并健康中心配置（yaml `health:` 节）。"""
+        choose = self._chooser(base, override)
+        defaults = HealthConfig()
+        return HealthConfig(
+            quota_warn_yuan=choose(
+                "quota_warn_yuan",
+                override.quota_warn_yuan
+                if override.quota_warn_yuan != defaults.quota_warn_yuan
+                else base.quota_warn_yuan,
+            ),
+            quota_crit_yuan=choose(
+                "quota_crit_yuan",
+                override.quota_crit_yuan
+                if override.quota_crit_yuan != defaults.quota_crit_yuan
+                else base.quota_crit_yuan,
+            ),
+        )
+
+    def _merge_repeat_guard(
+        self, base: RepeatGuardConfig, override: RepeatGuardConfig
+    ) -> RepeatGuardConfig:
+        """合并复读防护配置（此前 merge 漏了这一节，yaml 里的自定义会被静默丢回默认）。"""
+        choose = self._chooser(base, override)
+        defaults = RepeatGuardConfig()
+        return RepeatGuardConfig(
+            enabled=choose(
+                "enabled", override.enabled if override.enabled != base.enabled else base.enabled
+            ),
+            similarity=choose(
+                "similarity",
+                override.similarity if override.similarity != defaults.similarity else base.similarity,
+            ),
+            history_size=choose(
+                "history_size",
+                override.history_size
+                if override.history_size != defaults.history_size
+                else base.history_size,
+            ),
+            warn_streak=choose(
+                "warn_streak",
+                override.warn_streak
+                if override.warn_streak != defaults.warn_streak
+                else base.warn_streak,
+            ),
+            mute_streak=choose(
+                "mute_streak",
+                override.mute_streak
+                if override.mute_streak != defaults.mute_streak
+                else base.mute_streak,
+            ),
+            mute_minutes=choose(
+                "mute_minutes",
+                override.mute_minutes
+                if override.mute_minutes != defaults.mute_minutes
+                else base.mute_minutes,
+            ),
+            llm_break=choose("llm_break", override.llm_break),
         )
 
     def _merge_think_engine(

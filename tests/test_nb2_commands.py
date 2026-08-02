@@ -16,7 +16,11 @@ from GensokyoAI.backends.nb2.commands import (
     resolve_level,
 )
 from GensokyoAI.commands import CommandContext, CommandExecutor, CommandStatus, PermissionLevel
+from GensokyoAI.core.config_schema import HealthConfig
+from GensokyoAI.core.health import HealthCenter
 from GensokyoAI.runtime.host import RuntimeHost
+
+_HEALTH_CENTER = HealthCenter(HealthConfig())  # 默认阈值 20/5
 
 
 class _Sender:
@@ -37,6 +41,7 @@ def _ctx(level: PermissionLevel, send, host: RuntimeHost | None = None) -> Comma
             "config": SimpleNamespace(character="KirisameMarisa"),
             "member_qq": 123,
             "send": send,
+            "health_center": _HEALTH_CENTER,
         },
     )
 
@@ -161,7 +166,8 @@ class StatusCommandTests(unittest.TestCase):
                     "level": "critical",
                     "reason": "闸门利用率最高 100%，1 个请求排队中",
                 },
-            }
+            },
+            health_center=_HEALTH_CENTER,
         )
         # 元租户（后台设施）不计入会话总数：5+3=8，不含 meta 的 1
         self.assertIn("🔴 临界", text)
@@ -182,7 +188,8 @@ class StatusCommandTests(unittest.TestCase):
                 "latency": {"count": 0},
                 "gates": [{"name": "runtime", "max_concurrent": 8, "active": 0, "waiting": 0}],
                 "load_level": {"level": "healthy", "reason": "运行正常"},
-            }
+            },
+            health_center=_HEALTH_CENTER,
         )
         self.assertIn("🟢 健康", text)
         self.assertIn("思考延迟：预计中…", text)
@@ -218,16 +225,20 @@ class StatusCommandTests(unittest.TestCase):
                 "gates": [],
                 "load_level": {"level": "healthy", "reason": "运行正常"},
                 "memory": {"topics": 42, "memories": 137},
+                "cost": {"count": 9, "burn_per_day": 1.63, "total_cost": 0.8},
                 "uptime_seconds": 90061.0,
                 "version": {"package": "2026.7.30.0", "protocol": "2.1.0"},
             },
             quota={"available_balance": 36.5, "cash_balance": 30.0, "voucher_balance": 6.5},
             quota_fetched=True,
-            quota_warn=20.0,
-            quota_crit=5.0,
+            health_center=_HEALTH_CENTER,
             repeat_guard=SimpleNamespace(stats=lambda: {"muted": 2, "watching": 1, "tracked": 9}),
         )
-        self.assertIn("额度：🟢 健康指数 100（余额 ¥36.50（现金 ¥30.00，代金券 ¥6.50））", text)
+        # 健康判定走 HealthCenter 静态阈值；日耗计量仅附加展示
+        self.assertIn(
+            "额度：🟢 健康指数 100（余额 ¥36.50（现金 ¥30.00，代金券 ¥6.50，日耗 ¥1.63））",
+            text,
+        )
         self.assertIn("复读防护：2 人冷却中 · 1 人观察中", text)
         self.assertIn("记忆：42 个话题 / 137 条珍贵记忆", text)
         self.assertIn("版本：v2026.7.30.0（协议 2.1.0） · 已运行 1 天 1 小时", text)
@@ -240,7 +251,8 @@ class StatusCommandTests(unittest.TestCase):
                 "latency": {"count": 0},
                 "gates": [],
                 "load_level": {"level": "healthy", "reason": "运行正常"},
-            }
+            },
+            health_center=_HEALTH_CENTER,
         )
         self.assertNotIn("额度", text)
         self.assertNotIn("复读防护", text)
@@ -250,15 +262,16 @@ class StatusCommandTests(unittest.TestCase):
     def test_quota_health_levels(self):
         self.assertIn(
             "🟢 健康指数 100",
-            _format_quota_health({"available_balance": 25.0}, warn=20.0, crit=5.0),
+            _format_quota_health({"available_balance": 25.0}, _HEALTH_CENTER),
         )
         self.assertIn(
-            "🟡 健康指数 50", _format_quota_health({"available_balance": 10.0}, warn=20.0, crit=5.0)
+            "🟡 健康指数 50", _format_quota_health({"available_balance": 10.0}, _HEALTH_CENTER)
         )
         self.assertIn(
-            "🔴 健康指数 20", _format_quota_health({"available_balance": 4.0}, warn=20.0, crit=5.0)
+            "🔴 健康指数 20", _format_quota_health({"available_balance": 4.0}, _HEALTH_CENTER)
         )
-        self.assertIn("暂不可用", _format_quota_health(None, warn=20.0, crit=5.0))
+        self.assertIn("🟣 耗尽", _format_quota_health({"available_balance": 0.0}, _HEALTH_CENTER))
+        self.assertIn("暂不可用", _format_quota_health(None, _HEALTH_CENTER))
 
     def test_format_uptime(self):
         self.assertEqual(_format_uptime(90061), "1 天 1 小时")

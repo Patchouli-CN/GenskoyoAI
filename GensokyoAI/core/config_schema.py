@@ -185,6 +185,17 @@ class RepeatGuardConfig(Struct):
     llm_break: bool = True
 
 
+class HealthConfig(Struct):
+    """框架健康中心（core.health.HealthCenter）的判定阈值。
+
+    健康判定一律走这里的静态阈值——重启不漂移（2026-08-02 用户定稿：
+    运行时估算的动态阈值重启即失效，砍判定、留计费计量）。
+    """
+
+    quota_warn_yuan: float = 20.0  # 额度余额低于该值 → 🟡 警告
+    quota_crit_yuan: float = 5.0  # 低于该值 → 🔴 临界；≤ 0 → 🟣 耗尽
+
+
 class WebSearchAPIConfig(Struct):
     """自有 Web search API Provider 配置。"""
 
@@ -433,6 +444,7 @@ class AppConfig(Struct):
     think_engine: ThinkEngineConfig = field(default_factory=ThinkEngineConfig)
     initiative_timer: InitiativeTimerConfig = field(default_factory=InitiativeTimerConfig)
     repeat_guard: RepeatGuardConfig = field(default_factory=RepeatGuardConfig)
+    health: HealthConfig = field(default_factory=HealthConfig)
     resource_control: ResourceControlConfig = field(default_factory=ResourceControlConfig)
     world: WorldConfig = field(default_factory=WorldConfig)
 

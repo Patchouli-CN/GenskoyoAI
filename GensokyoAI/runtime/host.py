@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..core.agent.quota_health import BurnRateSmoother, compute_burn_rate
 from ..core.config import ConfigLoader
 from ..core.config_schema import AppConfig
+from ..core.health import compute_burn_rate
 from ..utils.logger import logger
 from .auth import RuntimePrincipal, reset_current_principal, set_current_principal
 from .resource_control import ResourceLimitError
@@ -73,10 +73,6 @@ class RuntimeHost:
         self._event_subs: dict[str, tuple[asyncio.Task[None], str]] = {}
         self._meta_session_id: str | None = None  # 元租户（脱稿生成用）的会话 id
         self._started_at = time.monotonic()  # /status 运行时长基准
-        # 全局日耗快升慢降平滑器（警戒时间）+ 是否见过成本样本
-        # （见过后窗口清零不再回落静态阈值，而是平滑衰减到 0）
-        self._cost_smoother = BurnRateSmoother()
-        self._cost_has_samples = False
         # 适配器工具模板：(函数, 名称, 是否并行安全)，注入当前及后续租户的工具注册表
         self._adapter_tools: list[tuple[Callable[..., Any], str | None, bool]] = []
 
@@ -114,6 +110,7 @@ class RuntimeHost:
         session_id: str | None = None,
         *,
         disable_initiative: bool = True,
+        disable_think_engine: bool = False,
     ) -> tuple[str, int]:
         """初始化（或恢复）租户 Agent，返回 (session_id, revision)。
 
@@ -121,10 +118,16 @@ class RuntimeHost:
         消息投递通道的接入方必须如此，否则角色会产生「看不见的主动发言」，
         既空烧 token 又污染上下文。启用主动投递（subscribe_events）的调用方
         传 False。
+
+        `disable_think_engine=True` 时该租户不装配思考引擎——脱稿专用的
+        元租户（nb2-meta）用：它只在被调用时工作，不需要每 30 分钟空转的
+        长期思考（纯烧 token）。
         """
         params: dict[str, Any] = {"agent_id": agent_id, "character": character, "start": True}
         if session_id:
             params["session_id"] = session_id
+        if disable_think_engine:
+            params["enable_think_engine"] = False
         result = await self._call("agent.init", params)
         session = (result or {}).get("session") or {}
         sid = str(session.get("session_id") or "")
@@ -188,10 +191,13 @@ class RuntimeHost:
 
         元租户与用户会话完全隔离，生成内容不进任何用户的对话历史；
         会话 id 进程内缓存，revision 每次现取，重复调用不重建 Agent。
+        元租户不装配思考引擎与主动定时器——只在被调用时工作，零空转成本。
         """
         agent_id = "nb2-meta"
         if self._meta_session_id is None:
-            session_id, _ = await self.ensure_agent(agent_id, character, disable_initiative=True)
+            session_id, _ = await self.ensure_agent(
+                agent_id, character, disable_initiative=True, disable_think_engine=True
+            )
             self._meta_session_id = session_id
         session_id = self._meta_session_id
         revision = await self.fetch_revision(agent_id, session_id)
@@ -298,44 +304,30 @@ class RuntimeHost:
         }
 
     def _collect_cost_stats(self) -> dict[str, Any]:
-        """全租户消耗速率聚合（元/天），供额度健康动态阈值。
+        """全租户消耗计量聚合（元/天）：纯观测展示，不参与任何健康判定。
 
         消耗样本（带时间戳）分散在各租户 Agent 的 ModelClient 上，全局合并
-        后由框架 quota_health.compute_burn_rate 统一折算日耗——不按租户
-        分开算（用户 2026-08-02 定稿）；速率经 BurnRateSmoother 快升慢降
-        （警戒时间：变慢不瞬间拉低阈值，全天静默也平滑衰减而非回落静态）。
-        单价未配置（从未见过样本）时永远 {"count": 0}（调用方回落静态阈值）。
+        后由框架 core.health.compute_burn_rate 统一折算日耗；单价未配置时
+        永远 {"count": 0}。
         """
         samples: list[tuple[float, float]] = []
         for service in self._service._tenant_services.values():
             agent = service.state.agent
-            client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
-            if client is None:
+            if agent is None:
                 continue
-            samples.extend(getattr(client, "_cost_samples", ()))
-        stats = compute_burn_rate(samples)
-        if stats["count"] == 0 and not self._cost_has_samples:
-            return stats  # 从未见过样本：无数据，调用方回落静态阈值
-        self._cost_has_samples = True
-        raw = stats.get("burn_per_day", 0.0)
-        return {
-            "count": stats["count"],
-            "total_cost": stats.get("total_cost", 0.0),
-            "window_hours": stats.get("window_hours", 0.0),
-            "raw_burn_per_day": raw,  # 未平滑的原始日耗（观测用）
-            "burn_per_day": self._cost_smoother.update(raw),  # 阈值基准
-        }
+            samples.extend(agent.runtime_context.model_client._cost_samples)
+        return compute_burn_rate(samples)
 
     def _collect_memory_totals(self) -> dict[str, int]:
         """全租户语义记忆规模聚合（话题数 / 记忆条数；未启用语义的租户自然跳过）。"""
         topics = 0
         memories = 0
         for service in self._service._tenant_services.values():
-            memory = getattr(service.state.agent, "semantic_memory", None)
-            if memory is None:
+            agent = service.state.agent
+            if agent is None or agent.semantic_memory is None:
                 continue
-            topics += getattr(memory, "topic_count", 0)
-            memories += getattr(memory, "memory_count", 0)
+            topics += agent.semantic_memory.topic_count
+            memories += agent.semantic_memory.memory_count
         return {"topics": topics, "memories": memories}
 
     def _collect_think_latency(self) -> dict[str, Any]:
@@ -348,12 +340,11 @@ class RuntimeHost:
         samples: list[float] = []
         for service in self._service._tenant_services.values():
             agent = service.state.agent
-            client = getattr(getattr(agent, "runtime_context", None), "model_client", None)
-            if client is None:
+            if agent is None:
                 continue
             samples.extend(
                 duration
-                for context, duration in getattr(client, "_latency_samples", ())
+                for context, duration in agent.runtime_context.model_client._latency_samples
                 if context == "think_engine"
             )
         if not samples:

@@ -279,6 +279,48 @@ class RuntimeHostWrapperTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_ensure_agent_disable_think_engine_passes_flag(self):
+        async def run():
+            host = RuntimeHost()
+            calls = []
+
+            async def fake_call(method, params=None):
+                calls.append((method, dict(params or {})))
+                return {"session": {"session_id": "s-1", "revision": 0}}
+
+            host._call = fake_call
+            await host.ensure_agent("nb2-meta", "KirisameMarisa", disable_think_engine=True)
+            self.assertFalse(calls[0][1]["enable_think_engine"])
+            # 默认不传该键（网络 schema 以服务端默认值为准，保持后向兼容）
+            await host.ensure_agent("qq-group-1", "KirisameMarisa")
+            self.assertNotIn("enable_think_engine", calls[2][1])
+
+        asyncio.run(run())
+
+    def test_generate_meta_text_uses_lightweight_meta_tenant(self):
+        async def run():
+            host = RuntimeHost()
+            calls = []
+
+            async def fake_call(method, params=None):
+                calls.append((method, dict(params or {})))
+                if method == "agent.init":
+                    return {"session": {"session_id": "meta-s", "revision": 1}}
+                if method == "session.messages":
+                    return {"revision": 3}
+                if method == "agent.send_message":
+                    return {"content": "是个安静的人呢", "session": {"revision": 4}}
+                return {}
+
+            host._call = fake_call
+            text = await host.generate_meta_text("KirisameMarisa", "写第一印象")
+            self.assertEqual(text, "是个安静的人呢")
+            init_params = calls[0][1]
+            self.assertEqual(init_params["agent_id"], "nb2-meta")
+            self.assertFalse(init_params["enable_think_engine"])  # 元租户不装配思考引擎
+
+        asyncio.run(run())
+
     def test_send_message_revision_conflict_refreshes_and_retries(self):
         async def run():
             host = RuntimeHost()

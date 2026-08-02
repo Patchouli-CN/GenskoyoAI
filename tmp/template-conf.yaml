@@ -231,6 +231,13 @@ repeat_guard:
   mute_minutes: 10        # 「不理」冷却时长（分钟），期间复读消息直接忽略
   llm_break: true         # 冷却期内遇到「有新意」的内容时，由 LLM 以角色性格做破例判定（消气原谅/破例回一句）；false = 一律静默到冷却结束（零额外 token）
 
+# 框架健康中心（core.health.HealthCenter）：健康判定阈值统一走本节（静态阈值，
+# 重启不漂移）。/status 的额度水位即按此判定；消耗计量（单价 × usage 的日耗）
+# 仅观测展示、不参与判定。
+health:
+  quota_warn_yuan: 20.0   # 额度余额低于该值 → 🟡 警告
+  quota_crit_yuan: 5.0    # 低于该值 → 🔴 临界；≤ 0 → 🟣 耗尽
+
 # 工具配置
 tool:
   enabled: true

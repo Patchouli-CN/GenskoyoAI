@@ -68,6 +68,11 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
 
+> `/status` 的额度健康判定阈值不走 env——统一在 yaml `health:` 节
+> （`quota_warn_yuan` / `quota_crit_yuan`，框架 HealthCenter 消费，静态阈值
+> 重启不漂移）；`/status` 同时展示的日耗是计费计量（单价 × usage），仅观测、
+> 不参与判定。
+
 ## 到点提醒（Reminder）
 
 对 bot 说「10 分钟后提醒我吃饭」「明天早上 8 点喊栗子起床」即可。链路：

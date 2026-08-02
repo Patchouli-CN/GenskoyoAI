@@ -95,14 +95,6 @@ class MergeWindowConfigTests(unittest.TestCase):
         env = {"GSK_NB2_MERGE_WINDOW_SECONDS": "abc"}
         self.assertEqual(Nb2Config.from_env(env.get).merge_window_seconds, 1.5)
 
-    def test_quota_threshold_defaults_and_env(self):
-        self.assertEqual(Nb2Config().quota_warn_yuan, 20.0)
-        self.assertEqual(Nb2Config().quota_crit_yuan, 5.0)
-        env = {"GSK_NB2_QUOTA_WARN": "50", "GSK_NB2_QUOTA_CRIT": "10"}
-        config = Nb2Config.from_env(env.get)
-        self.assertEqual(config.quota_warn_yuan, 50.0)
-        self.assertEqual(config.quota_crit_yuan, 10.0)
-
 
 if __name__ == "__main__":
     unittest.main()

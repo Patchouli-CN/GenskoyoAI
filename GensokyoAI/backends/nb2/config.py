@@ -69,9 +69,6 @@ class Nb2Config:
     # 多人同时 @ 的合并窗口（秒）：首个发言到达后等待这么久，窗口内（及处理期间）
     # 攒下的消息合成一轮、一条回复同时回应所有人；0 = 不等待直接处理
     merge_window_seconds: float = 1.5
-    # /status 额度健康指数阈值（元）：余额 ≥ warn 为健康（指数 100），< crit 为告急
-    quota_warn_yuan: float = 20.0
-    quota_crit_yuan: float = 5.0
     # NapCat 掉线守护（bot_offline 事件/WS 断开 → 杀进程树 → 快速登录 → 确认回连）；
     # 节制：冷却期 + 每日上限，超限写哨兵文件告警停手（防无限重启激怒风控）
     watchdog_enabled: bool = True
@@ -117,8 +114,6 @@ class Nb2Config:
             merge_window_seconds=_parse_float(
                 get("GSK_NB2_MERGE_WINDOW_SECONDS"), cls.merge_window_seconds
             ),
-            quota_warn_yuan=_parse_float(get("GSK_NB2_QUOTA_WARN"), cls.quota_warn_yuan),
-            quota_crit_yuan=_parse_float(get("GSK_NB2_QUOTA_CRIT"), cls.quota_crit_yuan),
             watchdog_enabled=_parse_bool(get("GSK_NB2_WATCHDOG"), cls.watchdog_enabled),
             napcat_dir=Path((get("GSK_NB2_NAPCAT_DIR") or "").strip() or cls.napcat_dir),
             watchdog_cooldown_seconds=_parse_float(

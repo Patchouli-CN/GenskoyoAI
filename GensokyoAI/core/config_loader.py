@@ -12,6 +12,7 @@ from .config_schema import (
     AppConfig,
     CharacterConfig,
     EmbeddingConfig,
+    HealthConfig,
     InitiativeTimerConfig,
     LogLevel,
     MemoryConfig,
@@ -179,6 +180,11 @@ class ConfigLoader(ConfigMerger):
             repeat_guard_data = data["repeat_guard"] or {}
             config.repeat_guard = RepeatGuardConfig(**repeat_guard_data)
             self._provided_fields[id(config.repeat_guard)] = set(repeat_guard_data.keys())
+
+        if "health" in data:
+            health_data = data["health"] or {}
+            config.health = HealthConfig(**health_data)
+            self._provided_fields[id(config.health)] = set(health_data.keys())
 
         if "resource_control" in data:
             resource_control_data = data["resource_control"] or {}

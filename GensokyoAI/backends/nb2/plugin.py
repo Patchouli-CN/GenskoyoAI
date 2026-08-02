@@ -43,6 +43,7 @@ from ...core.agent.prompts import (
     build_repeat_annoyance_context,
     build_repeat_farewell_context,
 )
+from ...core.health import HealthCenter
 from ...runtime.host import RuntimeHost, RuntimeRpcError
 from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
 from ...utils.logger import logger
@@ -71,6 +72,7 @@ _targets: dict[str, tuple[str, int]] = {}  # agent_id -> ("group" | "user", QQ�
 _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后的群名片/昵称
 _impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（防并发重复生成）
 _repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按全局配置构建）
+_health_center: HealthCenter | None = None  # 框架健康中心（_on_startup 按 yaml health: 节构建）
 
 # NapCat 掉线守护（bot_offline 事件 / WS 断开 → 杀进程树 → 快速登录 → 确认回连）
 _napcat_dir = _config.napcat_dir
@@ -471,6 +473,8 @@ async def _on_startup() -> None:
     guard_config = host.get_app_config().repeat_guard
     if guard_config.enabled:
         _repeat_guard = RepeatGuard.from_config(guard_config)
+    global _health_center
+    _health_center = HealthCenter(host.get_app_config().health)
     repeat_guard_desc = (
         f"开（厌烦 {_repeat_guard.warn_streak}/不理 {_repeat_guard.mute_streak} 连击）"
         if _repeat_guard
@@ -625,6 +629,9 @@ async def _dispatch_command(
             "send": send,
             # /status 的复读防护行（None 时该行不显示）
             "repeat_guard": _repeat_guard,
+            # /status 的额度健康判定（框架健康中心；启动前懒构建兜底）
+            "health_center": _health_center
+            or HealthCenter(_require_host().get_app_config().health),
         },
     )
     await _command_executor.execute(text, ctx)

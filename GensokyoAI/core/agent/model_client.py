@@ -20,9 +20,9 @@ from ...utils.request_utils import ModelAPIError, is_retryable_error, normalize_
 from ..config import EmbeddingConfig, ModelConfig
 from ..events import Event, EventBus, SystemEvent
 from ..exceptions import ModelError
+from ..health import compute_burn_rate
 from .providers import BaseProvider, ProviderFactory
 from .providers.auth_utils import AuthRefreshError, sanitize_auth_data
-from .quota_health import compute_burn_rate
 from .types import (
     ImageGenerationRequest,
     ImageGenerationResult,

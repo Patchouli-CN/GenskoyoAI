@@ -11,6 +11,7 @@ from ..utils.url_security import UnsafeUrlError, validate_external_url
 from .agent.providers.specs import PROVIDER_SPECS, ProviderSpec
 from .config_schema import (
     EmbeddingConfig,
+    HealthConfig,
     InitiativeTimerConfig,
     LogLevel,
     MemoryConfig,
@@ -256,6 +257,8 @@ class ConfigValidator:
             self._validate_initiative_timer_data(data.get("initiative_timer") or {}, diagnostics)
         if "repeat_guard" in data:
             self._validate_repeat_guard_data(data.get("repeat_guard") or {}, diagnostics)
+        if "health" in data:
+            self._validate_health_data(data.get("health") or {}, diagnostics)
         if "resource_control" in data:
             self._validate_resource_control_data(data.get("resource_control") or {}, diagnostics)
         if "world" in data:
@@ -1334,6 +1337,35 @@ class ConfigValidator:
                 )
             )
 
+    def _validate_health_data(self, data: Any, diagnostics: list[ConfigDiagnostic]) -> None:
+        self._validate_object("health", data, diagnostics)
+        if not isinstance(data, dict):
+            return
+        self._validate_unknown_fields(
+            "health", data, self._struct_field_names(HealthConfig), diagnostics
+        )
+        self._validate_numeric_range(
+            "health.quota_warn_yuan", data.get("quota_warn_yuan"), diagnostics, minimum=0
+        )
+        self._validate_numeric_range(
+            "health.quota_crit_yuan", data.get("quota_crit_yuan"), diagnostics, minimum=0
+        )
+        warn_yuan = data.get("quota_warn_yuan")
+        crit_yuan = data.get("quota_crit_yuan")
+        if (
+            isinstance(warn_yuan, (int, float))
+            and isinstance(crit_yuan, (int, float))
+            and crit_yuan > warn_yuan
+        ):
+            diagnostics.append(
+                self._error(
+                    "health.quota_crit_yuan",
+                    "quota_crit_yuan must be <= quota_warn_yuan",
+                    "临界阈值应不大于警告阈值，否则🟡就被🟢吞掉了。",
+                    code="config.range.cross_field",
+                )
+            )
+
     @staticmethod
     def _validate_hesitation_delay_seconds(value: Any, diagnostics: list[ConfigDiagnostic]) -> None:
         if value is None:
@@ -1655,6 +1687,7 @@ class ConfigValidator:
             "think_engine",
             "initiative_timer",
             "repeat_guard",
+            "health",
             "resource_control",
             "world",
             "character",

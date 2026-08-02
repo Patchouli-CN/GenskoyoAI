@@ -22,7 +22,7 @@ from ...commands import (
     PermissionLevel,
     command,
 )
-from ...core.agent.quota_health import QuotaHealth, QuotaLevel, compute_quota_health
+from ...core.health import QUOTA_LEVEL_EMOJI, HealthCenter, QuotaLevel
 
 # nb2 指令本地注册表（CommandExecutor(registry=...) 消费）
 NB2_COMMANDS: dict[str, CommandDefinition] = {}
@@ -137,50 +137,33 @@ def _format_uptime(seconds: float) -> str:
     return f"{minutes} 分钟"
 
 
-def _format_quota_health(data: dict[str, Any] | None, *, warn: float, crit: float) -> str:
-    """额度健康行（静态阈值回落路径）：无消耗样本时使用 env 阈值。
-
-    动态路径（有消耗速率）见 _format_quota_dynamic——阈值由框架
-    quota_health 按「全局日耗还能撑几天」统一计算。
+def _format_quota_health(
+    data: dict[str, Any] | None,
+    health_center: HealthCenter,
+    *,
+    burn_per_day: float | None = None,
+) -> str:
+    """额度健康行：判定经框架 HealthCenter（yaml `health:` 节静态阈值，重启不漂移）；
+    日耗是纯观测计量（计费保留），不参与判定。
     """
     if data is None:
         return "额度：暂不可用（Provider 不支持或查询失败）"
     available = data.get("available_balance")
     if not isinstance(available, int | float):
         return f"额度信息：{data}"
-    if available <= 0:
+    verdict = health_center.evaluate_quota(float(available))
+    emoji = QUOTA_LEVEL_EMOJI[verdict.level]
+    if verdict.level is QuotaLevel.DEPLETED:
         return f"额度：🟣 耗尽（余额 ¥{available:.2f}）"
-    index = min(100, max(0, round(available / warn * 100))) if warn > 0 else 100
-    emoji = "🟢" if available >= warn else ("🟡" if available >= crit else "🔴")
     details = []
     for label, key in (("现金", "cash_balance"), ("代金券", "voucher_balance")):
         value = data.get(key)
         if isinstance(value, int | float):
             details.append(f"{label} ¥{value:.2f}")
+    if burn_per_day:
+        details.append(f"日耗 ¥{burn_per_day:.2f}")
     suffix = f"（{'，'.join(details)}）" if details else ""
-    return f"额度：{emoji} 健康指数 {index}（余额 ¥{available:.2f}{suffix}）"
-
-
-_QUOTA_LEVEL_DISPLAY = {
-    QuotaLevel.HEALTHY: "🟢",
-    QuotaLevel.WARNING: "🟡",
-    QuotaLevel.CRITICAL: "🔴",
-    QuotaLevel.DEPLETED: "🟣",
-}
-
-
-def _format_quota_dynamic(health: QuotaHealth) -> str:
-    """额度健康行（动态阈值路径）：阈值 = 全局日耗 × 基准天数。"""
-    emoji = _QUOTA_LEVEL_DISPLAY[health.level]
-    if health.remaining_days >= 1:
-        span = f"{health.remaining_days:.1f} 天"
-    else:
-        span = f"{health.remaining_days * 24:.0f} 小时"
-    return (
-        f"额度：{emoji} 健康指数 {health.index}"
-        f"（余额 ¥{health.balance:.2f}，日耗 ¥{health.burn_per_day:.2f}，"
-        f"约可再撑 {span}）"
-    )
+    return f"额度：{emoji} 健康指数 {verdict.index}（余额 ¥{available:.2f}{suffix}）"
 
 
 def _format_status(
@@ -188,8 +171,7 @@ def _format_status(
     *,
     quota: dict[str, Any] | None = None,
     quota_fetched: bool = False,
-    quota_warn: float = 20.0,
-    quota_crit: float = 5.0,
+    health_center: HealthCenter,
     repeat_guard: Any = None,
 ) -> str:
     """格式化系统状态（负载水位 / 额度 / 开户数 / 处理中 / 思考延迟 / 闸门 / 复读防护 / 记忆 / 版本）。"""
@@ -198,19 +180,11 @@ def _format_status(
     lines = [f"系统状态：{level_text}（{level.get('reason', '—')}）"]
 
     if quota_fetched:
-        # 动态阈值优先：有消耗速率时按「全局日耗还能撑几天」算；
-        # 无样本（单价未配置/尚无调用）回落 env 静态阈值
-        balance = (quota or {}).get("available_balance")
+        # 健康判定统一走框架 HealthCenter（静态阈值）；日耗计量仅展示
         burn_per_day = (status.get("cost") or {}).get("burn_per_day")
-        health = (
-            compute_quota_health(balance, burn_per_day)
-            if isinstance(balance, int | float) and burn_per_day
-            else None
+        lines.append(
+            _format_quota_health(quota, health_center, burn_per_day=burn_per_day)
         )
-        if health is not None:
-            lines.append(_format_quota_dynamic(health))
-        else:
-            lines.append(_format_quota_health(quota, warn=quota_warn, crit=quota_crit))
 
     tenants = status["tenants"]
     # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解
@@ -281,13 +255,11 @@ async def cmd_status(ctx: CommandContext) -> CommandResult:
     except Exception:
         await ctx.metadata["send"]("状态查询失败了……稍后再试吧。")
         return CommandResult.failure("status", "系统状态读取异常")
-    config = ctx.metadata["config"]
     text = _format_status(
         status,
         quota=quota,
         quota_fetched=True,
-        quota_warn=getattr(config, "quota_warn_yuan", 20.0),
-        quota_crit=getattr(config, "quota_crit_yuan", 5.0),
+        health_center=ctx.metadata["health_center"],
         repeat_guard=ctx.metadata.get("repeat_guard"),
     )
     await ctx.metadata["send"](text)
