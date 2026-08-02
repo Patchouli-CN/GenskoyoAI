@@ -417,8 +417,14 @@ class _ReminderAttentionKind:
         }
 
 
-async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
-    """把 AttentionVerdict 处置为注入上下文（代办式：直接登记/取消，不求模型调工具）。"""
+async def _dispatch_attention(
+    verdict: Any, agent_id: str, sender_name: str | None = None
+) -> str | None:
+    """把 AttentionVerdict 处置为注入上下文（代办式：直接登记/取消，不求模型调工具）。
+
+    sender_name：本轮发言者名（群聊【昵称】）——judge 没给目标人时兜底，
+    否则提醒会落成「大家」无 @（2026-08-02 实机问题）。
+    """
     if verdict.kind != "reminder":
         return None
     intent = verdict.data.get("intent")
@@ -430,8 +436,9 @@ async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
     if due is None:
         logger.info(f"[nb2] {agent_id} 注意力事务：提醒时间待确认")
         return build_reminder_clarify_context("", verdict.data["content"])
+    target_name = verdict.data.get("target_name") or (sender_name or "")
     outcome = _register_reminder(
-        agent_id, due, verdict.data["content"], verdict.data.get("target_name", "")
+        agent_id, due, verdict.data["content"], target_name
     )
     if outcome.ok:
         logger.info(
@@ -461,7 +468,9 @@ async def _dispatch_cancel(verdict: Any, agent_id: str) -> str:
     return build_reminder_cancelled_context(contents)
 
 
-async def _inspect_attention(text: str, agent_id: str) -> list[str]:
+async def _inspect_attention(
+    text: str, agent_id: str, sender_name: str | None = None
+) -> list[str]:
     """对本轮文本跑注意力管线，返回要注入的代办上下文（无命中/未启用为空）。"""
     if _attention is None:
         return []
@@ -472,7 +481,7 @@ async def _inspect_attention(text: str, agent_id: str) -> list[str]:
         return []
     notes = []
     for verdict in verdicts:
-        note = await _dispatch_attention(verdict, agent_id)
+        note = await _dispatch_attention(verdict, agent_id, sender_name)
         if note:
             notes.append(note)
     return notes
@@ -915,7 +924,8 @@ async def _process_batch(
         contexts.append(build_multi_speaker_context(len(batch)))
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
     # 注意力事务管线：命中待办（如提醒请求）直接代办登记并注入告知上下文
-    contexts.extend(await _inspect_attention(text, agent_id))
+    # （目标人兜底取本轮发言者，防「大家」无 @）
+    contexts.extend(await _inspect_attention(text, agent_id, batch[-1].member_name))
     try:
         reply = await _generate_for_tenant(agent_id, key, text, contexts, idempotency_key)
     except RuntimeRpcError as error:

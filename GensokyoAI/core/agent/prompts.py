@@ -567,8 +567,9 @@ def build_reminder_attention_prompt(text: str, now: datetime) -> str:
         '{"intent": "reminder" 或 "cancel" 或 "none", '
         '"due_at": "intent 为 reminder 时按当前时间换算的绝对到点时间'
         '（ISO 8601，没有合适的具体时间就留空）", '
-        '"content": "要提醒的事（一两句话）", '
-        '"target_name": "要提醒的人（昵称，默认当前说话人留空）", '
+        '"content": "要提醒的具体事项（一两句话概括，不要原样复述「提醒我」这类请求语）", '
+        '"target_name": "要提醒的人（默认 = 发这条消息的人，写其【昵称】；'
+        '只有明确说提醒大家时才写「大家」）", '
         '"scope": "intent 为 cancel 时：all（全部取消）或 latest（取消最近一条）"}\n\n'
         f"消息：\n{text}"
     )
@@ -608,11 +609,11 @@ def build_reminder_none_pending_context() -> str:
 def build_reminder_preregistered_context(due_text: str, remind_name: str, content: str) -> str:
     """提醒已代办登记（解析方：AttentionThings 代办后随本轮注入 system_contexts）。
 
-    注意力管线已把提醒登记进存储——角色只需用口吻转告，不必（也不许）再
-    口头承诺却不登记（群聊噪声下工具漏调的对症）。
+    注意力管线已把提醒登记进存储——角色只需用口吻转告「记下了」。
+    必须明令禁止自己表演到点提醒（实机 OOC：刚登记就演「时间到了」）。
     """
     return (
         f"【已代办】对方请求的提醒**已经登记好了**：{due_text} 提醒 {remind_name}「{content}」，"
-        "到点你会收到提示去说。现在请用自己的口吻告诉对方你已记下（一两句话），"
-        "不要重复报时间细节之外的内容，也不要说「我会提醒你」却不明下文。"
+        "到点会由系统触发你来说（不是现在）。现在**只**用自己的口吻告诉对方你已记下"
+        "（一两句话）——**绝对不要**自己表演「到点提醒」或说「时间到了」。"
     )
