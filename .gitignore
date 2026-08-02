@@ -13,6 +13,8 @@ logs/
 
 plans/
 
+config/
+
 # UV
 .venv/
 uv.lock
