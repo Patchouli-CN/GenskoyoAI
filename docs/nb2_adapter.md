@@ -80,6 +80,20 @@ mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/local.env
 | `GSK_NB2_BOT_QQ` | 空（首连 self_id 兜底） | 掉线守护快速登录的 QQ 号（`launcher-win10-user.bat -q <QQ号>`） |
 | `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
+| `GSK_NB2_ATTENTION` | `true` | 注意力事务：候选消息经一次性 LLM 判定，待办直接代办登记 |
+
+## 注意力事务（AttentionThings）
+
+工具提示行救不了群聊噪声下的工具漏调（模型「口头答应但不登记」）。注意力
+事务是独立管线：**候选预筛（纯正则，零成本）→ 命中的消息才花一次 LLM
+判定（一次性脱稿，不进会话）→ 命中待办直接代办**。提醒是首个注册的
+事务种类：判定为提醒请求时管线**直接登记进 reminders 存储**并注入
+「已代办」上下文——角色只管用口吻转告「记下了」，想忘都忘不了。
+
+- 判定失败/登记失败一律静默降级为普通回复，绝不拖垮主回复。
+- 通用设计：`AttentionKind`（预筛 + 判定 prompt + 输出解析）可注册扩展，
+  核心类在 `core/agent/attention.py`，与具体事务零耦合。
+- 成本：只有含「提醒/叫我/到点…」等候选词的消息才花那一次短 JSON 判定。
 
 > `/status` 的额度健康判定阈值不走 env——统一在 yaml `health:` 节
 > （`quota_warn_yuan` / `quota_crit_yuan`，框架 HealthCenter 消费，静态阈值

@@ -14,6 +14,7 @@ import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -33,12 +34,15 @@ from nonebot.matcher import Matcher
 from nonebot.rule import Rule, to_me
 
 from ...commands import CommandContext, CommandExecutor
+from ...core.agent.attention import AttentionThings
 from ...core.agent.prompts import (
     build_member_impression_prompt,
     build_multi_speaker_context,
     build_mute_break_context,
     build_mute_break_judge_prompt,
     build_mute_forgive_context,
+    build_reminder_attention_prompt,
+    build_reminder_preregistered_context,
     build_reminder_trigger_context,
     build_repeat_annoyance_context,
     build_repeat_farewell_context,
@@ -73,6 +77,7 @@ _member_names: dict[tuple[int, int], str] = {}  # (群号, QQ号) -> 净化后�
 _impression_inflight: set[int] = set()  # 正在后台生成印象的 QQ 号（防并发重复生成）
 _repeat_guard: RepeatGuard | None = None  # 复读烦躁模型（_on_startup 按全局配置构建）
 _health_center: HealthCenter | None = None  # 框架健康中心（_on_startup 按 yaml health: 节构建）
+_attention: AttentionThings | None = None  # 注意力事务管线（_on_startup 装配，reminder 为首个种类）
 
 # NapCat 掉线守护（bot_offline 事件 / WS 断开 → 杀进程树 → 快速登录 → 确认回连）
 _napcat_dir = _config.napcat_dir
@@ -294,6 +299,62 @@ async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
 # ==================== 到点提醒 ====================
 
 
+@dataclass
+class _ReminderOutcome:
+    ok: bool
+    message: str  # 给模型/用户看的登记结果
+    due_text: str = ""
+    remind_name: str = ""
+    content: str = ""
+
+
+def _register_reminder(agent_id: str, when: str, content: str, target_name: str) -> _ReminderOutcome:
+    """登记一条到点提醒（set_reminder 工具与 AttentionThings 代办共用）。"""
+    now = local_now()
+    due = parse_when(when, now)
+    if due is None:
+        return _ReminderOutcome(False, "这个时间没看懂……换成「10分钟后」「15:30」「明天 08:00」这种说法再叫我吧。")
+    if due - now < timedelta(seconds=REMINDER_TICK_SECONDS):
+        return _ReminderOutcome(False, "太近啦，30 秒内的事直接说就行，不用设提醒。")
+    if due - now > timedelta(days=30):
+        return _ReminderOutcome(False, "超过 30 天的提醒我记不住啦，近一点再叫我。")
+    content_clean = content.strip()[:200]
+    if not content_clean:
+        return _ReminderOutcome(False, "提醒的事是空的……要提醒什么呀？")
+    if _reminders.pending_count(agent_id) >= _config.reminder_max_per_tenant:
+        return _ReminderOutcome(False, f"这里已经攒了 {_config.reminder_max_per_tenant} 条提醒了，先消化一些再加。")
+    target = _targets.get(agent_id)
+    if target is None:
+        return _ReminderOutcome(False, "还不知道往哪儿说，先在群里/私聊里聊一句再设提醒吧。")
+    kind, target_id = target
+    remind_qq, remind_name = _resolve_remind_target(kind, target_id, target_name)
+    reminder = Reminder(
+        id=uuid4().hex[:12],
+        agent_id=agent_id,
+        key=f"{kind}:{target_id}",
+        kind=kind,
+        target_id=target_id,
+        remind_qq=remind_qq,
+        remind_name=remind_name,
+        content=content_clean,
+        due=due,
+        created_at=now,
+    )
+    _reminders.add(reminder)
+    due_text = due.strftime("%m月%d日 %H:%M")
+    logger.info(
+        f"[nb2] {agent_id} 新增提醒：{due_text} 提醒 {remind_name}"
+        f"「{content_clean[:30]}」（{reminder.id}）"
+    )
+    return _ReminderOutcome(
+        True,
+        f"记下啦：{due_text} 提醒 {remind_name}「{content_clean}」，到点我会来说。",
+        due_text=due_text,
+        remind_name=remind_name,
+        content=content_clean,
+    )
+
+
 def _resolve_remind_target(kind: str, target_id: int, target_name: str) -> tuple[int | None, str]:
     """把 LLM 给的昵称解析成要 @ 的 QQ（群名片缓存反查）；找不到则不 @、只带名字。"""
     name = target_name.strip().replace("【", "").replace("】", "")
@@ -318,45 +379,84 @@ def _build_reminder_tool(agent_id: str) -> Callable[..., Awaitable[str]]:
         要提醒的事（一两句话说清）；target_name 是要提醒的群友昵称（消息里
         【】中的名字），默认当前说话人。到点你会收到提示，用自己的口吻把提醒
         说出来。你只负责登记，不用自己掐时间。"""
-        now = local_now()
-        due = parse_when(when, now)
-        if due is None:
-            return "这个时间没看懂……换成「10分钟后」「15:30」「明天 08:00」这种说法再叫我吧。"
-        if due - now < timedelta(seconds=REMINDER_TICK_SECONDS):
-            return "太近啦，30 秒内的事直接说就行，不用设提醒。"
-        if due - now > timedelta(days=30):
-            return "超过 30 天的提醒我记不住啦，近一点再叫我。"
-        content_clean = content.strip()[:200]
-        if not content_clean:
-            return "提醒的事是空的……要提醒什么呀？"
-        if _reminders.pending_count(agent_id) >= _config.reminder_max_per_tenant:
-            return f"这里已经攒了 {_config.reminder_max_per_tenant} 条提醒了，先消化一些再加。"
-        target = _targets.get(agent_id)
-        if target is None:
-            return "还不知道往哪儿说，先在群里/私聊里聊一句再设提醒吧。"
-        kind, target_id = target
-        remind_qq, remind_name = _resolve_remind_target(kind, target_id, target_name)
-        reminder = Reminder(
-            id=uuid4().hex[:12],
-            agent_id=agent_id,
-            key=f"{kind}:{target_id}",
-            kind=kind,
-            target_id=target_id,
-            remind_qq=remind_qq,
-            remind_name=remind_name,
-            content=content_clean,
-            due=due,
-            created_at=now,
-        )
-        _reminders.add(reminder)
-        due_text = due.strftime("%m月%d日 %H:%M")
-        logger.info(
-            f"[nb2] {agent_id} 新增提醒：{due_text} 提醒 {remind_name}"
-            f"「{content_clean[:30]}」（{reminder.id}）"
-        )
-        return f"记下啦：{due_text} 提醒 {remind_name}「{content_clean}」，到点我会来说。"
+        outcome = _register_reminder(agent_id, when, content, target_name)
+        return outcome.message
 
     return set_reminder
+
+
+# ==================== 注意力事务（AttentionThings） ====================
+
+# 提醒意图候选预筛（免费）：只有像提醒的消息才花一次 LLM 判定
+_ATTENTION_CANDIDATE_RE = re.compile(r"提醒|叫我|喊我|到点|分钟后|小时后|别忘|记我")
+
+
+class _ReminderAttentionKind:
+    """AttentionThings 的第一个种类：到点提醒请求判定。"""
+
+    name = "reminder"
+
+    def candidate(self, text: str) -> bool:
+        return bool(_ATTENTION_CANDIDATE_RE.search(text))
+
+    def judge_prompt(self, text: str) -> str:
+        return build_reminder_attention_prompt(text)
+
+    def parse(self, raw: str) -> dict[str, Any] | None:
+        try:
+            match = _JSON_OBJECT_PATTERN.search(raw)
+            data = json.loads(match.group(0) if match else raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict) or data.get("is_reminder") is not True:
+            return None
+        when = str(data.get("when") or "").strip()
+        content = str(data.get("content") or "").strip()
+        if not when or not content:
+            return None
+        return {
+            "when": when,
+            "content": content,
+            "target_name": str(data.get("target_name") or "").strip(),
+        }
+
+
+async def _dispatch_attention(verdict: Any, agent_id: str) -> str | None:
+    """把 AttentionVerdict 处置为注入上下文（代办式：直接登记，不求模型调工具）。"""
+    if verdict.kind != "reminder":
+        return None
+    outcome = _register_reminder(
+        agent_id,
+        verdict.data["when"],
+        verdict.data["content"],
+        verdict.data.get("target_name", ""),
+    )
+    if not outcome.ok:
+        return None  # 判定命中但登记失败（时间看不懂等）：交给正常生成发挥
+    logger.info(
+        f"[nb2] {agent_id} 注意力事务已代办：{outcome.due_text} 提醒 "
+        f"{outcome.remind_name}「{outcome.content[:30]}」"
+    )
+    return build_reminder_preregistered_context(
+        outcome.due_text, outcome.remind_name, outcome.content
+    )
+
+
+async def _inspect_attention(text: str, agent_id: str) -> list[str]:
+    """对本轮文本跑注意力管线，返回要注入的代办上下文（无命中/未启用为空）。"""
+    if _attention is None:
+        return []
+    try:
+        verdicts = await _attention.inspect(text)
+    except Exception as error:
+        logger.debug(f"[nb2] 注意力判定失败（忽略）: {error}")
+        return []
+    notes = []
+    for verdict in verdicts:
+        note = await _dispatch_attention(verdict, agent_id)
+        if note:
+            notes.append(note)
+    return notes
 
 
 async def _generate_for_tenant(
@@ -487,6 +587,13 @@ async def _on_startup() -> None:
         _repeat_guard = RepeatGuard.from_config(guard_config)
     global _health_center
     _health_center = HealthCenter(host.get_app_config().health)
+    global _attention
+    if _config.attention_enabled:
+        # 注意力事务管线：判定走一次性脱稿生成（不进任何会话），reminder 为首个种类
+        _attention = AttentionThings(
+            lambda prompt: host.generate_meta_text(_config.character, prompt)
+        )
+        _attention.register(_ReminderAttentionKind())
     repeat_guard_desc = (
         f"开（厌烦 {_repeat_guard.warn_streak}/不理 {_repeat_guard.mute_streak} 连击）"
         if _repeat_guard
@@ -503,6 +610,7 @@ async def _on_startup() -> None:
         f"复读防护={repeat_guard_desc}, "
         f"掉线守护={'开' if _config.watchdog_enabled else '关'}, "
         f"到点提醒={'开' if _config.reminders_enabled else '关'}, "
+        f"注意力事务={'开' if _attention else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -802,6 +910,8 @@ async def _process_batch(
     if len(batch) > 1:
         contexts.append(build_multi_speaker_context(len(batch)))
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
+    # 注意力事务管线：命中待办（如提醒请求）直接代办登记并注入告知上下文
+    contexts.extend(await _inspect_attention(text, agent_id))
     try:
         reply = await _generate_for_tenant(agent_id, key, text, contexts, idempotency_key)
     except RuntimeRpcError as error:

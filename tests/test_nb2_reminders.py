@@ -23,6 +23,7 @@ from GensokyoAI.backends.nb2.reminders import (  # noqa: E402
     local_now,
     parse_when,
 )
+from GensokyoAI.core.agent.attention import AttentionVerdict  # noqa: E402
 
 _TZ8 = timezone(timedelta(hours=8))
 _NOW = datetime(2026, 8, 2, 10, 0, 0, tzinfo=_TZ8)  # 周日 10:00
@@ -168,6 +169,66 @@ class ReminderToolTests(unittest.IsolatedAsyncioTestCase):
         reminder = self._store.due(local_now() + timedelta(minutes=11))[0]
         self.assertIsNone(reminder.remind_qq)
         self.assertEqual(reminder.remind_name, "不存在的人")
+
+
+class ReminderAttentionTests(unittest.IsolatedAsyncioTestCase):
+    """AttentionThings reminder 种类 + 代办处置（不依赖主模型调工具）。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._store = ReminderStore(Path(self._tmpdir.name) / "r.json")
+        self._patches = [
+            patch.object(plugin, "_reminders", self._store),
+            patch.object(plugin, "_targets", {"qq-group-123": ("group", 123)}),
+            patch.object(plugin, "_member_names", {(123, 456): "栗子"}),
+        ]
+        for patcher in self._patches:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in self._patches:
+            patcher.stop()
+        self._tmpdir.cleanup()
+
+    def test_candidate_prefilter(self):
+        kind = plugin._ReminderAttentionKind()
+        self.assertTrue(kind.candidate("3分钟后叫我一下"))
+        self.assertTrue(kind.candidate("十点钟提醒我"))
+        self.assertFalse(kind.candidate("今天天气怎么样"))
+
+    def test_parse_valid_and_invalid(self):
+        kind = plugin._ReminderAttentionKind()
+        data = kind.parse(
+            '{"is_reminder": true, "when": "1分钟后", "content": "喊一下", "target_name": "栗子"}'
+        )
+        self.assertEqual(
+            data, {"when": "1分钟后", "content": "喊一下", "target_name": "栗子"}
+        )
+        self.assertIsNone(kind.parse('{"is_reminder": false}'))
+        self.assertIsNone(kind.parse("不是 JSON"))
+        self.assertIsNone(kind.parse('{"is_reminder": true, "when": "", "content": "x"}'))
+
+    async def test_dispatch_registers_and_returns_directive(self):
+        verdict = AttentionVerdict(
+            kind="reminder",
+            data={"when": "10分钟后", "content": "吃饭", "target_name": "栗子"},
+        )
+        note = await plugin._dispatch_attention(verdict, "qq-group-123")
+        self.assertIsNotNone(note)
+        self.assertIn("已代办", note)
+        self.assertIn("吃饭", note)
+        # 直接代办登记（不求模型调工具）：存储里已有一条
+        reminder = self._store.due(local_now() + timedelta(minutes=11))[0]
+        self.assertEqual(reminder.remind_qq, 456)
+        self.assertEqual(reminder.content, "吃饭")
+
+    async def test_dispatch_bad_time_returns_none(self):
+        verdict = AttentionVerdict(
+            kind="reminder", data={"when": "看不懂", "content": "x", "target_name": ""}
+        )
+        note = await plugin._dispatch_attention(verdict, "qq-group-123")
+        self.assertIsNone(note)
+        self.assertEqual(self._store.pending_count("qq-group-123"), 0)
 
 
 class ReminderDiscoverabilityTests(unittest.TestCase):

@@ -123,6 +123,9 @@ class Nb2Config:
     # nb2_data/reminders.json 持久化（重启不丢），30s tick 扫到点项
     reminders_enabled: bool = True
     reminder_max_per_tenant: int = 20  # 每个群/私聊的待办提醒上限（防滥用烧 token）
+    # 注意力事务（AttentionThings）：候选预筛免费，命中才花一次性 LLM 判定，
+    # 命中待办直接代办登记（不依赖主模型的工具纪律——群聊噪声下工具漏调的对症）
+    attention_enabled: bool = True
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -174,6 +177,7 @@ class Nb2Config:
             reminder_max_per_tenant=_parse_int(
                 get("GSK_NB2_REMINDER_MAX_PER_TENANT"), cls.reminder_max_per_tenant
             ),
+            attention_enabled=_parse_bool(get("GSK_NB2_ATTENTION"), cls.attention_enabled),
             bot_qq=(
                 int(bot_qq_raw.strip())
                 if (bot_qq_raw := get("GSK_NB2_BOT_QQ")) and bot_qq_raw.strip().isdigit()

@@ -16,6 +16,28 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.59 AttentionThings 注意力事务管线（2026-08-02，用户定稿「足够通用」）
+
+- 起因：群聊提醒工具连续漏调（私聊灵、群聊六连「口头答应但不登记」），
+  提示行强化也救不回来——用户拍板做注意力机制帮助模型注意。
+- 设计（用户定稿通用性）：`core/agent/attention.py` 的 `AttentionThings`
+  管线——**候选预筛（正则零成本）→ 命中才花一次 LLM 判定（一次性脱稿
+  OneShotGenerator，不进会话）→ 输出 AttentionVerdict**；事务种类
+  `AttentionKind`（candidate/judge_prompt/parse 三段契约）可注册扩展，
+  提醒是首个。判定失败静默降级，绝不拖垮主回复。
+- 关键决策：**代办式处置**（我提出并获认可的方向）——判定命中后管线
+  直接 `_register_reminder` 登记进存储并注入「已代办」上下文，模型只
+  用口吻转告「记下了」，不再依赖它的工具纪律。`set_reminder` 工具与
+  代办共用同一登记函数（结构化 `_ReminderOutcome`）。
+- nb2 接线：`_process_batch` 合并后跑 `_inspect_attention`；
+  `GSK_NB2_ATTENTION`（默认 true）；启动日志加「注意力事务=开/关」。
+- 测试：core 管线 6 例（预筛免调用/产出 verdict/解析 None/判定失败静默/
+  停用与空白/重名忽略）+ nb2 种类与代办 5 例（预筛词/解析合法非法/代办
+  登记入库+指令注入/坏时间降级）。合计 28+passed 定向，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`feat(attention): AttentionThings 注意力事务管线——候选预筛+脱稿判定+代办式处置，reminder 首个种类（判定命中直接登记，不依赖主模型工具纪律）`
+
 ## 8.58 快速登录形式修正：位置参数 + 密码回退显式注入（2026-08-02，端到端实测定案）
 
 - 用户报：配置了 NAPCAT_QUICK_PASSWORD_MD5 但 NapCat 仍说「未配置回退

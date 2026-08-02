@@ -541,3 +541,35 @@ def build_reminder_trigger_context(target_label: str, content: str) -> str:
         "用你自己的口吻、像你自己突然想起来一样自然地提醒 TA，一两句话即可，"
         "不要提到系统、提醒器或工具。"
     )
+
+
+def build_reminder_attention_prompt(text: str) -> str:
+    """提醒意图判定（AttentionThings reminder 种类的 judge_prompt）。
+
+    输入一段 QQ 消息文本（可能多行、每行开头【昵称】是不同说话人），
+    让模型只输出 JSON 判定：是否在**请求设置提醒**（区别于询问已有提醒、
+    闲聊玩笑），并抽取时间/事项/对象。
+    """
+    return (
+        "判断下面的聊天消息里有没有人**请求设置到点提醒**（让别人在某时间提醒做某事）。\n"
+        "注意区分：询问已有提醒/聊提醒这个话题/玩笑不算请求。\n"
+        "消息可能有多行，每行开头的【昵称】是说话人。\n"
+        "只输出 JSON，不要输出任何其他内容：\n"
+        '{"is_reminder": true 或 false, "when": "请求中的时间原话（如 10分钟后/明天8点/15:30）", '
+        '"content": "要提醒的事（一两句话）", "target_name": "要提醒的人（昵称，默认当前说话人留空）"}\n'
+        "不确定或不是请求时：{\"is_reminder\": false}\n\n"
+        f"消息：\n{text}"
+    )
+
+
+def build_reminder_preregistered_context(due_text: str, remind_name: str, content: str) -> str:
+    """提醒已代办登记（解析方：AttentionThings 代办后随本轮注入 system_contexts）。
+
+    注意力管线已把提醒登记进存储——角色只需用口吻转告，不必（也不许）再
+    口头承诺却不登记（群聊噪声下工具漏调的对症）。
+    """
+    return (
+        f"【已代办】对方请求的提醒**已经登记好了**：{due_text} 提醒 {remind_name}「{content}」，"
+        "到点你会收到提示去说。现在请用自己的口吻告诉对方你已记下（一两句话），"
+        "不要重复报时间细节之外的内容，也不要说「我会提醒你」却不明下文。"
+    )
