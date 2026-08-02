@@ -9,7 +9,9 @@
 NapCatWinBootMain 是一次性引导器（拉起 QQ 即退）、QQNT 多开进程互相收养
 ——**进程枚举根本无法可靠识别 bot 的 QQ，一切基于 pid 的存活/捕获探测
 都必然误判**（第三轮「秒退」正是探测逻辑自己造的）。因此：
-- 启动 = 直接 `call main.bat`（用户实证的路径，改 bat 自动生效）；
+- 启动 = 硬编码 main.bat 的内容（`launcher-win10-user.bat -q <QQ号>`
+  快速登录；launcher bat 是 NapCat.Shell 发行自带，不依赖用户自建脚本），
+  QQ 号由 GSK_NB2_BOT_QQ 配置注入（未配则由首次连接的 self_id 兜底）；
 - 清理只做安全集合：按镜像名清 NapCatWinBootMain 引导器树 + 旧实例卡在
   `pause` 的 bat 窗口（绝不盲杀 QQ.exe，个人 QQ 绝对安全；新旧登录冲突
   由 QQ 服务端裁决——新登录踢旧登录）；
@@ -76,16 +78,16 @@ async def _windows_kill_aux() -> None:
     await _ps(_KILL_AUX_PS)
 
 
-def _windows_launch_napcat(napcat_dir: Path) -> int:
-    """直接执行用户的 main.bat 启动 NapCat（快速登录），返回 cmd 进程 PID。
+def _windows_launch_napcat(napcat_dir: Path, bot_qq: int) -> int:
+    """硬编码 main.bat 的内容：`launcher-win10-user.bat -q <QQ号>` 快速登录。
 
-    用户实证的最可靠路径——与其复刻 launcher 环境变量/参数，不如直接
-    `call main.bat`（用户后续改 main.bat 也自动生效）。
+    launcher bat 是 NapCat.Shell 发行自带的（不依赖用户自建脚本），
+    环境变量/QQ 路径/loadNapCat.js 全由 bat 自己处理。
     """
-    # 经 cmd 先把新控制台代码页切到 UTF-8（launcher bat 里的 chcp 65001 同款），
+    # 经 cmd 先把新控制台代码页切到 UTF-8（bat 里的 chcp 65001 同款），
     # 否则守护拉起的 NapCat 控制台默认 GBK，中文日志全是乱码
     process = subprocess.Popen(
-        ["cmd", "/c", "chcp 65001 >nul && call main.bat"],
+        ["cmd", "/c", f"chcp 65001 >nul && call launcher-win10-user.bat -q {bot_qq}"],
         cwd=napcat_dir,
         # 独立控制台窗口：存活不依赖本进程，日志对用户可见（与手动启动一致）
         creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -109,8 +111,9 @@ class NapCatWatchdog:
         recover_timeout_seconds: float = 900.0,
         disconnect_grace_seconds: float = 60.0,
         alert_path: Path | None = None,
+        bot_qq: int | None = None,
         kill: Callable[[], Awaitable[None]] = _windows_kill_aux,
-        launch: Callable[[Path], int] = _windows_launch_napcat,
+        launch: Callable[[Path, int], int] = _windows_launch_napcat,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         now: Callable[[], float] = time.time,
         platform: str = sys.platform,
@@ -127,7 +130,7 @@ class NapCatWatchdog:
         self._now = now
         self._platform = platform
         self._napcat_dir: Path | None = None
-        self._bot_qq: int | None = None
+        self._bot_qq = bot_qq  # 配置注入优先；未配则由首次连接的 self_id 兜底
         self._attempts: list[float] = []  # 近 24h 重启时间戳
         self._last_attempt = 0.0
         self._trigger_active = False  # 恢复流程进行中（单 flight 旗标，不依赖任务身份）
@@ -239,8 +242,11 @@ class NapCatWatchdog:
         if self._platform != "win32":
             self._alert("not_windows", f"当前平台 {self._platform} 不支持自动恢复（{reason}）")
             return "not_windows"
-        if self._napcat_dir is None:
-            self._alert("not_ready", "NapCat 目录未知，无法自动恢复")
+        if self._napcat_dir is None or self._bot_qq is None:
+            self._alert(
+                "not_ready",
+                "NapCat 目录或 bot QQ 号未知（配置 GSK_NB2_BOT_QQ 或等首次连接），无法自动恢复",
+            )
             return "not_ready"
         self._last_attempt = now
         self._attempts.append(now)
@@ -250,11 +256,11 @@ class NapCatWatchdog:
         )
         try:
             # 安全清理（引导器树 + pause 窗口；新旧登录冲突由 QQ 服务端裁决，
-            # 新登录会踢掉旧登录）→ 沉降 → main.bat 启动
+            # 新登录会踢掉旧登录）→ 沉降 → 硬编码 launcher 内容快速登录
             await self._kill()
             await self._sleep(_KILL_SETTLE_SECONDS)
-            pid = await asyncio.to_thread(self._launch, self._napcat_dir)
-            logger.info(f"[nb2-watchdog] NapCat 已经 main.bat 重启（PID {pid}），等待回连")
+            pid = await asyncio.to_thread(self._launch, self._napcat_dir, self._bot_qq)
+            logger.info(f"[nb2-watchdog] NapCat 已重启（PID {pid}，QQ {self._bot_qq}），等待回连")
         except Exception as error:
             self._alert("restart_failed", f"清理/重启失败: {error}")
             return "restart_failed"

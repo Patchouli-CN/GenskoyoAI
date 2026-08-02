@@ -16,6 +16,23 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.53 watchdog 启动内化：硬编码 launcher 内容 + GSK_NB2_BOT_QQ（2026-08-02，用户点单）
+
+- 用户：main.bat 是自建的别人没有——把内容硬编码进去、QQ 号从配置注入。
+  （中途我又复刻了一版 env/注册表/loadNapCat.js，被用户二次拍醒：
+  「直接 `launcher.bat -q {qq}` 不就好了」——bat 是 NapCat.Shell 发行
+  自带，一行 call 就够。）
+- 定稿：`_windows_launch_napcat` = `cmd /c "chcp 65001 >nul && call
+  launcher-win10-user.bat -q <QQ号>"`（cwd=NapCat.Shell，独立控制台）；
+  QQ 号新增 `GSK_NB2_BOT_QQ` 配置（未配由首次连接 self_id 兜底）；
+  清理残留：winreg/_resolve_qq_path/env 复制/loadNapCat.js 全删，
+  tmp/ 下三个诊断 ps1 一并删除。
+- 测试：19 例（命令断言含 `-q 3779163297`、配置注入免首连即可恢复、
+  既有状态机）。ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`feat(nb2): watchdog 启动内化——硬编码 launcher-win10-user.bat -q 快速登录（不依赖自建 main.bat），bot QQ 号走 GSK_NB2_BOT_QQ 配置注入`
+
 ## 8.52 watchdog 回归极简：call main.bat + 只信 WS 回连（2026-08-02，用户拍板）
 
 - 第三轮实机失败后的自我实锤：§8.51 的「孵化期捕获 QQ pid」是我自己

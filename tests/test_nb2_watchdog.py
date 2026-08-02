@@ -29,7 +29,7 @@ def _make_watchdog(tmp: Path, **overrides) -> NapCatWatchdog:
         "disconnect_grace_seconds": 0.05,
         "alert_path": tmp / "alert.json",
         "kill": _noop,
-        "launch": lambda napcat_dir: 4242,
+        "launch": lambda napcat_dir, bot_qq: 4242,
         # 测试加速：所有 sleep 截断到 20ms（含回连轮询与冷却重试）
         "sleep": lambda seconds: asyncio.sleep(min(seconds, 0.02)),
         "platform": "win32",
@@ -57,7 +57,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 kill=lambda: calls.append("kill") or _noop(),
-                launch=lambda d: calls.append("launch") or 4242,
+                launch=lambda d, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
             watchdog._connected.clear()
@@ -107,7 +107,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.01,
-                launch=lambda d: calls.append("launch") or 4242,
+                launch=lambda d, q: calls.append("launch") or 4242,
                 now=lambda: clock[0],
             )
             watchdog.notify_connected(3779163297)
@@ -128,7 +128,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.01,
-                launch=lambda d: calls.append("launch") or 4242,
+                launch=lambda d, q: calls.append("launch") or 4242,
                 now=lambda: clock[0],
             )
             watchdog.notify_connected(3779163297)
@@ -162,7 +162,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 platform="linux",
-                launch=lambda d: calls.append("launch") or 4242,
+                launch=lambda d, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
             watchdog._connected.clear()
@@ -170,22 +170,41 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "not_windows")
             self.assertEqual(calls, [])
 
-    async def test_not_ready_without_napcat_dir(self):
+    async def test_not_ready_without_napcat_dir_or_bot_qq(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             options = {
                 "alert_path": Path(tmpdir) / "alert.json",
                 "kill": _noop,
-                "launch": lambda d: 4242,
+                "launch": lambda d, q: 4242,
                 "platform": "win32",
             }
-            watchdog = NapCatWatchdog(**options)  # 未 configure，目录未知
+            watchdog = NapCatWatchdog(**options)  # 未 configure 且 QQ 号未知
             result = await watchdog.trigger("bot_offline")
             self.assertEqual(result, "not_ready")
 
+    async def test_config_bot_qq_enables_recovery_without_connect(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls: list[str] = []
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                bot_qq=3779163297,  # 配置注入：无需等首次连接
+                launch=lambda d, q: calls.append(f"launch:{q}") or 4242,
+            )
+
+            async def reconnect() -> None:
+                await asyncio.sleep(0.05)
+                watchdog.notify_connected(3779163297)
+
+            task = asyncio.create_task(reconnect())
+            result = await watchdog.trigger("bot_offline")
+            await task
+            self.assertEqual(result, "restarted")
+            self.assertEqual(calls, ["launch:3779163297"])
+
     async def test_restart_failure_alerts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            def bad_launch(d):
-                raise FileNotFoundError("main.bat 不存在")
+            def bad_launch(d, q):
+                raise FileNotFoundError("NapCatWinBootMain.exe 不存在")
 
             watchdog = _make_watchdog(Path(tmpdir), launch=bad_launch)
             watchdog.notify_connected(3779163297)
@@ -224,7 +243,7 @@ class DisconnectGraceTests(unittest.IsolatedAsyncioTestCase):
             watchdog = _make_watchdog(
                 Path(tmpdir),
                 recover_timeout_seconds=0.05,
-                launch=lambda d: calls.append("launch") or 4242,
+                launch=lambda d, q: calls.append("launch") or 4242,
             )
             watchdog.notify_connected(3779163297)
             watchdog.notify_disconnected()
@@ -250,7 +269,7 @@ class BotOfflineEventTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             calls: list[str] = []
 
-            def slow_launch(d):
+            def slow_launch(d, q):
                 time.sleep(0.05)
                 calls.append("launch")
                 return 4242
@@ -276,8 +295,8 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertIn("launcher-win10", _KILL_AUX_PS)
         self.assertIn("NapCatWinBootMain.exe", _KILL_AUX_PS)
 
-    def test_launch_calls_main_bat_with_utf8_codepage(self):
-        # 恢复 = 直接 call main.bat（用户实证路径）；控制台先 chcp 65001 防乱码
+    def test_launch_hardcodes_main_bat_content(self):
+        # 启动 = 硬编码 main.bat 内容：call launcher-win10-user.bat -q <QQ号>
         with tempfile.TemporaryDirectory() as tmpdir:
             captured: dict = {}
 
@@ -289,12 +308,12 @@ class LaunchCommandTests(unittest.TestCase):
             with patch(
                 "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
             ):
-                pid = _windows_launch_napcat(Path(tmpdir))
+                pid = _windows_launch_napcat(Path(tmpdir), 3779163297)
             self.assertEqual(pid, 1234)
             args = captured["args"]
             self.assertEqual(args[:2], ["cmd", "/c"])
             self.assertIn("chcp 65001", args[2])
-            self.assertIn("call main.bat", args[2])
+            self.assertIn("launcher-win10-user.bat -q 3779163297", args[2])
             self.assertEqual(captured["kwargs"]["cwd"], Path(tmpdir))
 
 
@@ -307,6 +326,7 @@ class WatchdogConfigTests(unittest.TestCase):
         self.assertEqual(config.watchdog_max_restarts, 5)
         self.assertEqual(config.watchdog_recover_timeout, 900.0)
         self.assertEqual(config.watchdog_disconnect_grace, 60.0)
+        self.assertIsNone(config.bot_qq)
 
     def test_parse_from_env(self):
         env = {
@@ -316,6 +336,7 @@ class WatchdogConfigTests(unittest.TestCase):
             "GSK_NB2_WATCHDOG_MAX_RESTARTS": "3",
             "GSK_NB2_WATCHDOG_RECOVER_TIMEOUT": "90",
             "GSK_NB2_WATCHDOG_DISCONNECT_GRACE": "30",
+            "GSK_NB2_BOT_QQ": "3779163297",
         }
         config = Nb2Config.from_env(env.get)
         self.assertFalse(config.watchdog_enabled)
@@ -324,6 +345,7 @@ class WatchdogConfigTests(unittest.TestCase):
         self.assertEqual(config.watchdog_max_restarts, 3)
         self.assertEqual(config.watchdog_recover_timeout, 90.0)
         self.assertEqual(config.watchdog_disconnect_grace, 30.0)
+        self.assertEqual(config.bot_qq, 3779163297)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ cp tmp/nb2.env.example .env
 | `GSK_NB2_WATCHDOG_MAX_RESTARTS` | `5` | 24h 内自动重启上限，超限告警停手 |
 | `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `900` | 重启后等待回连的超时（秒），超时告警 |
 | `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` | `60` | WS 断开的回连宽限期（秒），NapCat 自己连上就不动 |
+| `GSK_NB2_BOT_QQ` | 空（首连 self_id 兜底） | 掉线守护快速登录的 QQ 号（`launcher-win10-user.bat -q <QQ号>`） |
 | `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
 
@@ -99,8 +100,9 @@ NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自�
    `pause` 的 bat 窗口。**绝不盲杀 QQ.exe**——QQNT 多开进程互相收养，
    枚举无法区分 bot 与你的个人 QQ；新旧登录冲突由 QQ 服务端裁决
    （新登录踢旧登录）。
-3. **启动**：直接 `call main.bat`（你实证的路径，改 bat 自动生效），
-   独立控制台窗口、UTF-8 代码页（不乱码）。
+3. **启动**：硬编码 main.bat 的内容——`call launcher-win10-user.bat -q <QQ号>`
+   （launcher bat 是 NapCat.Shell 发行自带，不依赖你的自建脚本；QQ 号取
+   `GSK_NB2_BOT_QQ`，未配用首次连接的 self_id），独立控制台、UTF-8 不乱码。
 4. **确认**：只信 WS 回连（默认 `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` 900s，
    冷启动实测 6+ 分钟），超时告警（哨兵 + ERROR）。
    ※ 不做基于 pid 的存活探测：引导器拉起 QQ 即退，这类探测必然误判。

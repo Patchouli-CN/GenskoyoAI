@@ -77,6 +77,9 @@ class Nb2Config:
     watchdog_max_restarts: int = 5  # 24h 内自动重启上限
     watchdog_recover_timeout: float = 900.0  # 重启后等待回连的超时（超时告警；冷启动实测可达 6+ 分钟）
     watchdog_disconnect_grace: float = 60.0  # WS 断开的回连宽限期（NapCat 自己会重连）
+    # 掉线守护快速登录用的 bot QQ 号（硬编码 launcher 不带 main.bat 依赖）；
+    # 未配置则由首次协议连接的 self_id 兜底
+    bot_qq: int | None = None
     # 到点提醒：角色经 set_reminder 工具接活，到点用自己的口吻 @ 人说出；
     # nb2_data/reminders.json 持久化（重启不丢），30s tick 扫到点项
     reminders_enabled: bool = True
@@ -131,5 +134,10 @@ class Nb2Config:
             reminders_enabled=_parse_bool(get("GSK_NB2_REMINDERS"), cls.reminders_enabled),
             reminder_max_per_tenant=_parse_int(
                 get("GSK_NB2_REMINDER_MAX_PER_TENANT"), cls.reminder_max_per_tenant
+            ),
+            bot_qq=(
+                int(bot_qq_raw.strip())
+                if (bot_qq_raw := get("GSK_NB2_BOT_QQ")) and bot_qq_raw.strip().isdigit()
+                else None
             ),
         )
