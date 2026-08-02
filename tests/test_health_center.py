@@ -71,6 +71,30 @@ class HealthCenterQuotaTests(unittest.TestCase):
         self.assertIs(center.evaluate_quota(60.0).level, QuotaLevel.HEALTHY)
 
 
+class RemovedEpisodicKeysTests(unittest.TestCase):
+    """memory.episodic_* 已删键：旧配置应被静默丢弃（校验层给迁移警告），
+    而不是在 MemoryConfig(**data) 构造时裸 TypeError（与 initiative_timer 同一招）。"""
+
+    def test_old_episodic_keys_load_without_crash(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "local.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "memory": {
+                            "episodic_threshold": 5,
+                            "episodic_summary_model": "gpt-4",
+                            "episodic_keep_recent": 3,
+                            "semantic_top_k": 3,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            app_config = ConfigLoader().load(config_path)
+        self.assertEqual(app_config.memory.semantic_top_k, 3)
+
+
 class BurnRateTests(unittest.TestCase):
     """消耗计量（纯观测）：日耗折算，与判定无关。"""
 

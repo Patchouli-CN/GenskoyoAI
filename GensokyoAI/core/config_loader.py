@@ -31,6 +31,7 @@ from .config_schema import (
 )
 from .config_validator import (
     _REMOVED_INITIATIVE_FALLBACK_KEYS,
+    _REMOVED_MEMORY_EPISODIC_KEYS,
     ConfigDiagnostic,
     ConfigValidator,
 )
@@ -132,6 +133,11 @@ class ConfigLoader(ConfigMerger):
             topic_generation_data = memory_data.get("topic_generation")
             memory_obj_data = dict(memory_data)
             memory_obj_data.pop("topic_generation", None)
+            # 已删除的配置键：读取时丢弃（校验层另有迁移警告，清单单源在
+            # config_validator._REMOVED_MEMORY_EPISODIC_KEYS），
+            # 避免旧配置在 Struct 构造时报未知参数（与 initiative_timer 同一招）
+            for removed_key in _REMOVED_MEMORY_EPISODIC_KEYS:
+                memory_obj_data.pop(removed_key, None)
             config.memory = MemoryConfig(**memory_obj_data)
             if isinstance(topic_generation_data, dict):
                 config.memory.topic_generation = TopicGenerationConfig(**topic_generation_data)
