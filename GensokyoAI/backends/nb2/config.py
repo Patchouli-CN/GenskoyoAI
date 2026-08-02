@@ -180,7 +180,8 @@ class Nb2Config:
             attention_enabled=_parse_bool(get("GSK_NB2_ATTENTION"), cls.attention_enabled),
             bot_qq=(
                 int(bot_qq_raw.strip())
-                if (bot_qq_raw := get("GSK_NB2_BOT_QQ")) and bot_qq_raw.strip().isdigit()
+                if (bot_qq_raw := (get("GSK_NB2_BOT_QQ") or get("ACCOUNT") or "").strip())
+                and bot_qq_raw.isdigit()
                 else None
             ),
         )

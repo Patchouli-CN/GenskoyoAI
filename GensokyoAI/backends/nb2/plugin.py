@@ -622,6 +622,18 @@ async def _on_startup() -> None:
             lambda prompt: host.generate_meta_text(_config.character, prompt)
         )
         _attention.register(_ReminderAttentionKind())
+    if _config.watchdog_enabled:
+        # 启动期引导：10 秒宽限内协议端没连上，就直接复用掉线恢复流程拉起 NapCat
+        # （不用手动先启动 NapCat；守护单 flight，与其他触发路径天然去重）
+        async def _bootstrap_watchdog() -> None:
+            await asyncio.sleep(10.0)
+            if not _watchdog._connected.is_set():
+                logger.info("[nb2] 启动宽限内协议端未连接，守护自动拉起 NapCat")
+                await _watchdog.trigger("startup_bootstrap")
+
+        task = asyncio.create_task(_bootstrap_watchdog())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     repeat_guard_desc = (
         f"开（厌烦 {_repeat_guard.warn_streak}/不理 {_repeat_guard.mute_streak} 连击）"
         if _repeat_guard
