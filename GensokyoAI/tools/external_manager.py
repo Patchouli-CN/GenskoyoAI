@@ -262,7 +262,23 @@ class ExternalToolManager:
         source_id, tool_name = split_external_tool_name(namespaced_name)
         source = self._require_source(source_id)
         tool_def = self._find_tool_definition(source_id, tool_name)
-        if tool_def and not tool_def.permission_allowed(self._policy):
+        if tool_def is None:
+            # fail-closed：工具不在源工具列表（未 list_tools / 动态新增 / 名字不匹配）
+            # 一律拒绝，不再盲调——权限闸门不可被「查不到」绕过
+            raise ToolExecutionError(
+                ToolError(
+                    error_code="external_tool.not_found",
+                    technical_message=(
+                        f"External tool {namespaced_name!r} not found in source "
+                        f"{source_id!r} tool list."
+                    ),
+                    user_message="外部工具未在源工具列表中注册。",
+                    recoverable=True,
+                    action_hint="请先调用 list_tools() 刷新外部工具列表。",
+                    details={"source_id": source_id, "tool_name": tool_name},
+                )
+            )
+        if not tool_def.permission_allowed(self._policy):
             permissions = sorted(tool_def.permissions)
             raise ToolExecutionError(
                 ToolError(

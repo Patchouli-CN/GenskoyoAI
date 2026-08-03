@@ -7,6 +7,7 @@ from GensokyoAI.core.events import SystemEvent
 from GensokyoAI.runtime.rpc import external_tool_status_methods, legacy_rpc_methods, rpc_methods
 from GensokyoAI.runtime.service import RuntimeService
 from GensokyoAI.tools.build_service import ToolBuildContext, ToolBuildService
+from GensokyoAI.tools.errors import ToolExecutionError
 from GensokyoAI.tools.executor import ToolExecutor
 from GensokyoAI.tools.external_manager import (
     ExternalToolDefinition,
@@ -150,6 +151,22 @@ class ExternalToolManagerContractTests(unittest.TestCase):
         self.assertEqual(source.calls, [("search", {"q": "test"})])
         self.assertIsNone(ToolRegistry().get("external__server__search"))
 
+    def test_manager_rejects_unknown_tool_without_listing(self):
+        """fail-closed：工具不在源列表（未先 list_tools）时拒绝调用，不再盲调。"""
+        manager = ExternalToolManager()
+        source = FakeExternalSource("server")
+        manager.register_source(source)
+
+        async def run():
+            with self.assertRaises(ToolExecutionError) as ctx:
+                await manager.call_tool("external__server__search", {"q": "test"})
+            return ctx
+
+        ctx = asyncio.run(run())
+        self.assertEqual(ctx.exception.error.error_code, "external_tool.not_found")
+        self.assertEqual(ctx.exception.error.details["tool_name"], "search")
+        self.assertEqual(source.calls, [])  # 未盲调
+
     def test_manager_denies_risky_external_tool_permissions(self):
         manager = ExternalToolManager()
         manager.register_source(
@@ -192,11 +209,14 @@ class ExternalToolManagerContractTests(unittest.TestCase):
         )
         manager.register_source(FakeExternalSource("server", delay=0.05))
 
-        result = asyncio.run(
-            ToolExecutor(ToolRegistry(), external_tool_manager=manager).execute(
+        async def run():
+            # fail-closed 语义下需先 list_tools 让工具入列，才能走到超时路径
+            await manager.list_tools(refresh=True)
+            return await ToolExecutor(ToolRegistry(), external_tool_manager=manager).execute(
                 {"id": "call-1", "name": "external__server__search", "arguments": {}}
             )
-        )
+
+        result = asyncio.run(run())
 
         self.assertTrue(result["is_error"])
         self.assertEqual(result["error"]["error_code"], "external_tool.timeout")
