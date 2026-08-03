@@ -230,6 +230,58 @@ def test_runtime_message_operation_is_persisted_and_replayed() -> None:
     asyncio.run(run())
 
 
+def test_timeout_without_assistant_records_failed_not_succeeded() -> None:
+    """02#2：生成未写入 assistant（超时/中断兜底）→ 账本记 failed，重试不再重放兜底文案。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage_root = root / "tenant"
+            manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
+            session = manager.create_session()
+            service = RuntimeService(
+                root, tenant_key=("alice", "agent-1"), storage_root=storage_root
+            )
+
+            class FakeTimeoutAgent:
+                session_manager = manager
+
+                @staticmethod
+                def resume_session(session_id: str) -> bool:
+                    return manager.set_current_session(session_id)
+
+                @staticmethod
+                async def send(message: str, system_contexts: list[str] | None = None):
+                    # 模拟超时兜底：只写 user 消息，不写 assistant（MESSAGE_SENT 被跳过）
+                    memory = manager.get_working_memory(session.session_id)
+                    memory.add_message("user", message)
+                    manager.save_working_memory(session.session_id)
+                    return SimpleNamespace(content="「唔…我有点走神了…」", reasoning_content=None)
+
+            cast(Any, service.state).agent = FakeTimeoutAgent()
+            service.state.started = True
+
+            await service.send_message(
+                "hello",
+                session_id=session.session_id,
+                idempotency_key="send-timeout",
+                expected_revision=session.revision,
+            )
+            status = await service.message_status(session.session_id, "send-timeout")
+
+            # 账本记 failed（而非 succeeded）——重试不会重放兜底文案（02#2）
+            assert status["status"] == "failed"
+            with pytest.raises(RpcError):
+                await service.send_message(
+                    "hello",
+                    session_id=session.session_id,
+                    idempotency_key="send-timeout",
+                    expected_revision=session.revision,
+                )
+
+    asyncio.run(run())
+
+
 def test_runtime_message_operation_records_provider_failure() -> None:
     async def run() -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

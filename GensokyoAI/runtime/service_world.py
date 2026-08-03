@@ -123,12 +123,14 @@ class WorldOpsMixin:
             if replay is not None:
                 return replay
             generation_id = str(uuid4())
-            await self._begin_message_operation(
+            begin_replay = await self._begin_message_operation(
                 ledger_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
                 generation_id=generation_id,
             )
+            if begin_replay is not None:
+                return begin_replay
             try:
                 world_turns = await world.send_message(message)
                 turns = [
@@ -216,12 +218,19 @@ class WorldOpsMixin:
                     "generation_id": replay.get("generation_id") or resolved_generation_id,
                 }
                 return
-            await self._begin_message_operation(
+            begin_replay = await self._begin_message_operation(
                 ledger_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
                 generation_id=resolved_generation_id,
             )
+            if begin_replay is not None:
+                yield {
+                    "type": "world.finish",
+                    **begin_replay,
+                    "generation_id": begin_replay.get("generation_id") or resolved_generation_id,
+                }
+                return
             turns: list[dict[str, Any]] = []
             try:
                 async for event in world.send_message_stream(message):

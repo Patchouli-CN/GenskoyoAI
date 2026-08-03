@@ -39,6 +39,9 @@ class _FakeSessionManager:
     def get_session(self, session_id: str):
         return self._session if session_id == self._session.session_id else None
 
+    def get_working_memory(self, *_args):
+        return SimpleNamespace(get_context=lambda: [])
+
 
 class _FakeAgent:
     """流式中途永不结束的最小假 Agent（模拟生成中 WS 断开）。"""

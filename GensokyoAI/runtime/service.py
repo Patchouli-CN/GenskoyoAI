@@ -1498,14 +1498,20 @@ class RuntimeService(WorldOpsMixin):
                 )
                 operation_session_id = session.session_id
                 generation_id = str(uuid4())
-                await self._begin_message_operation(
+                begin_replay = await self._begin_message_operation(
                     operation_session_id,
                     idempotency_key,
                     request_fingerprint=fingerprint,
                     generation_id=generation_id,
                 )
+                if begin_replay is not None:
+                    return begin_replay
                 try:
                     resolved_message = self._resolve_message_input(message)
+                    # 本次生成前的工作记忆长度：盖章只认此之后的 assistant（02#3/14）
+                    before_len = len(
+                        agent.session_manager.get_working_memory(operation_session_id).get_context()
+                    )
                     response = (
                         await agent.send_multimodal(resolved_message, system_contexts)
                         if isinstance(resolved_message, list)
@@ -1517,6 +1523,7 @@ class RuntimeService(WorldOpsMixin):
                         operation_session_id,
                         idempotency_key,
                         generation_id=generation_id,
+                        until_index=before_len,
                     )
                     session = agent.session_manager.get_current_session()
                     result = {
@@ -1529,11 +1536,22 @@ class RuntimeService(WorldOpsMixin):
                         "session": self._session_payload(session) if session else None,
                         "initiative_timer": self._agent_initiative_timer_payload(agent),
                     }
-                    await self._succeed_message_operation(
-                        operation_session_id,
-                        idempotency_key,
-                        result,
-                    )
+                    if not message_payload:
+                        # 当前轮没写入 assistant（超时/中断兜底）：账本记失败而非成功，
+                        # 否则同幂等键重试永远重放兜底文案（旧 CODE_INF 02#2）
+                        await self._fail_message_operation(
+                            operation_session_id,
+                            idempotency_key,
+                            RuntimeError(
+                                "Agent generation produced no assistant message (timeout or interruption)"
+                            ),
+                        )
+                    else:
+                        await self._succeed_message_operation(
+                            operation_session_id,
+                            idempotency_key,
+                            result,
+                        )
                     return result
                 except asyncio.CancelledError:
                     await self._cancel_message_operation(operation_session_id, idempotency_key)
@@ -1632,12 +1650,19 @@ class RuntimeService(WorldOpsMixin):
                 expected_revision,
             )
             resolved_generation_id = generation_id or str(uuid4())
-            await self._begin_message_operation(
+            stream_replay = await self._begin_message_operation(
                 session.session_id,
                 idempotency_key,
                 request_fingerprint=fingerprint,
                 generation_id=resolved_generation_id,
             )
+            if stream_replay is not None:
+                yield {
+                    "type": "finish",
+                    "index": 0,
+                    **{key: value for key, value in stream_replay.items() if key != "role"},
+                }
+                return
             locked_stream = cast(
                 AsyncGenerator[dict[str, Any]],
                 self._iter_message_stream_locked(
@@ -1670,6 +1695,8 @@ class RuntimeService(WorldOpsMixin):
 
         try:
             resolved_message = self._resolve_message_input(message)
+            # 本次生成前的工作记忆长度：盖章只认此之后的 assistant（02#3/14）
+            before_len = len(agent.session_manager.get_working_memory(session_id).get_context())
             stream = (
                 agent.send_multimodal_stream(resolved_message, system_contexts)
                 if isinstance(resolved_message, list)
@@ -1717,6 +1744,7 @@ class RuntimeService(WorldOpsMixin):
             session.session_id if session else "",
             idempotency_key,
             generation_id=generation_id,
+            until_index=before_len,
         )
         result = {
             "role": "assistant",
@@ -1728,7 +1756,17 @@ class RuntimeService(WorldOpsMixin):
             "session": self._session_payload(session) if session else None,
             "initiative_timer": self._agent_initiative_timer_payload(agent),
         }
-        await self._succeed_message_operation(session_id, idempotency_key, result)
+        if not message_payload:
+            # 当前轮没写入 assistant（超时/中断兜底）：账本记失败而非成功（02#2）
+            await self._fail_message_operation(
+                session_id,
+                idempotency_key,
+                RuntimeError(
+                    "Agent generation produced no assistant message (timeout or interruption)"
+                ),
+            )
+        else:
+            await self._succeed_message_operation(session_id, idempotency_key, result)
         yield {
             "type": "finish",
             "index": index,
@@ -2830,9 +2868,9 @@ class RuntimeService(WorldOpsMixin):
         *,
         request_fingerprint: str,
         generation_id: str,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         if self._operation_store is None or idempotency_key is None:
-            return
+            return None
         key = self._normalize_idempotency_key(idempotency_key)
         operation = await self._operation_store.begin(
             session_id=session_id,
@@ -2841,7 +2879,10 @@ class RuntimeService(WorldOpsMixin):
             generation_id=generation_id,
         )
         if operation.get("status") != "pending":
-            self._operation_replay(operation)
+            # 并发同键已完成：succeeded→返回重放结果让调用方短路（不再重复生成烧 token）；
+            # pending/failed→_operation_replay 内抛结构化错误（旧 CODE_INF 03#8）
+            return self._operation_replay(operation)
+        return None
 
     async def _succeed_message_operation(
         self,
@@ -2999,16 +3040,21 @@ class RuntimeService(WorldOpsMixin):
         idempotency_key: str | None,
         *,
         generation_id: str | None = None,
+        until_index: int | None = None,
     ) -> dict[str, Any]:
         if not session_id:
             return {}
         key = self._normalize_idempotency_key(idempotency_key) if idempotency_key else None
         manager = agent.session_manager
         messages = manager.get_working_memory(session_id).get_context()
+        # 只对本次生成之后（index >= until_index）写入的 assistant 盖章——超时/中断时
+        # 工作记忆里没有当前轮 assistant，防止把 generation_id/幂等键盖到上一轮旧消息
+        # （旧 CODE_INF 02#3/02#14）
+        search_start = until_index if until_index is not None else 0
         assistant_index = next(
             (
                 index
-                for index in range(len(messages) - 1, -1, -1)
+                for index in range(len(messages) - 1, search_start - 1, -1)
                 if messages[index].get("role") == "assistant"
             ),
             None,
