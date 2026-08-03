@@ -91,8 +91,13 @@ class WorkingMemoryManager:
         return self.rollback_messages(count * 2)
 
     def replace_messages(self, messages: list[dict[str, Any]]) -> None:
-        """全量替换工作记忆消息，保留消息扩展字段。"""
+        """全量替换工作记忆消息，保留消息扩展字段。
+
+        与 add_message 一致做裁剪：加载/全量替换可能超 max_turns，不裁会长期
+        超限（05#11）。孤儿 tool 结果一并由 _trim 清理。
+        """
         self._memory.messages = [dict(message) for message in messages]
+        self._trim()
 
     def get_context(self) -> list[dict[str, Any]]:
         """获取当前上下文"""

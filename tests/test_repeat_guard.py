@@ -142,6 +142,17 @@ class RepeatGuardTests(unittest.TestCase):
         self.clock.advance(601)
         self.assertEqual(self.guard.stats()["muted"], 0)
 
+    def test_idle_states_evicted_after_timeout(self):
+        """08#4：长期 idle 且非冷却中的状态被 stats() 清理，_states 不再无界增长。"""
+        self.guard.check("group:1", 7, "正常聊天")
+        self.assertEqual(self.guard.stats()["tracked"], 1)
+        # 刚发言的状态不淘汰
+        self.clock.advance(1800)
+        self.assertEqual(self.guard.stats()["tracked"], 1)
+        # 超 idle 阈值（3600s）后淘汰
+        self.clock.advance(1900)
+        self.assertEqual(self.guard.stats()["tracked"], 0)
+
 
 class RepeatGuardConfigTests(unittest.TestCase):
     def test_defaults_present_without_section(self):

@@ -183,6 +183,9 @@ class TopicAwareStore:
                         ],
                     )
                 )
+                # 迁移失败的文件一并隔离：不隔离的话空 store 下次保存会覆盖原文件，
+                # 数据只剩 .bak（05#8）。隔离留证后可手动恢复。
+                self._quarantine_corrupt(migration_error)
                 raise
 
             for t_data in data.get("topics", []):

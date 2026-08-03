@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+# 状态 idle 淘汰阈值：超 1 小时未发言且非冷却中的 (会话, 用户) 状态在 stats() 清理
+_IDLE_EVICT_SECONDS = 3600
+
 if TYPE_CHECKING:
     from ...core.config_schema import RepeatGuardConfig
 
@@ -47,6 +50,7 @@ class _UserState:
     recent: deque[str]  # 近期归一化消息窗口（判重基准）
     streak: int = 0
     muted_until: float = 0.0
+    last_seen: float = 0.0  # 最近一次 check 时间（idle 淘汰用）
 
 
 class RepeatGuard:
@@ -106,6 +110,7 @@ class RepeatGuard:
         state = self._states.get(key)
         if state is None:
             state = self._states[key] = _UserState(recent=deque(maxlen=self.history_size))
+        state.last_seen = now
 
         if state.muted_until > now:
             remaining = state.muted_until - now
@@ -152,8 +157,18 @@ class RepeatGuard:
             state.recent.clear()
 
     def stats(self) -> dict[str, int]:
-        """防护状态快照（/status 用）：冷却中人数 / 连击观察中人数 / 追踪总数。"""
+        """防护状态快照（/status 用）：冷却中人数 / 连击观察中人数 / 追踪总数。
+
+        顺手清理长期 idle 的状态（非冷却 + 超过 _IDLE_EVICT_SECONDS 未发言）：
+        阻止 _states 长跑无界增长（08#4）。进行中的冷却/连击不受影响。
+        """
         now = self._clock()
+        for key in [
+            key
+            for key, state in self._states.items()
+            if state.muted_until <= now and now - state.last_seen >= _IDLE_EVICT_SECONDS
+        ]:
+            del self._states[key]
         muted = sum(1 for state in self._states.values() if state.muted_until > now)
         watching = sum(
             1
