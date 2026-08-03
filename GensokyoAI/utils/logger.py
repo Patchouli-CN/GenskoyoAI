@@ -20,7 +20,8 @@ _LOGURU_FULL_TRACEBACK = os.environ.get("LOGURU_FULL_TRACEBACK", "0").lower() in
 )
 
 # 默认抑制部分底层库的低级别日志，避免污染终端/文件
-_SUPPRESSED_LOW_LEVEL_LOGGERS = {"httpcore", "asyncio", "aiohttp.access"}
+# 注意：匹配用 split(".")[0]（首段名），条目须写 "aiohttp" 而非 "aiohttp.access"（旧 CODE_INF 07#2）
+_SUPPRESSED_LOW_LEVEL_LOGGERS = {"httpcore", "asyncio", "aiohttp"}
 
 # 第三方框架的命名空间：WARNING 以下一律丢弃。
 # 注意 nonebot 原生使用 loguru（不经 LoguruHandler 桥接），必须在 sink 层过滤；
@@ -51,6 +52,7 @@ class LoguruHandler(std_logging.Handler):
         # 抑制 httpcore/asyncio/aiohttp.access 等库的 DEBUG/INFO 日志
         if (
             record.name.split(".")[0] in _SUPPRESSED_LOW_LEVEL_LOGGERS
+            # 集合条目须用首段名（split(".")[0] 匹配）；此前 "aiohttp.access" 永不命中（旧 CODE_INF 07#2）
             and record.levelno < std_logging.WARNING
         ):
             return

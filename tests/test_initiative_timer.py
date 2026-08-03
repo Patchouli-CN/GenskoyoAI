@@ -93,7 +93,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     think_engine=_make_think_engine(model_client, event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
 
                 payload = await manager.schedule_intent(
@@ -140,7 +139,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     think_engine=_make_think_engine(_FakeModelClient(), event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
                 payload = await manager.schedule_intent(
                     summary="稍后补充刚才话题的一个想法", delay_seconds=60
@@ -172,7 +170,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     think_engine=_make_think_engine(_FakeModelClient(), event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
                 manager._consecutive_initiative_count = 2
 
@@ -198,7 +195,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     think_engine=_make_think_engine(_FakeModelClient(), event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
                 self.assertEqual(manager._consecutive_initiative_count, 0)
                 self.assertFalse(manager._has_reached_initiative_limit())
@@ -230,7 +226,6 @@ class InitiativeTimerManagerTests(unittest.TestCase):
                     think_engine=_make_think_engine(_FakeModelClient(), event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
                 payload = await manager.schedule_intent(
                     summary="稍后补充刚才话题的一个想法", delay_seconds=60
@@ -467,7 +462,6 @@ class InitiativeCoordinatorEnabledTests(unittest.TestCase):
                     think_engine=_make_think_engine(model_client, event_bus),
                     event_bus=event_bus,
                     character_name="测试角色",
-                    working_memory=WorkingMemoryManager(max_turns=10),
                 )
                 payload = await manager.schedule_intent(summary="测试", delay_seconds=60)
                 self.assertIsNone(payload)

@@ -83,7 +83,9 @@ class RuntimeHost:
         token = set_current_principal(self._principal)
         try:
             return await self._service.handle(method, params or {})
-        except (ResourceLimitError, RpcError) as error:
+        except Exception as error:
+            # 宽捕获统一走 _translate：service 层裸 ValueError/RuntimeError 不再漏给适配器
+            # （旧 CODE_INF 03#6/03#15；_translate 的 internal_error fallback 从此可达）
             raise self._translate(error) from error
         finally:
             reset_current_principal(token)

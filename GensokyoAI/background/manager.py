@@ -279,8 +279,6 @@ class BackgroundManager:
             except asyncio.CancelledError:
                 logger.debug(f"工作器 {worker_id} 已取消{self._log_suffix}")
                 break
-            except TimeoutError:
-                continue
             except Exception as e:
                 logger.error(f"工作器 {worker_id} 发生未预期异常{self._log_suffix}: {e}")
                 self._publish_worker_event("failed", worker_id, error=e)

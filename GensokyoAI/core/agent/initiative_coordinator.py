@@ -46,7 +46,6 @@ class InitiativeCoordinator:
                 think_engine=agent._think_engine,
                 event_bus=agent.event_bus,
                 character_name=agent.character_name,
-                working_memory=agent.working_memory,
                 debug_silent_output=agent.config.debug_silent_output,
                 trigger_handler=self._handle_trigger,
             )

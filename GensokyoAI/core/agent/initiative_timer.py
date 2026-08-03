@@ -15,7 +15,6 @@ from ..config import InitiativeTimerConfig
 from ..events import Event, EventBus, SystemEvent
 
 if TYPE_CHECKING:
-    from ...memory.working import WorkingMemoryManager
     from .think_engine import ThinkEngine
 
 
@@ -50,7 +49,6 @@ class InitiativeTimerManager:
         think_engine: ThinkEngine,
         event_bus: EventBus,
         character_name: str,
-        working_memory: WorkingMemoryManager,
         debug_silent_output: bool = False,
         trigger_handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]] | None = None,
     ) -> None:
@@ -58,7 +56,6 @@ class InitiativeTimerManager:
         self.think_engine = think_engine
         self.event_bus = event_bus
         self.character_name = character_name
-        self.working_memory = working_memory
         self.debug_silent_output = debug_silent_output
         self.trigger_handler = trigger_handler
         self._state: InitiativeTimerState | None = None

@@ -749,7 +749,10 @@ def resolve_rpc_handler(
 
     for spec in RPC_METHOD_SPECS:
         if spec.method == method:
-            handler = getattr(target, spec.handler_name)
+            handler = getattr(target, spec.handler_name, None)
+            if handler is None:
+                # handler 缺失抛结构化错误而非裸 AttributeError（旧 CODE_INF 03#12）
+                raise RpcMethodNotFoundError(method)
             return handler
     raise RpcMethodNotFoundError(method)
 

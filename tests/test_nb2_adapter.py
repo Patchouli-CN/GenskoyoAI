@@ -288,8 +288,9 @@ class SplitReplySegmentsTests(unittest.TestCase):
         for part in ("第5句。", "第6句。", "第7句。", "第8句。"):
             self.assertIn(part, segments[4])
 
-    def test_empty_input_returns_single_blank(self):
-        self.assertEqual(split_reply_segments("  \n\n "), [""])
+    def test_empty_input_returns_no_segments(self):
+        # 全空白输入不再产生空消息段（旧 CODE_INF 07#11）
+        self.assertEqual(split_reply_segments("  \n\n "), [])
 
 
 class StripRpStyleTests(unittest.TestCase):

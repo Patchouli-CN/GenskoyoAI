@@ -43,7 +43,7 @@ def split_reply_segments(text: str, max_segments: int = 5) -> list[str]:
     """
     parts = [line.strip() for line in text.splitlines() if line.strip()]
     if not parts:
-        return [text.strip()]
+        return []  # 全空白/空输入：没有可发送的段（旧 CODE_INF 07#11）
     if len(parts) <= max_segments:
         return parts
     return parts[: max_segments - 1] + ["\n".join(parts[max_segments - 1 :])]
