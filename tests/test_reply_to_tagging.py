@@ -1,6 +1,6 @@
 """回复对象标记（§8.64）：触发消息带【昵称】前缀时，助手消息在工作记忆里
-带「（对 某人）」——多人快节奏对话中帮模型归因「我刚才那句话是回谁的」，
-防张冠李戴；投递给用户的 content 本体不受影响。
+带 `@昵称` 前缀（与 QQ 端真实 @ 同款约定）——多人快节奏对话中帮模型归因
+「我刚才那句话是回谁的」，防张冠李戴；投递给用户的 content 本体不受影响。
 """
 
 import asyncio
@@ -60,7 +60,14 @@ class ReplyToMemoryTaggingTests(unittest.TestCase):
         )
         message = wm.get_context()[-1]
         self.assertEqual(message["role"], "assistant")
-        self.assertEqual(message["content"], "（对 帕秋莉、赤色杀人魔）到时间了哦～")
+        self.assertEqual(message["content"], "@帕秋莉 @赤色杀人魔 到时间了哦～")
+
+    def test_model_own_mention_not_duplicated(self):
+        # 模型自己开头写了 @目标：良性模仿，不重复加标记
+        wm = self._run_listener(
+            {"content": "@帕秋莉 到时间了哦～", "reply_to": ["帕秋莉"]}
+        )
+        self.assertEqual(wm.get_context()[-1]["content"], "@帕秋莉 到时间了哦～")
 
     def test_no_reply_to_stores_plain(self):
         wm = self._run_listener({"content": "你好。"})

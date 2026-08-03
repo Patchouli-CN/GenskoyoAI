@@ -9,7 +9,12 @@
 import unittest
 
 from GensokyoAI.backends.nb2.config import Nb2Config
-from GensokyoAI.backends.nb2.pending import PendingChat, PendingChatQueue, merge_batch
+from GensokyoAI.backends.nb2.pending import (
+    PendingChat,
+    PendingChatQueue,
+    batch_at_targets,
+    merge_batch,
+)
 
 
 def _item(text: str, *, qq: int = 10001, mid: int = 1, contexts: list[str] | None = None):
@@ -77,6 +82,19 @@ class MergeBatchTests(unittest.TestCase):
         self.assertEqual(text, "你好")
         self.assertEqual(contexts, ["ctx"])
         self.assertEqual(idem, "nb2:99999:7")
+
+
+class BatchAtTargetsTests(unittest.TestCase):
+    def test_collects_unique_qq_in_order(self):
+        batch = [_item("【灵梦】在吗", qq=10001), _item("【魔理沙】我也在", qq=10002)]
+        self.assertEqual(batch_at_targets(batch), [10001, 10002])
+
+    def test_dedups_same_speaker(self):
+        batch = [_item("第一句", qq=10001), _item("第二句", qq=10001)]
+        self.assertEqual(batch_at_targets(batch), [10001])
+
+    def test_skips_missing_qq(self):
+        self.assertEqual(batch_at_targets([_item("私聊无标记", qq=None)]), [])
 
 
 class MergeWindowConfigTests(unittest.TestCase):

@@ -56,7 +56,7 @@ from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_
 from ...utils.logger import logger
 from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
-from .pending import PendingChat, PendingChatQueue, merge_batch
+from .pending import PendingChat, PendingChatQueue, batch_at_targets, merge_batch
 from .reminders import (
     REMINDER_MAX_ATTEMPTS,
     REMINDER_TICK_SECONDS,
@@ -974,7 +974,28 @@ async def _process_batch(
                 )
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
-    await _send_segmented(matcher.send, reply)
+    send = matcher.send
+    if key.startswith("group:") and (at_targets := batch_at_targets(batch)):
+        # 回复 @ 本轮发言人（真 at 段，拼进首条分段）：回的是谁一目了然，
+        # 与工作记忆里助手消息的 @昵称 标记同款约定
+        at_message = Message(
+            [
+                segment
+                for qq in at_targets
+                for segment in (MessageSegment.at(qq), MessageSegment.text(" "))
+            ]
+        )
+        first = True
+
+        async def _send_with_at(message: Message) -> None:
+            nonlocal first
+            if first:
+                message = at_message + message
+                first = False
+            await matcher.send(message)
+
+        send = _send_with_at
+    await _send_segmented(send, reply)
 
 
 async def _host_send(

@@ -101,10 +101,14 @@ class CoreListeners:
         """记录助手消息到工作记忆 - 统一入口"""
         response = event.data.get("content", "")
         reasoning_content = event.data.get("reasoning_content")
-        # 回复对象标记（触发消息带【昵称】前缀时由 agent 附上）：只写进工作
-        # 记忆帮模型归因，不改动投递给用户的 content 本体
-        if reply_to := event.data.get("reply_to"):
-            response = f"（对 {'、'.join(reply_to)}）{response}"
+        # 回复对象标记（触发消息带【昵称】前缀时由 agent 附上）：与 QQ 端
+        # 真实 @ 同款写法写进工作记忆帮模型归因；投递文本本体不动。
+        # 模型自己开头写了 @目标 时不重复加（模仿 @ 是良性、可读的）
+        if (reply_to := event.data.get("reply_to")) and not response.lstrip().startswith(
+            f"@{reply_to[0]}"
+        ):
+            mention = " ".join(f"@{name}" for name in reply_to)
+            response = f"{mention} {response}"
 
         self.agent.working_memory.add_message(
             "assistant",
