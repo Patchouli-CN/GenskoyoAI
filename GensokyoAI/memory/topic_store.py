@@ -857,7 +857,10 @@ class TopicAwareStore:
             topic.message_count = max(0, topic.message_count - 1)
             topic.last_updated = utc_now()
             if topic.message_count == 0:
-                self._topics.pop(topic.id, None)
+                # 空话题走统一移除：清掉其他话题 related_topics 指向该话题的边 + 重建索引
+                self._remove_topic(topic)
+                await self._save_async()
+                return True
         self._rebuild_indexes()
         await self._save_async()
         return True

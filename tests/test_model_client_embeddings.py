@@ -132,6 +132,22 @@ class ModelClientEmbeddingRoutingTests(unittest.TestCase):
         )
         self.assertFalse(missing_client.supports_embeddings)
 
+    def test_embeddings_batch_falls_back_to_single_when_batch_unsupported(self):
+        """Provider 未实现原生 batch（抛 NotImplementedError）时回退单条并发，
+        而不是被 _call_with_retry 包成 ModelAPIError 吞掉（04#3）。"""
+        config = ModelConfig(provider="dummy_chat", name="chat-model")
+        client = ModelClient(
+            config,
+            embedding_config=EmbeddingConfig(provider="dummy_embed", name="embed-model"),
+        )
+
+        embeddings = asyncio.run(client.embeddings_batch(["你好", "再见"]))
+
+        self.assertEqual(len(embeddings), 2)
+        self.assertEqual([list(e) for e in embeddings], [[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]])
+        # 回退路径逐条走了 embeddings()（batch 未实现，无原生调用）
+        self.assertIn("embeddings", [call["event"] for call in DummyEmbeddingProvider.calls])
+
 
 if __name__ == "__main__":
     unittest.main()

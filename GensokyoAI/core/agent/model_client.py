@@ -463,6 +463,11 @@ class ModelClient:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                if isinstance(e, NotImplementedError):
+                    # Provider 明确不支持该能力：不重试、也不交给 normalize_model_error
+                    #（会包成 ModelAPIError 吞掉），原样传播给调用方的能力回退分支
+                    #（embeddings_batch → 单条回退、image_generation → 结构化错误）。
+                    raise
                 if (
                     isinstance(e, ModelError)
                     and getattr(e, "error_code", None) == "resource.limit_exceeded"

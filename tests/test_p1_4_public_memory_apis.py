@@ -115,6 +115,26 @@ class TopicAwareStorePublicApiTests(unittest.TestCase):
             self.assertTrue(deleted)
             self.assertIsNone(store.get_memory(memory_id))
 
+    def test_delete_last_memory_cleans_related_topic_edges(self):
+        """05#10/15：清空话题最后一篇记忆走 _remove_topic，其他话题指向它的边一并清除。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TopicAwareStore(Path(tmp) / "topics.json")
+            topic_a = asyncio.run(store.add_async("灵梦喜欢喝热茶", topic_name="偏好"))
+            topic_b = asyncio.run(store.add_async("魔理沙喜欢借书", topic_name="魔法使"))
+            self.assertIsNotNone(topic_a)
+            self.assertIsNotNone(topic_b)
+            assert topic_a is not None
+            assert topic_b is not None
+            # 模拟 LLM 打分路径（_update_edges）生成的关联边：B 指向 A
+            store._topics[topic_b.id].related_topics[topic_a.id] = 1.0
+            memory_id = topic_a.message_ids[-1]
+
+            deleted = asyncio.run(store.delete_memory(memory_id))
+
+            self.assertTrue(deleted)
+            self.assertNotIn(topic_a.id, store._topics)  # 空话题已移除
+            self.assertNotIn(topic_a.id, store._topics[topic_b.id].related_topics)  # 边已清
+
     def test_embedding_similarity_can_rank_memory_above_keyword_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = TopicAwareStore(Path(tmp) / "topics.json")

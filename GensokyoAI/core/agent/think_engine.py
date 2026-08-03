@@ -296,7 +296,9 @@ class ThinkEngine:
         for _ in range(steps):
             neighbors = list(current.related_topics.keys())
             if self.config.walk_visit_dedup:
-                neighbors = [n for n in neighbors if n not in visited and n in store._topics]
+                neighbors = [
+                    n for n in neighbors if n not in visited and store.get_topic_by_id(n) is not None
+                ]
             if neighbors:
                 weights = [current.related_topics[n] for n in neighbors]
                 next_id = random.choices(neighbors, weights=weights)[0]

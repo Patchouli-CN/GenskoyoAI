@@ -2240,6 +2240,9 @@ class RuntimeService(WorldOpsMixin):
                     logger.error(
                         f"[Runtime] 租户 {service._tenant_key} shutdown 失败: {result}"
                     )
+            # 租户订阅所有者随租户服务一起失效：不清会在后续清理对已 shutdown
+            # 租户调 close 报错（03#7）
+            self._tenant_subscription_owners.clear()
         async with self._lock:
             await self._shutdown_locked()
         return {"ok": True}
