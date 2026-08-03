@@ -273,5 +273,28 @@ class ToolBuildServiceTests(unittest.TestCase):
         self.assertIn("get_current_time", result.enabled_tool_names)
 
 
+class ToolTypeMappingTests(unittest.TestCase):
+    """06#6：typing 泛型解包——list[str]/Optional[X]/X | None 不再退化成 STRING。"""
+
+    def test_generic_types_map_to_structural_schema(self):
+        from GensokyoAI.tools.base import ToolParameterType, build_tool_definition
+
+        def sample(
+            tags: list[str],
+            meta: dict[str, int],
+            maybe: str | None,
+            plain: bool,
+        ) -> str:
+            return ""
+
+        definition = build_tool_definition(sample, name="sample", description="sample tool")
+        by_name = {name: param.type for name, param in definition.parameters.items()}
+
+        self.assertEqual(by_name["tags"], ToolParameterType.ARRAY)
+        self.assertEqual(by_name["meta"], ToolParameterType.OBJECT)
+        self.assertEqual(by_name["maybe"], ToolParameterType.STRING)
+        self.assertEqual(by_name["plain"], ToolParameterType.BOOLEAN)
+
+
 if __name__ == "__main__":
     unittest.main()

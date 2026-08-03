@@ -5,7 +5,7 @@
 import inspect
 from collections.abc import Callable
 from enum import Enum
-from typing import Any, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 from msgspec import Struct
 
@@ -120,19 +120,36 @@ def build_tool_definition(
     type_hints = get_type_hints(func)
     parameters = {}
 
+    # 映射 Python 类型到 JSON Schema
+    type_map = {
+        str: ToolParameterType.STRING,
+        int: ToolParameterType.INTEGER,
+        float: ToolParameterType.NUMBER,
+        bool: ToolParameterType.BOOLEAN,
+        list: ToolParameterType.ARRAY,
+        dict: ToolParameterType.OBJECT,
+    }
+
+    def resolve_param_type(param_type: Any) -> ToolParameterType:
+        """把 typing 泛型解包成基础 JSON Schema 类型（06#6）。
+
+        `list[str]`/`dict[str, int]` → ARRAY/OBJECT；`Optional[X]`/`X | None`
+        → X（剥掉 None 成员）。不做此解包时这些类型全退化成 STRING，模型拿到的
+        参数 schema 类型错误。
+        """
+        origin = get_origin(param_type)
+        if origin is not None:
+            if origin in type_map:
+                return type_map[origin]
+            args = [arg for arg in get_args(param_type) if arg is not type(None)]
+            if args:
+                return resolve_param_type(args[0])
+            return ToolParameterType.STRING
+        return type_map.get(param_type, ToolParameterType.STRING)
+
     for param_name, param in sig.parameters.items():
         param_type = type_hints.get(param_name, str)
-
-        # 映射 Python 类型到 JSON Schema
-        type_map = {
-            str: ToolParameterType.STRING,
-            int: ToolParameterType.INTEGER,
-            float: ToolParameterType.NUMBER,
-            bool: ToolParameterType.BOOLEAN,
-            list: ToolParameterType.ARRAY,
-            dict: ToolParameterType.OBJECT,
-        }
-        tool_type = type_map.get(param_type, ToolParameterType.STRING)
+        tool_type = resolve_param_type(param_type)
 
         parameters[param_name] = ToolParameter(
             name=param_name,

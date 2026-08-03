@@ -118,7 +118,7 @@ SendCallable = Callable[[Message], Awaitable[None]]
 
 
 def bind_host(host: RuntimeHost) -> None:
-    """注入 RuntimeHost（由 Nonebot2Adapter.start 在 load_plugin 前调用）。"""
+    """注入 RuntimeHost（由 Nonebot2Adapter.start 在 load_plugin 后调用）。"""
     global _host
     _host = host
 
