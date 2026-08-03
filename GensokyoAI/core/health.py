@@ -104,5 +104,6 @@ class HealthCenter:
             level = QuotaLevel.WARNING
         else:
             level = QuotaLevel.HEALTHY
-        index = min(100, max(0, round(balance / warn * 100))) if warn > 0 else 100
+        # warn<=0 时指数无定义：耗尽报 0、有余额报 100（validator 已要求 warn>0，此处仅防御）
+        index = min(100, max(0, round(balance / warn * 100))) if warn > 0 else (0 if balance <= 0 else 100)
         return QuotaVerdict(level=level, index=index, balance=balance)

@@ -214,6 +214,13 @@ class OllamaProvider(BaseProvider):
         if message.tool_calls:
             tool_calls = self._convert_tool_calls(message.tool_calls)
 
+        # Ollama 原生 /api/chat 的 token 计数在顶层 prompt_eval_count/eval_count（无 usage 子对象）
+        usage = None
+        prompt_eval = getattr(response, "prompt_eval_count", None)
+        eval_count = getattr(response, "eval_count", None)
+        if prompt_eval is not None or eval_count is not None:
+            usage = {"prompt_tokens": prompt_eval, "completion_tokens": eval_count}
+
         return UnifiedResponse(
             message=UnifiedMessage(
                 role=message.role or "assistant",
@@ -222,6 +229,7 @@ class OllamaProvider(BaseProvider):
             ),
             model=response.model if hasattr(response, "model") else "",
             done=True,
+            usage=usage,
         )
 
     @staticmethod

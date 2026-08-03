@@ -1351,6 +1351,16 @@ class ConfigValidator:
             "health.quota_crit_yuan", data.get("quota_crit_yuan"), diagnostics, minimum=0
         )
         warn_yuan = data.get("quota_warn_yuan")
+        if isinstance(warn_yuan, (int, float)) and warn_yuan <= 0:
+            # 警告阈值 0 会让 health.py 的 index 走 else 分支恒为 100（余额耗尽也报满分）
+            diagnostics.append(
+                self._error(
+                    "health.quota_warn_yuan",
+                    "quota_warn_yuan must be > 0",
+                    "警告阈值必须大于 0，否则健康指数恒为 100 失去意义。",
+                    code="config.range.minimum",
+                )
+            )
         crit_yuan = data.get("quota_crit_yuan")
         if (
             isinstance(warn_yuan, (int, float))

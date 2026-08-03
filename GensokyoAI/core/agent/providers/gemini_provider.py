@@ -396,6 +396,17 @@ class GeminiProvider(BaseProvider):
                 )
 
         references = self._extract_web_search_references(response)
+        # Gemini 的 token 计数在 response.usage_metadata（snake_case 字段）
+        usage = None
+        meta = getattr(response, "usage_metadata", None)
+        if meta is not None:
+            usage = {
+                "prompt_tokens": getattr(meta, "prompt_token_count", None),
+                "completion_tokens": getattr(meta, "candidates_token_count", None),
+                "total_tokens": getattr(meta, "total_token_count", None),
+            }
+            if not any(usage.values()):
+                usage = None
         return UnifiedResponse(
             message=UnifiedMessage(
                 role="assistant",
@@ -406,6 +417,7 @@ class GeminiProvider(BaseProvider):
             done=True,
             web_search_references=references,
             web_search_diagnostics=self._build_web_search_diagnostics({}, references),
+            usage=usage,
         )
 
     @staticmethod

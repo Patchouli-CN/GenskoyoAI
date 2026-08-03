@@ -34,6 +34,13 @@ def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
+def _as_aware(dt: datetime) -> datetime:
+    """无时区的 datetime 视为本地时间补时区（手改 JSON 存了 naive 串也不崩 aware/naive 相减）。"""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=local_now().tzinfo)
+    return dt
+
+
 @dataclass
 class Reminder:
     """一条提醒。kind/target_id 决定投递目标（群 @ / 私聊直发）。"""
@@ -77,8 +84,8 @@ class Reminder:
             remind_qq=int(data["remind_qq"]) if data.get("remind_qq") is not None else None,
             remind_name=str(data.get("remind_name") or ""),
             content=str(data["content"]),
-            due=datetime.fromisoformat(data["due"]),
-            created_at=datetime.fromisoformat(data["created_at"]),
+            due=_as_aware(datetime.fromisoformat(data["due"])),
+            created_at=_as_aware(datetime.fromisoformat(data["created_at"])),
             attempts=int(data.get("attempts", 0)),
         )
 
@@ -116,11 +123,17 @@ class ReminderStore:
                 del self._entries[key]
             if exhausted:
                 self._save_locked()
-            items = [
-                Reminder.from_dict(entry)
-                for entry in self._entries.values()
-                if datetime.fromisoformat(entry["due"]) <= now
-            ]
+            items: list[Reminder] = []
+            for entry in self._entries.values():
+                try:
+                    due = _as_aware(datetime.fromisoformat(entry["due"]))
+                except (KeyError, TypeError, ValueError):
+                    # 手改 JSON 混入非法 due：跳过不崩，坏条目不占位也不删（下次还来，
+                    # 但绝不拖垮整个 due()/tick）
+                    logger.warning(f"[nb2] 坏提醒条目已跳过（due 非法）: {entry.get('content', '')[:30]}")
+                    continue
+                if due <= now:
+                    items.append(Reminder.from_dict(entry))
         return sorted(items, key=lambda item: item.due)
 
     def mark_done(self, reminder_id: str) -> None:

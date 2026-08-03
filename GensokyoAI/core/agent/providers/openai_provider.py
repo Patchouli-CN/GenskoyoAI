@@ -673,6 +673,7 @@ class OpenAIProvider(BaseProvider):
             model=response.model or "",
             done=True,
             thinking=thinking,
+            usage=self._usage_to_dict(getattr(response, "usage", None)),
         )
 
     @staticmethod

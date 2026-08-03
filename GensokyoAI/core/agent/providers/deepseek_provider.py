@@ -204,6 +204,8 @@ class DeepSeekProvider(OpenAIProvider):
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 DeepSeek API，捕获 reasoning_content 和 tool_calls。"""
         call_kwargs = self._build_call_kwargs(model, messages, tools, options, stream=True)
+        # OpenAI 兼容流式：末块携带 usage 需要显式 include_usage（成本采样数据源）
+        call_kwargs["stream_options"] = {"include_usage": True}
 
         tool_calls_acc: dict[int, dict] = {}
         content_acc = ""
@@ -280,7 +282,11 @@ class DeepSeekProvider(OpenAIProvider):
                     finish_reason=finish_reason,
                 )
             elif finish_reason:
-                yield StreamChunk(type="finish", finish_reason=finish_reason)
+                yield StreamChunk(
+                    type="finish",
+                    finish_reason=finish_reason,
+                    usage=self._usage_to_dict(getattr(chunk, "usage", None)),
+                )
 
     def _convert_response(self, response) -> UnifiedResponse:
         """将 DeepSeek ChatCompletion 转换为 UnifiedResponse。"""
@@ -324,4 +330,5 @@ class DeepSeekProvider(OpenAIProvider):
             model=response.model or "",
             done=True,
             thinking=reasoning_content,
+            usage=self._usage_to_dict(getattr(response, "usage", None)),
         )

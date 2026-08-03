@@ -684,7 +684,7 @@ class ThinkEngine:
             motivation=motivation,
             emotion=self.emotion_state.current,
             message=message,
-            delay_seconds=delay if isinstance(delay, int) and delay > 0 else 300,
+            delay_seconds=delay if isinstance(delay, (int, float)) and delay > 0 else 300,
             enthusiasm=_clamp01(enthusiasm) if isinstance(enthusiasm, int | float) else 0.5,
             reason=str(data.get("reason") or "").strip(),
         )

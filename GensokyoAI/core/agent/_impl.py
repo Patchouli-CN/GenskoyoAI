@@ -655,6 +655,8 @@ class Agent:
             self._action_planner.update_memory_context(self.working_memory, self.semantic_memory)
         if self._think_engine is not None:
             self._think_engine.update_semantic_memory(self.semantic_memory)
+            # 情绪是会话级状态：切会话回到角色卡基线，不把旧会话的愤怒/羞耻带入新对话
+            self._think_engine.emotion_state.reset()
 
     def create_session(self) -> SessionContext:
         session = self.session_manager.create_session()

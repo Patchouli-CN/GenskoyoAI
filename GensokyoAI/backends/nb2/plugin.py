@@ -922,10 +922,11 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
             stored_session,
             disable_initiative=not _config.initiative,
         )
-    except RuntimeRpcError:
-        if stored_session is None:
+    except RuntimeRpcError as error:
+        # 只在该会话确实被删（session.not_found）时退化为恢复最新/新建会话；
+        # 瞬时错误（限流/网络/内部错误）一律上抛，绝不丢掉 stored_session 的历史映射
+        if stored_session is None or error.code != "session.not_found":
             raise
-        # Runtime 侧该会话已被删除：退化为恢复最新会话 / 新建会话
         logger.warning(f"[nb2] 会话 {stored_session} 恢复失败，改为恢复最新会话")
         session_id, revision = await host.ensure_agent(
             agent_id, _config.character, None, disable_initiative=not _config.initiative

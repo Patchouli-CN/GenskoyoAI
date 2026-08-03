@@ -910,7 +910,13 @@ class RuntimeService(WorldOpsMixin):
 
             if session_id:
                 if not agent.resume_session(session_id):
-                    raise ValueError(f"Session does not exist: {session_id}")
+                    # 结构化错误码：适配器据此区分「会话真被删了」与瞬时错误（后者不应重建丢历史）
+                    raise RpcError(
+                        f"Session does not exist: {session_id}",
+                        code="session.not_found",
+                        user_message="会话不存在。",
+                        recoverable=True,
+                    )
             elif new_session or not agent.session_manager.list_sessions():
                 agent.create_session()
             else:
