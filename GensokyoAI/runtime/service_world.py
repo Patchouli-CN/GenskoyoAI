@@ -171,7 +171,7 @@ class WorldOpsMixin:
             service = self._require_tenant_service(principal.user_id, agent_id)
             async with (
                 self._network_operation_scope("world.send_message_stream"),
-                service._tenant_operation_lock,
+                service._tenant_operation_scope(),
             ):
                 # 显式持有并关闭内层流（对齐 agent 流的确定性关闭链）
                 inner_stream = cast(

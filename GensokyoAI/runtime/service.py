@@ -143,6 +143,10 @@ class RuntimeService(WorldOpsMixin):
         # 租户最近活跃时间（monotonic）：LRU 休眠驱逐的依据；目录恢复的租户默认 0.0（最先被休眠）
         self._tenant_last_active: dict[tuple[str, str], float] = {}
         self._tenant_operation_lock = asyncio.Lock()
+        # 在途请求计数（含等锁者）：驱逐/删除据此避让，而非只看 locked()（旧 CODE_INF 03#5）
+        self._tenant_in_flight = 0
+        # root 建租户的串行化闸：防同一新 agent_id 并发 init 双建（旧 CODE_INF 03#3）
+        self._tenant_creation_lock = asyncio.Lock()
         self._event_store = (
             RuntimeEventStore(storage_root / "events.jsonl") if storage_root is not None else None
         )
@@ -200,6 +204,20 @@ class RuntimeService(WorldOpsMixin):
                 return await self._handle_tenant_rpc(method, dict(params or {}))
         return await dispatch_rpc(self, method, params, structured_errors=structured_errors)
 
+    @asynccontextmanager
+    async def _tenant_operation_scope(self) -> AsyncIterator[None]:
+        """持有租户操作锁并计入在途（含等锁者）：驱逐/删除据此避让。
+
+        使用方统一走本方法而非直接 `async with _tenant_operation_lock`，保证
+        等锁者也被计数（`locked()` 不认排队中的协程，旧 CODE_INF 03#5）。
+        """
+        self._tenant_in_flight += 1
+        try:
+            async with self._tenant_operation_lock:
+                yield
+        finally:
+            self._tenant_in_flight -= 1
+
     async def _handle_tenant_rpc(self, method: str, params: dict[str, Any]) -> Any:
         principal = current_principal()
         if method in {"runtime.info", "runtime.health", "runtime.ready"}:
@@ -251,7 +269,7 @@ class RuntimeService(WorldOpsMixin):
         if method == "message.status":
             result = await service.handle(method, params)
             return self._attach_resource_ids(result, principal.user_id, agent_id)
-        async with service._tenant_operation_lock:
+        async with service._tenant_operation_scope():
             if isinstance(session_id, str) and method.startswith(
                 ("memory.", "scene.", "initiative_timer.")
             ):
@@ -279,34 +297,38 @@ class RuntimeService(WorldOpsMixin):
     async def _get_or_create_tenant_service(
         self, user_id: str, agent_id_raw: Any
     ) -> tuple[RuntimeService, str, tuple[str, str]]:
-        """agent_id 归一化 + 租户服务 get-or-create（上限 + LRU 驱逐 + storage 分配）。"""
-        agent_id = agent_id_raw or str(uuid4())
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValueError("Runtime agent_id must be a non-empty string")
-        if len(agent_id.strip()) > 128:
-            raise ValueError("Runtime agent_id must not exceed 128 characters")
-        agent_id = agent_id.strip()
-        key = (user_id, agent_id)
-        service = self._tenant_services.get(key)
-        if service is None:
-            owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
-            limit = self._tenant_agent_limit()
-            if owned_count >= limit and not await self._evict_idle_tenant(user_id):
-                raise RpcError(
-                    "Runtime per-user Agent limit exceeded",
-                    code="agent.limit_exceeded",
-                    user_message="当前用户创建的 Agent 数量已达到上限。",
-                    recoverable=True,
-                    details={"maximum": limit},
+        """agent_id 归一化 + 租户服务 get-or-create（上限 + LRU 驱逐 + storage 分配）。
+
+        root 建租户锁内串行：防同一新 agent_id 并发 init 双建（旧 CODE_INF 03#3）。
+        """
+        async with self._tenant_creation_lock:
+            agent_id = agent_id_raw or str(uuid4())
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                raise ValueError("Runtime agent_id must be a non-empty string")
+            if len(agent_id.strip()) > 128:
+                raise ValueError("Runtime agent_id must not exceed 128 characters")
+            agent_id = agent_id.strip()
+            key = (user_id, agent_id)
+            service = self._tenant_services.get(key)
+            if service is None:
+                owned_count = sum(owner_id == user_id for owner_id, _ in self._tenant_services)
+                limit = self._tenant_agent_limit()
+                if owned_count >= limit and not await self._evict_idle_tenant(user_id):
+                    raise RpcError(
+                        "Runtime per-user Agent limit exceeded",
+                        code="agent.limit_exceeded",
+                        user_message="当前用户创建的 Agent 数量已达到上限。",
+                        recoverable=True,
+                        details={"maximum": limit},
+                    )
+                storage_root = self._tenant_storage_root(user_id, agent_id)
+                service = RuntimeService(
+                    self.state.root_dir,
+                    tenant_key=key,
+                    storage_root=storage_root,
                 )
-            storage_root = self._tenant_storage_root(user_id, agent_id)
-            service = RuntimeService(
-                self.state.root_dir,
-                tenant_key=key,
-                storage_root=storage_root,
-            )
-            self._tenant_services[key] = service
-        return service, agent_id, key
+                self._tenant_services[key] = service
+            return service, agent_id, key
 
     async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         self._check_tenant_admin_gate(
@@ -355,9 +377,19 @@ class RuntimeService(WorldOpsMixin):
         params: dict[str, Any],
     ) -> dict[str, Any]:
         agent_id = self._pop_required_id(params, "agent_id")
-        service = self._tenant_services.pop((user_id, agent_id), None)
+        service = self._tenant_services.get((user_id, agent_id))
         if service is None:
             raise ValueError(f"Runtime Agent does not exist: {agent_id}")
+        if service._tenant_in_flight > 0 or service._tenant_operation_lock.locked():
+            # 在途请求拿到半关闭 service（旧 CODE_INF 03#4）
+            raise RpcError(
+                f"Runtime Agent is busy: {agent_id}",
+                code="agent.busy",
+                user_message="该 Agent 正在处理请求，暂不能删除。",
+                recoverable=True,
+                action_hint="请稍后重试。",
+            )
+        self._tenant_services.pop((user_id, agent_id), None)
         self._tenant_last_active.pop((user_id, agent_id), None)
         await service.shutdown()
         manifest = service._storage_root / "agent.json" if service._storage_root else None
@@ -384,7 +416,9 @@ class RuntimeService(WorldOpsMixin):
         candidates = [
             (key, service)
             for key, service in self._tenant_services.items()
-            if key[0] == user_id and not service._tenant_operation_lock.locked()
+            if key[0] == user_id
+            and service._tenant_in_flight == 0  # 等锁者/持锁者都计入在途（03#5）
+            and not service._tenant_operation_lock.locked()
         ]
         if not candidates:
             return False
@@ -1534,7 +1568,7 @@ class RuntimeService(WorldOpsMixin):
             service = self._require_tenant_service(principal.user_id, agent_id)
             async with (
                 self._network_operation_scope("agent.send_message_stream"),
-                service._tenant_operation_lock,
+                service._tenant_operation_scope(),
             ):
                 # 显式持有并关闭内层流：消费者提前关闭本生成器时，
                 # 确定性关闭链保证 service 层账本被收敛，而非依赖 GC 终结

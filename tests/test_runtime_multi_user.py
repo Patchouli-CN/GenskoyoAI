@@ -231,6 +231,42 @@ def test_tenant_limit_raises_only_when_all_busy() -> None:
     asyncio.run(run())
 
 
+def test_delete_tenant_busy_is_rejected() -> None:
+    """删除在途租户被拒绝（03#4）：在途/持锁时 agent.delete 报 agent.busy。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            busy = _register_idle_tenant(service, "alice", "busy")
+            busy._tenant_in_flight = 1  # 模拟等锁者/持锁者
+            try:
+                with pytest.raises(RpcError) as error:
+                    await _as_user(service, "alice", "agent.delete", {"agent_id": "busy"})
+                assert error.value.code == "agent.busy"
+                assert ("alice", "busy") in service._tenant_services  # 未被删
+            finally:
+                busy._tenant_in_flight = 0
+
+    asyncio.run(run())
+
+
+def test_concurrent_init_same_agent_creates_single_service() -> None:
+    """TOCTOU 修复（03#3）：同一新 agent_id 并发 get-or-create 只建一个 service。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            results = await asyncio.gather(
+                service._get_or_create_tenant_service("alice", "same"),
+                service._get_or_create_tenant_service("alice", "same"),
+            )
+            # 两次拿到同一个 service，且只注册了一个（不泄漏）
+            assert results[0][0] is results[1][0]
+            assert len(service._tenant_services) == 1
+
+    asyncio.run(run())
+
+
 def test_tenant_dispatch_marks_last_active() -> None:
     """每次租户 RPC 派发都刷新活跃时间，活跃租户不会被当作休眠候选。"""
 
