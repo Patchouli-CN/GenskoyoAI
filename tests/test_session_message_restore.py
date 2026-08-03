@@ -60,6 +60,28 @@ class SessionMessageRestoreTests(unittest.TestCase):
             manager.save_working_memory(session.session_id)
             self.assertEqual(persistence.load_messages(session.session_id), restored)
 
+    def test_load_preserves_message_revision_without_rewrite(self) -> None:
+        """启动加载不再全量重写：完整消息 revision 保持原值、未变化会话不触发 save。"""
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            save_path = Path(temp_dir)
+            persistence = SessionPersistence(save_path)
+            session = SessionContext(character_id="reimu")
+            messages = [
+                {"role": "user", "content": "第一条", "message_id": "m1", "revision": 5},
+                {"role": "assistant", "content": "第一条回复", "message_id": "m2", "revision": 5},
+            ]
+            persistence.save_session(session)
+            persistence.save_messages(session.session_id, messages)
+
+            with mock.patch.object(SessionPersistence, "save_messages") as mocked_save:
+                manager = SessionManager(SessionConfig(save_path=save_path), "reimu")
+                restored = manager.get_working_memory(session.session_id).get_context()
+
+            mocked_save.assert_not_called()  # 未变化 → 启动不重写（CODE_INF 05#4）
+            self.assertTrue(all(item["revision"] == 5 for item in restored))  # revision 保留
+
 
 if __name__ == "__main__":
     unittest.main()

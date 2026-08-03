@@ -6,7 +6,11 @@ from typing import Any, cast
 from GensokyoAI.core.agent.model_client import ModelClient
 from GensokyoAI.core.agent.providers import ProviderFactory
 from GensokyoAI.core.agent.providers.base import BaseProvider
-from GensokyoAI.core.agent.types import ProviderCapability, UnifiedEmbeddingResponse
+from GensokyoAI.core.agent.types import (
+    ProviderCapability,
+    StreamChunk,
+    UnifiedEmbeddingResponse,
+)
 from GensokyoAI.core.config import AuthConfig, EmbeddingConfig, ModelConfig, ResourceControlConfig
 from GensokyoAI.core.events import SystemEvent
 from GensokyoAI.core.exceptions import ModelError
@@ -127,6 +131,22 @@ class FailingEmbeddingProvider(BaseProvider):
         )
 
 
+class StreamRetryProvider(BaseProvider):
+    """流式 yield 1 chunk 后抛可重试错误——验证已产出后不再整体重试（04#1）。"""
+
+    calls = 0
+
+    async def chat(self, model: str, messages: list[dict], tools=None, options=None, **kwargs):
+        raise NotImplementedError
+
+    async def chat_stream(
+        self, model: str, messages: list[dict], tools=None, options=None, **kwargs
+    ):
+        self.__class__.calls += 1
+        yield StreamChunk(content="部分回复")
+        raise _HTTPError("server failed mid-stream", status_code=502, response_body="oops")
+
+
 class OAuth401Provider(BaseProvider):
     calls = 0
     refreshed = False
@@ -167,6 +187,7 @@ class ModelClientRetryTests(unittest.TestCase):
         ProviderFactory.register("retryable_embedding_test", RetryableEmbeddingProvider)
         ProviderFactory.register("failing_embedding_test", FailingEmbeddingProvider)
         ProviderFactory.register("oauth_401_test", OAuth401Provider)
+        ProviderFactory.register("stream_retry_test", StreamRetryProvider)
 
     def test_retries_5xx_and_succeeds(self):
         RetryableProvider.calls = 0
@@ -309,6 +330,31 @@ class ModelClientRetryTests(unittest.TestCase):
         auth_events = [e for e in event_bus.events if e.type == SystemEvent.MODEL_AUTH]
         self.assertTrue(auth_events)
         self.assertIn("token_refresh_completed", [e.data["status"] for e in auth_events])
+
+    def test_chat_stream_does_not_retry_after_yield(self):
+        """已产出 chunk 后遇可重试错误不整体重试（避免重复前缀，CODE_INF 04#1）。"""
+        StreamRetryProvider.calls = 0
+        client = ModelClient(
+            ModelConfig(
+                provider="stream_retry_test",
+                name="test-model",
+                retry_max_attempts=3,
+                retry_initial_delay=0,
+            )
+        )
+
+        chunks: list[str] = []
+
+        async def run() -> None:
+            async for chunk in client.chat_stream([{"role": "user", "content": "hi"}]):
+                chunks.append(chunk.content)
+
+        with self.assertRaises(ModelError):
+            asyncio.run(run())
+
+        # 已产出的内容只出现一次；provider 未被二次调用（整体重试被短路）
+        self.assertEqual(chunks, ["部分回复"])
+        self.assertEqual(StreamRetryProvider.calls, 1)
 
     def test_provider_gate_rejects_concurrent_chat_and_releases(self):
         started = asyncio.Event()

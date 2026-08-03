@@ -722,6 +722,8 @@ class ModelClient:
             backoff = max(1.0, self.config.retry_backoff_factor)
 
             auth_refreshed_after_401 = False
+            # 是否已向消费端产出过 chunk：产出后整体重试会产生重复前缀（CODE_INF 04#1）
+            yielded_any = False
 
             for attempt in range(1, max_attempts + 1):
                 try:
@@ -792,6 +794,7 @@ class ModelClient:
                                 timing_published = True
                                 self._publish_model_completed(timing)
                             yield chunk
+                            yielded_any = True
                     if not timing_published:
                         self._finish_timing(timing)
                         self._publish_timing(timing)
@@ -812,6 +815,9 @@ class ModelClient:
                         endpoint=getattr(self._provider, "endpoint", None),
                         retry_status_codes=self._retry_status_codes(),
                     )
+                    if yielded_any:
+                        # 已向消费端产出内容：整体重试会产生重复前缀，直接上抛
+                        raise normalized from e
                     auth_config = self._provider.config.auth
                     if (
                         normalized.status_code == 401

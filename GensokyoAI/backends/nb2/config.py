@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...core.config_dirs import adapter_config_dir
+from ...core.config_env import adapter_config_dir
 from ...utils.logger import logger
 
 
@@ -23,7 +23,7 @@ def resolve_env_file(root_dir: Path | None = None) -> tuple[Path | None, bool]:
     项目根 `.env` 兜底（迁移期，用完会打迁移提示）。
 
     返回 (路径或 None, 是否走了根目录兜底)。都不存在返回 (None, False)。
-    框架只约定目录（core.config_dirs.adapter_config_dir），格式与加载
+    框架只约定目录（core.config_env.adapter_config_dir），格式与加载
     归适配器自己——nb2 现行为 dotenv。
     """
     base = adapter_config_dir("nb2", root_dir)

@@ -10,7 +10,7 @@ from rich.console import Console
 from GensokyoAI.backends.console import ConsoleBackendBuilder
 from GensokyoAI.core.agent import Agent
 from GensokyoAI.core.config import ConfigLoader
-from GensokyoAI.core.config_dirs import ensure_local_config
+from GensokyoAI.core.config_env import ensure_local_config
 from GensokyoAI.utils.exec_hook import set_exechook
 from GensokyoAI.utils.request_utils import close_client_session
 

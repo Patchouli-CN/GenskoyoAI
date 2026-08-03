@@ -35,7 +35,9 @@ class SessionManager:
             # 加载工作记忆
             messages = self._persistence.load_messages(sess.session_id)
             if messages:
-                messages, changed = self._merge_message_model([], messages)
+                # previous=自身：完整消息保持 revision、changed=False 不再全量重写；
+                # 缺 message_id 的旧消息仍补全（新 uuid 使 old=None → 照常重写）
+                messages, changed = self._merge_message_model(messages, messages)
                 if changed:
                     self._persistence.save_messages(sess.session_id, messages)
                 wm = WorkingMemoryManager(max_turns=self._working_max_turns)

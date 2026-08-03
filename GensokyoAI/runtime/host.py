@@ -202,7 +202,7 @@ class RuntimeHost:
         if entry not in self._adapter_tools:
             self._adapter_tools.append(entry)
         # 已装配的租户即时生效（访问 service 租户表属 runtime 包内契约）
-        for service in self._service._tenant_services.values():
+        for service in self._service.iter_tenant_services():
             agent = service.state.agent
             if agent is not None:
                 agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
@@ -226,8 +226,7 @@ class RuntimeHost:
 
     def _tenant_agent(self, agent_id: str) -> Any:
         """取租户当前装配的 Agent（runtime 包内契约），未装配返回 None。"""
-        service = self._service._tenant_services.get((self._principal.user_id, agent_id))
-        return service.state.agent if service is not None else None
+        return self._service.tenant_agent(self._principal.user_id, agent_id)
 
     def _apply_adapter_tools(self, agent_id: str) -> None:
         """把已登记的适配器工具注入刚初始化的租户 Agent。"""
@@ -243,7 +242,7 @@ class RuntimeHost:
         供适配器读取全局配置节（如 repeat_guard 复读烦躁阈值）；
         同一进程内所有租户共享同一份全局配置文件。
         """
-        for service in self._service._tenant_services.values():
+        for service in self._service.iter_tenant_services():
             agent = service.state.agent
             if agent is not None:
                 return agent.config
@@ -258,7 +257,7 @@ class RuntimeHost:
         模型客户端上；元租户 nb2-meta 已删除，由 OneShotGenerator 取代）。
         """
         tenants = {"groups": 0, "users": 0, "other": 0}
-        for _, agent_id in self._service._tenant_services:
+        for (_, agent_id), _ in self._service.iter_tenant_entries():
             if agent_id.startswith("qq-group-"):
                 tenants["groups"] += 1
             elif agent_id.startswith("qq-user-"):
@@ -289,7 +288,7 @@ class RuntimeHost:
         永远 {"count": 0}。
         """
         samples: list[tuple[float, float]] = []
-        for service in self._service._tenant_services.values():
+        for service in self._service.iter_tenant_services():
             agent = service.state.agent
             if agent is None:
                 continue
@@ -300,7 +299,7 @@ class RuntimeHost:
         """全租户语义记忆规模聚合（话题数 / 记忆条数；未启用语义的租户自然跳过）。"""
         topics = 0
         memories = 0
-        for service in self._service._tenant_services.values():
+        for service in self._service.iter_tenant_services():
             agent = service.state.agent
             if agent is None or agent.semantic_memory is None:
                 continue
@@ -316,7 +315,7 @@ class RuntimeHost:
         没有内心戏样本。
         """
         samples: list[float] = []
-        for service in self._service._tenant_services.values():
+        for service in self._service.iter_tenant_services():
             agent = service.state.agent
             if agent is None:
                 continue
@@ -346,7 +345,7 @@ class RuntimeHost:
         max_concurrent 保留单实例上限并附 instances 实例数。
         """
         gates_by_name: dict[str, dict[str, Any]] = {}
-        services = [self._service, *self._service._tenant_services.values()]
+        services = [self._service, *list(self._service.iter_tenant_services())]
         for service in services:
             for gate in getattr(service, "_resource_gates", {}).values():
                 snapshot = gate.snapshot()

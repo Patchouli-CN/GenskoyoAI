@@ -13,7 +13,7 @@ import hashlib
 import json
 import time
 from collections import OrderedDict
-from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -170,6 +170,21 @@ class RuntimeService(WorldOpsMixin):
         self._world_persistence_path: Path | None = None
         if self._tenant_key is None:
             self._load_tenant_catalog()
+
+    # ==================== 租户表公开访问（host/适配器用，避免直捅 _tenant_services） ====================
+
+    def iter_tenant_services(self) -> Iterator[RuntimeService]:
+        """遍历全部租户子 service（适配器聚合统计用，旧 CODE_INF 01#12）。"""
+        return iter(self._tenant_services.values())
+
+    def iter_tenant_entries(self) -> Iterator[tuple[tuple[str, str], RuntimeService]]:
+        """遍历 (租户 key, 子 service)（按 user/agent 前缀分类统计用）。"""
+        return iter(self._tenant_services.items())
+
+    def tenant_agent(self, user_id: str, agent_id: str) -> Any:
+        """取某租户当前装配的 Agent（未装配返回 None）。"""
+        service = self._tenant_services.get((user_id, agent_id))
+        return service.state.agent if service is not None else None
 
     async def handle(
         self,

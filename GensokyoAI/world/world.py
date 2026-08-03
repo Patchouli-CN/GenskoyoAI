@@ -33,7 +33,6 @@ from ..utils.helpers import build_world_memory_root
 from ..utils.logger import logger
 from ..utils.path_security import sanitize_path_id
 from .director import Director
-from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .initiative import WorldInitiativeLoop
 from .memory_projector import WorldMemoryProjector
 from .persistence import WorldPersistence
@@ -46,7 +45,9 @@ from .types import (
     DirectorContext,
     DirectorPhase,
     SpeakerKind,
+    WorldActorTurnPayload,
     WorldPersistenceDiagnostic,
+    WorldSceneMovedPayload,
     WorldSessionRecord,
     WorldStateSnapshot,
     WorldTurn,

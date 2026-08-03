@@ -37,7 +37,7 @@ from GensokyoAI.core.config import (
 )
 from GensokyoAI.core.events import Event, SystemEvent
 from GensokyoAI.world import GensokyoWorld
-from GensokyoAI.world.events import WorldActorTurnPayload
+from GensokyoAI.world.types import WorldActorTurnPayload
 
 _MARISA_YAML = """\
 name: "雾雨魔理沙"

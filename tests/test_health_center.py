@@ -241,7 +241,11 @@ def _fake_tenant_service(cost_samples: deque) -> SimpleNamespace:
 class HostCostStatsTests(unittest.TestCase):
     def _bare_host(self, tenant_services: dict) -> RuntimeHost:
         host = RuntimeHost.__new__(RuntimeHost)
-        host._service = SimpleNamespace(_tenant_services=tenant_services)
+        host._service = SimpleNamespace(
+            _tenant_services=tenant_services,
+            iter_tenant_services=lambda: iter(tenant_services.values()),
+            iter_tenant_entries=lambda: iter(tenant_services.items()),
+        )
         return host
 
     def test_no_tenants_returns_count_zero(self):

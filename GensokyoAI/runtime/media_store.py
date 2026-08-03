@@ -7,20 +7,10 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
 from GensokyoAI.utils.helpers import utc_now
-
-
-class BlobStore(Protocol):
-    """Replaceable blob boundary for filesystem or object-storage backends."""
-
-    def put(self, blob_id: str, data: bytes) -> None: ...
-
-    def get(self, blob_id: str) -> bytes: ...
-
-    def delete(self, blob_id: str) -> bool: ...
 
 
 @dataclass(slots=True)
@@ -63,7 +53,7 @@ class MediaStore:
     MAX_ITEMS = 1000
     MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 
-    def __init__(self, root: Path, blob_store: BlobStore | None = None) -> None:
+    def __init__(self, root: Path, blob_store: FileBlobStore | None = None) -> None:
         self.root = root
         self.blob_store = blob_store or FileBlobStore(root / "blobs")
         self.metadata_path = root / "index.json"

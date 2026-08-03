@@ -20,7 +20,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from ..core.config_dirs import ensure_local_config
+from ..core.config_env import ensure_local_config
 from ..runtime.host import RuntimeHost
 from ..utils.logger import logger
 

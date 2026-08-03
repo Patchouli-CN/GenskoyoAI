@@ -11,7 +11,6 @@ Runtime/Console 接入（阶段 9）。
 """
 
 from .director import Director
-from .events import WorldActorTurnPayload, WorldSceneMovedPayload
 from .initiative import WorldInitiativeLoop
 from .memory_projector import PerspectiveMemory, WorldMemoryProjector
 from .persistence import WorldPersistence, WorldPersistenceError
@@ -26,8 +25,10 @@ from .types import (
     DirectorPhase,
     SpeakerKind,
     TranscriptEntry,
+    WorldActorTurnPayload,
     WorldLoadResult,
     WorldPersistenceDiagnostic,
+    WorldSceneMovedPayload,
     WorldSessionRecord,
     WorldStateSnapshot,
     WorldTurn,
