@@ -91,6 +91,28 @@ class AgentCompositionTests(unittest.TestCase):
             self.assertIsNot(agent.working_memory, first_working_memory)
             self.assertIsNot(agent.semantic_memory, first_semantic_memory)
 
+    def test_resume_current_session_is_idempotent(self):
+        """Runtime 每条消息都 activate 当前会话：重复 resume 必须幂等——
+        不重置记忆实例缓存、蒸馏轮次计数与半截回复状态（§8.63 回归）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
+                agent = Agent(config=self._make_config(tmp))
+
+            session = agent.create_session()
+            semantic_memory = agent.semantic_memory
+            agent._half_completion = "没说完的半截"
+
+            # 重复 resume 当前会话：幂等，会话级状态原样保留
+            self.assertTrue(agent.resume_session(session.session_id))
+            self.assertIs(agent.semantic_memory, semantic_memory)
+            self.assertEqual(agent._half_completion, "没说完的半截")
+
+            # 真正切换会话：照旧走重置路径
+            agent.create_session()
+            self.assertTrue(agent.resume_session(session.session_id))
+            self.assertIsNone(agent._half_completion)
+            self.assertIsNot(agent.semantic_memory, semantic_memory)
+
     def test_agent_bootstrap_state_tracks_lazy_components_created_after_startup(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):

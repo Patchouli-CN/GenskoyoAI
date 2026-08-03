@@ -666,6 +666,11 @@ class Agent:
         return session
 
     def resume_session(self, session_id: str) -> bool:
+        current = self.session_manager.get_current_session()
+        if current is not None and current.session_id == session_id:
+            # 已是当前会话：幂等返回。Runtime 每条消息都会 activate 当前会话，
+            # 若照常走重置会连带清掉蒸馏轮次计数与半截回复状态
+            return True
         if self.session_manager.set_current_session(session_id):
             self._reset_session_scoped_state()
             session = self.session_manager.get_current_session()

@@ -16,6 +16,27 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.63 蒸馏永不触发根因：resume_session 幂等修复（2026-08-03，用户实机发现）
+
+- 现象：nb2 跑了 29 分钟、27 次内心思考，`/status` 记忆仍是
+  0 话题 / 0 珍贵记忆；配置 `distill_enabled: true`、`distill_turns: 10` 全正常。
+- 根因链：nb2 每条消息带 session_id → `service.send_message:1426`
+  `_activate_tenant_session` **每条消息都调** → `Agent.resume_session`
+  不短路，当前会话也照走 `_reset_session_scoped_state` →
+  `update_semantic_memory` 把 `_distill_pending_turns` 清零——
+  计数永远到不了 10，蒸馏在 nb2 路径上**从未触发过**。
+- 连带受害（同根同愈）：`_half_completion` 每条消息被清空（半截续说
+  在 nb2 也是坏的）；语义记忆管理器每条消息重建（日志满屏
+  「语义记忆初始化」「会话已恢复」的来源）。
+- 修复（一处框架级）：`resume_session` 对「已是当前会话」幂等返回，
+  不重置、不重发 SESSION_RESUMED；真正切换会话照旧走重置路径。
+- 测试：`test_resume_current_session_is_idempotent`（重复 resume 保留
+  记忆实例缓存 + 半截状态；切换会话照旧重置）。相关 107 例全绿，
+  ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`fix(agent): resume_session 对当前会话幂等——修掉 Runtime 每条消息重置蒸馏计数导致蒸馏永不触发（连带修复半截续说被每条消息清空、语义记忆每消息重建）`
+
 ## 8.62 守护 QR 登录回退：QQ 未知不再 not_ready 告警（2026-08-02，用户拍板）
 
 - 起因：启动引导触发守护时若 bot QQ 未知（二级密码登录会撞腾讯验证码，
