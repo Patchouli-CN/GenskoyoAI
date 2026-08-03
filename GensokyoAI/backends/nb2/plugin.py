@@ -595,7 +595,12 @@ def _strip_leading_at_mentions(reply: str) -> str:
 
 
 async def _generate_for_tenant(
-    agent_id: str, key: str, text: str, contexts: list[str], idempotency_key: str
+    agent_id: str,
+    key: str,
+    text: str,
+    contexts: list[str],
+    idempotency_key: str,
+    record_in_working_memory: bool = True,
 ) -> str:
     """租户会话生成（session/revision 舞蹈）：未初始化先 ensure，RPC 失败重建
     租户同键重试一次（幂等安全）；resource.limit_exceeded 直接上抛不重建。"""
@@ -608,7 +613,13 @@ async def _generate_for_tenant(
         revision = int(entry["revision"])
     try:
         reply, new_revision = await _host_send(
-            agent_id, session_id, revision, text, idempotency_key, contexts
+            agent_id,
+            session_id,
+            revision,
+            text,
+            idempotency_key,
+            contexts,
+            record_in_working_memory,
         )
     except RuntimeRpcError as error:
         if error.code == "resource.limit_exceeded":
@@ -617,7 +628,13 @@ async def _generate_for_tenant(
         session_id, revision = await _ensure_agent(agent_id, None)
         _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
         reply, new_revision = await _host_send(
-            agent_id, session_id, revision, text, idempotency_key, contexts
+            agent_id,
+            session_id,
+            revision,
+            text,
+            idempotency_key,
+            contexts,
+            record_in_working_memory,
         )
     _store.update_revision(key, new_revision)
     return reply
@@ -651,6 +668,9 @@ async def _fire_reminder(reminder: Reminder) -> None:
             f"【提醒触发】时间到了，该提醒 {target_label}：{reminder.content}",
             contexts,
             f"nb2-reminder:{reminder.id}",
+            # 02#15：触发文本只注入当轮生成，不写工作记忆——角色不再把
+            # 「系统提醒」当成用户发言记入历史
+            record_in_working_memory=False,
         )
     except Exception as error:
         attempts = _reminders.bump_attempts(reminder.id)
@@ -1146,6 +1166,7 @@ async def _host_send(
     text: str,
     idempotency_key: str,
     contexts: list[str],
+    record_in_working_memory: bool = True,
 ) -> tuple[str, int]:
     return await _require_host().send_message(
         agent_id,
@@ -1154,4 +1175,5 @@ async def _host_send(
         text,
         idempotency_key=idempotency_key,
         system_contexts=contexts,
+        record_in_working_memory=record_in_working_memory,
     )

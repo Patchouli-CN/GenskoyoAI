@@ -185,7 +185,11 @@ def test_runtime_message_operation_is_persisted_and_replayed() -> None:
                     return manager.set_current_session(session_id)
 
                 @staticmethod
-                async def send(message: str, system_contexts: list[str] | None = None):
+                async def send(
+                    message: str,
+                    system_contexts: list[str] | None = None,
+                    record_in_working_memory: bool = True,
+                ):
                     operation = cast(Any, service)._operation_store.get(
                         session.session_id, "send-1"
                     )
@@ -251,7 +255,11 @@ def test_timeout_without_assistant_records_failed_not_succeeded() -> None:
                     return manager.set_current_session(session_id)
 
                 @staticmethod
-                async def send(message: str, system_contexts: list[str] | None = None):
+                async def send(
+                    message: str,
+                    system_contexts: list[str] | None = None,
+                    record_in_working_memory: bool = True,
+                ):
                     # 模拟超时兜底：只写 user 消息，不写 assistant（MESSAGE_SENT 被跳过）
                     memory = manager.get_working_memory(session.session_id)
                     memory.add_message("user", message)
@@ -303,7 +311,11 @@ def test_runtime_message_operation_records_provider_failure() -> None:
                     return manager.set_current_session(session_id)
 
                 @staticmethod
-                async def send(message: str, system_contexts: list[str] | None = None):
+                async def send(
+                    message: str,
+                    system_contexts: list[str] | None = None,
+                    record_in_working_memory: bool = True,
+                ):
                     operation = cast(Any, service)._operation_store.get(
                         session.session_id, "send-fail"
                     )

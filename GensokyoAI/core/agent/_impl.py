@@ -113,7 +113,8 @@ class Agent:
         self._generate_response_subscription_id: str | None = None
         self._stream_first_chunk_timeout = 30.0
         self._stream_idle_timeout = 30.0
-        self._stream_total_timeout = 120.0
+        # 非流式/流式统一的整轮响应总超时（04#9：同一慢响应不再因模式不同提前超时）
+        self._response_total_timeout = 120.0
 
     def _init_core_components(self) -> None:
         self.character_name = safe_get(self.config, "character.name", "default")
@@ -296,7 +297,11 @@ class Agent:
     # ==================== 核心 API ====================
 
     async def send(
-        self, user_input: str, system_contexts: list[str] | None = None
+        self,
+        user_input: str,
+        system_contexts: list[str] | None = None,
+        *,
+        record_in_working_memory: bool = True,
     ) -> UnifiedMessage | None:
         """发送消息（非流式）- 完全事件驱动。"""
         return await self._send_impl(
@@ -304,12 +309,15 @@ class Agent:
             system_contexts,
             timeout_log="等待响应超时",
             cancel_reason="send timeout",
+            record_in_working_memory=record_in_working_memory,
         )
 
     async def send_multimodal(
         self,
         content_parts: list[dict[str, Any]],
         system_contexts: list[str] | None = None,
+        *,
+        record_in_working_memory: bool = True,
     ) -> UnifiedMessage | None:
         """发送多模态消息（非流式）。"""
         return await self._send_impl(
@@ -317,6 +325,7 @@ class Agent:
             system_contexts,
             timeout_log="多模态响应超时",
             cancel_reason="send multimodal timeout",
+            record_in_working_memory=record_in_working_memory,
         )
 
     async def _send_impl(
@@ -354,7 +363,9 @@ class Agent:
             )
 
             try:
-                full_response = await asyncio.wait_for(response_future, timeout=60.0)
+                full_response = await asyncio.wait_for(
+                    response_future, timeout=self._response_total_timeout
+                )
                 if full_response:
                     return UnifiedMessage(
                         role="assistant",
@@ -618,7 +629,7 @@ class Agent:
         saw_chunk: bool,
     ) -> float:
         now = asyncio.get_running_loop().time()
-        total_remaining = self._stream_total_timeout - (now - started_at)
+        total_remaining = self._response_total_timeout - (now - started_at)
         activity_deadline = (
             self._stream_idle_timeout if saw_chunk else self._stream_first_chunk_timeout
         )
@@ -627,7 +638,7 @@ class Agent:
 
     def _stream_timed_out(self, started_at: float, last_chunk_at: float, saw_chunk: bool) -> bool:
         now = asyncio.get_running_loop().time()
-        if now - started_at >= self._stream_total_timeout:
+        if now - started_at >= self._response_total_timeout:
             return True
         activity_deadline = (
             self._stream_idle_timeout if saw_chunk else self._stream_first_chunk_timeout
@@ -854,6 +865,7 @@ class Agent:
         continuation_input = text_input if world_turn else ""
 
         full_response = ""
+        error_fallback = False  # 生成异常且无任何产出：兜底文案不入工作记忆（02#1）
         try:
             await self._ensure_background_manager()
             tool_build_result = await self._build_tools()
@@ -880,6 +892,7 @@ class Agent:
             error_msg = "\n[出了点问题]\n"
             if not full_response:
                 full_response = error_msg
+                error_fallback = True
                 await self._action_executor.feed_chunk(  # type: ignore
                     StreamChunk(
                         type="error",
@@ -901,8 +914,10 @@ class Agent:
                 if partial := strip_interrupt_marker(full_response):
                     self._half_completion = HalfCompletionMessage(content=partial)
                     logger.info(f"响应中断，半截回复已计入中间状态（{len(partial)} 字）")
-            elif full_response and is_current:
+            elif full_response and is_current and not error_fallback:
                 # 正常说完：清除可能存在的半截状态，本轮按普通消息处理。
+                # error_fallback（生成异常无产出）不写 MESSAGE_SENT——兜底文案
+                # 只投递给用户，不进工作记忆污染历史（02#1）。
                 self._half_completion = None
                 data = {"content": full_response}
                 # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给

@@ -1472,6 +1472,7 @@ class RuntimeService(WorldOpsMixin):
         session_id: str | None = None,
         idempotency_key: str | None = None,
         expected_revision: int | None = None,
+        record_in_working_memory: bool = True,
     ) -> dict[str, Any]:
         async with (
             self._resource_scope("runtime", "agent_message"),
@@ -1515,9 +1516,17 @@ class RuntimeService(WorldOpsMixin):
                         agent.session_manager.get_working_memory(operation_session_id).get_context()
                     )
                     response = (
-                        await agent.send_multimodal(resolved_message, system_contexts)
+                        await agent.send_multimodal(
+                            resolved_message,
+                            system_contexts,
+                            record_in_working_memory=record_in_working_memory,
+                        )
                         if isinstance(resolved_message, list)
-                        else await agent.send(resolved_message, system_contexts)
+                        else await agent.send(
+                            resolved_message,
+                            system_contexts,
+                            record_in_working_memory=record_in_working_memory,
+                        )
                     )
                     content = response.content if response else ""
                     message_payload = await self._finalize_message_operation(

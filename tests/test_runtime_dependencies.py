@@ -1121,7 +1121,7 @@ class RuntimeSessionRpcTests(unittest.TestCase):
         async def start():
             return None
 
-        async def send(message, system_contexts=None):
+        async def send(message, system_contexts=None, record_in_working_memory=True):
             send_calls.append((message, system_contexts))
             manager.messages_by_session[session_id].append({"role": "user", "content": message})
             manager.messages_by_session[session_id].append(
@@ -1157,7 +1157,7 @@ class RuntimeStreamingRpcTests(unittest.TestCase):
         service = RuntimeService()
         manager = FakeRuntimeSessionManager()
 
-        async def send(message, system_contexts=None):
+        async def send(message, system_contexts=None, record_in_working_memory=True):
             return SimpleNamespace(content="回答", reasoning_content="思考")
 
         cast(Any, service.state).agent = SimpleNamespace(
@@ -1350,7 +1350,7 @@ class RuntimeResourceControlTests(unittest.TestCase):
         release = asyncio.Event()
         manager = FakeRuntimeSessionManager()
 
-        async def send(message, system_contexts=None):
+        async def send(message, system_contexts=None, record_in_working_memory=True):
             started.set()
             await release.wait()
             return SimpleNamespace(content="ok")
@@ -1393,7 +1393,7 @@ class RuntimeResourceControlTests(unittest.TestCase):
         release = asyncio.Event()
         manager = FakeRuntimeSessionManager()
 
-        async def send(message, system_contexts=None):
+        async def send(message, system_contexts=None, record_in_working_memory=True):
             started.set()
             await release.wait()
             return SimpleNamespace(content="ok")

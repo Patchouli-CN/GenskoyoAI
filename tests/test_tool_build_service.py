@@ -296,5 +296,18 @@ class ToolTypeMappingTests(unittest.TestCase):
         self.assertEqual(by_name["plain"], ToolParameterType.BOOLEAN)
 
 
+class MoonPhaseTests(unittest.TestCase):
+    """06#5：月相工具按真实朔望周期计算。"""
+
+    def test_output_is_valid_phase_and_tracks_synodic_cycle(self):
+        from GensokyoAI.tools.tool_builtin.moon import _PHASES, get_moon_phase
+
+        today = get_moon_phase(0)
+        self.assertIn(today, _PHASES)
+        # 朔望月 ~29.53 天：30 天内月相应遍历绝大多数相位（而非 day%8 的假周期）
+        seen = {get_moon_phase(day) for day in range(0, 30)}
+        self.assertGreaterEqual(len(seen), 6)
+
+
 if __name__ == "__main__":
     unittest.main()
