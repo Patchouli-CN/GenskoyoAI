@@ -61,15 +61,6 @@ class PendingChatQueue:
         return len(self._queues.get(key, []))
 
 
-def batch_at_targets(batch: list[PendingChat]) -> list[int]:
-    """一批待发里要 @ 的发言人 QQ（去重保序，无 QQ 的跳过）。"""
-    targets: list[int] = []
-    for item in batch:
-        if item.member_qq is not None and item.member_qq not in targets:
-            targets.append(item.member_qq)
-    return targets
-
-
 def merge_batch(batch: list[PendingChat]) -> tuple[str, list[str], str]:
     """把一批待发合并为一轮输入。
 

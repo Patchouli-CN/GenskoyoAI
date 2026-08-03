@@ -49,6 +49,7 @@ from ...core.agent.prompts import (
     build_reminder_trigger_context,
     build_repeat_annoyance_context,
     build_repeat_farewell_context,
+    build_reply_focus_prompt,
 )
 from ...core.health import HealthCenter
 from ...runtime.host import RuntimeHost, RuntimeRpcError
@@ -56,7 +57,7 @@ from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_
 from ...utils.logger import logger
 from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
-from .pending import PendingChat, PendingChatQueue, batch_at_targets, merge_batch
+from .pending import PendingChat, PendingChatQueue, merge_batch
 from .reminders import (
     REMINDER_MAX_ATTEMPTS,
     REMINDER_TICK_SECONDS,
@@ -417,6 +418,39 @@ class _ReminderAttentionKind:
         }
 
 
+class _ReplyFocusAttentionKind:
+    """AttentionThings 的第二个种类：回应焦点（因果关系）判定。
+
+    判定本轮消息里谁是冲着 bot 来的（提问/委托/等回应）；焦点名单驱动
+    QQ 端真实 @——有焦点才 @，普通闲聊无焦点不 @（「批次全员都 @」的
+    代码启发式已废弃，@ 是否必要属于因果判断，交给 LLM）。
+    """
+
+    name = "reply_focus"
+
+    def candidate(self, text: str) -> bool:
+        return True
+
+    def judge_prompt(self, text: str) -> str:
+        return build_reply_focus_prompt(text)
+
+    def parse(self, raw: str) -> dict[str, Any] | None:
+        try:
+            match = _JSON_OBJECT_PATTERN.search(raw)
+            data = json.loads(match.group(0) if match else raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        focus = data.get("focus")
+        if not isinstance(focus, list):
+            return None
+        names = [str(name).strip() for name in focus if str(name).strip()]
+        if not names:
+            return None
+        return {"focus": names[:2]}  # prompt 约定最多两个，截断防模型失控
+
+
 async def _dispatch_attention(
     verdict: Any, agent_id: str, sender_name: str | None = None
 ) -> str | None:
@@ -469,22 +503,57 @@ async def _dispatch_cancel(verdict: Any, agent_id: str) -> str:
 
 
 async def _inspect_attention(
-    text: str, agent_id: str, sender_name: str | None = None
-) -> list[str]:
-    """对本轮文本跑注意力管线，返回要注入的代办上下文（无命中/未启用为空）。"""
+    text: str, agent_id: str, sender_name: str | None = None, *, group: bool = False
+) -> tuple[list[str], list[str]]:
+    """对本轮文本跑注意力管线，返回 (代办上下文, 回应焦点名单)。
+
+    私聊不跑 reply_focus（@ 无意义，省一次判定调用）。
+    """
     if _attention is None:
-        return []
+        return [], []
     try:
-        verdicts = await _attention.inspect(text)
+        verdicts = await _attention.inspect(text, only=None if group else {"reminder"})
     except Exception as error:
         logger.debug(f"[nb2] 注意力判定失败（忽略）: {error}")
-        return []
-    notes = []
+        return [], []
+    notes: list[str] = []
+    focus: list[str] = []
     for verdict in verdicts:
+        if verdict.kind == "reply_focus":
+            focus.extend(verdict.data.get("focus", []))
+            continue
         note = await _dispatch_attention(verdict, agent_id, sender_name)
         if note:
             notes.append(note)
-    return notes
+    return notes, focus
+
+
+def _resolve_focus_targets(key: str, batch: list[PendingChat], names: list[str]) -> list[int]:
+    """注意力判定的焦点名单 → 要 @ 的 QQ：先查本批发言人，再反查群名片缓存。"""
+    batch_map = {
+        item.member_name: item.member_qq
+        for item in batch
+        if item.member_name and item.member_qq is not None
+    }
+    group_id = int(key.split(":", 1)[1])
+    targets: list[int] = []
+    for name in names:
+        qq = batch_map.get(name)
+        if qq is None:
+            qq, _ = _resolve_remind_target("group", group_id, name)
+        if qq is not None and qq not in targets:
+            targets.append(qq)
+    return targets
+
+
+def _strip_leading_mentions(reply: str, names: list[str]) -> str:
+    """剥掉回复开头的文本 @焦点：模型自己写的 @ 与代码拼的真 at 段重复，
+    只留真 at（剥空了则保留原文，防误伤）。"""
+    stripped = reply.lstrip()
+    for name in names:
+        if stripped.startswith(f"@{name}"):
+            stripped = stripped[len(name) + 1 :].lstrip()
+    return stripped or reply
 
 
 async def _generate_for_tenant(
@@ -622,6 +691,7 @@ async def _on_startup() -> None:
             lambda prompt: host.generate_meta_text(_config.character, prompt)
         )
         _attention.register(_ReminderAttentionKind())
+        _attention.register(_ReplyFocusAttentionKind())
     if _config.watchdog_enabled:
         # 启动期引导：10 秒宽限内协议端没连上，就直接复用掉线恢复流程拉起 NapCat
         # （不用手动先启动 NapCat；守护单 flight，与其他触发路径天然去重）
@@ -937,7 +1007,10 @@ async def _process_batch(
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
     # 注意力事务管线：命中待办（如提醒请求）直接代办登记并注入告知上下文
     # （目标人兜底取本轮发言者，防「大家」无 @）
-    contexts.extend(await _inspect_attention(text, agent_id, batch[-1].member_name))
+    attention_notes, focus_names = await _inspect_attention(
+        text, agent_id, batch[-1].member_name, group=key.startswith("group:")
+    )
+    contexts.extend(attention_notes)
     try:
         reply = await _generate_for_tenant(agent_id, key, text, contexts, idempotency_key)
     except RuntimeRpcError as error:
@@ -975,9 +1048,13 @@ async def _process_batch(
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
     send = matcher.send
-    if key.startswith("group:") and (at_targets := batch_at_targets(batch)):
-        # 回复 @ 本轮发言人（真 at 段，拼进首条分段）：回的是谁一目了然，
-        # 与工作记忆里助手消息的 @昵称 标记同款约定
+    if key.startswith("group:") and focus_names and (
+        at_targets := _resolve_focus_targets(key, batch, focus_names)
+    ):
+        # 回应焦点（AttentionThings 因果判定：谁冲着 bot 来）才 @——真 at 段
+        # 拼进首条分段；普通闲聊无焦点不 @。模型自己开头写的文本 @焦点剥掉，
+        # 避免与真 at 段重复显示成两个
+        reply = _strip_leading_mentions(reply, focus_names)
         at_message = Message(
             [
                 segment

@@ -16,6 +16,31 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.65 @ 由因果判定驱动：reply_focus 注意力种类（2026-08-03，用户定稿语义）
+
+- 起因一（实机翻车）：§8.64 的「批次全员都 @」+ 模型自己写的文本 @
+  叠加，QQ 端显示成「@帕秋莉 @帕秋莉」双 at。
+- 起因二（用户拍板）：@ 目标选择是**因果关系判断**（这轮消息谁冲着
+  bot 来：提问/委托/等回应），代码启发式判断不了，该交给
+  AttentionThings；且「不要经常 at 人」。
+- 定稿机制：
+  - 新注意力种类 `reply_focus`（plugin 注册，prompt 在框架
+    `build_reply_focus_prompt`）：LLM 判定本轮因果焦点名单，
+    无焦点（普通闲聊）不出 verdict 就不 @；
+  - `AttentionThings.inspect` 支持 `only=` 种类过滤——私聊只跑
+    reminder 不跑 reply_focus（@ 无意义，省一次判定调用）；
+  - QQ 端真 at 只拼焦点名单（`_resolve_focus_targets`：本批发言人
+    映射优先，群名片缓存兜底）；模型自己开头写的文本 @焦点由
+    `_strip_leading_mentions` 剥掉，只留真 at 段（治双 at）；
+  - 「批次全员都 @」的 `batch_at_targets` 启发式已删除。
+- 记忆侧（§8.64 的 `@昵称` 前缀）不变：那是给模型看的归因提示，
+  不 @ 人。
+- 测试：test_nb2_reply_focus.py 新文件 12 例（解析/剥除/解析目标），
+  test_attention.py 补 only= 过滤例；相关 113 例全绿，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`feat(nb2): @ 由注意力因果判定驱动——新增 reply_focus 种类（谁冲着 bot 来才 @，闲聊不 @），inspect 支持 only 种类过滤；真 at 与模型文本 @ 去重（修双 at），废弃批次全员 @ 启发式`
+
 ## 8.64 回复对象标记：@ 关联治张冠李戴（2026-08-03，用户实机发现 + 拍板 @ 方案）
 
 - 起因：群聊实机里幽幽子把 11 分钟前「随便你了，多打一个不在话下」

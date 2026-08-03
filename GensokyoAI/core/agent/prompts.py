@@ -545,6 +545,25 @@ def build_reminder_trigger_context(target_label: str, content: str) -> str:
     )
 
 
+def build_reply_focus_prompt(text: str) -> str:
+    """回应焦点判定（AttentionThings reply_focus 种类的 judge_prompt）。
+
+    判定全权交给 LLM：注意本轮消息里的**因果关系**——谁是冲着 bot 来的
+    （问它问题、给它委托、等它回应），而不是让模型决定「要不要 @」这个
+    动作。@ 只是因果焦点的自然推论：有焦点才 @，普通闲聊无焦点不 @。
+    代码只解析名单，不做任何判断（「批次全员都 @」的代码启发式已因此废弃）。
+    """
+    return (
+        "下面是群聊里的一轮新消息，每行开头的【昵称】是说话人。\n"
+        "注意这轮消息里的因果关系：有没有人是**冲着 bot 来的**——\n"
+        "向 bot 提问、给 bot 委托/请求、或在等 bot 回应？\n"
+        "（普通闲聊、群友之间互相说话、接话吐槽都不算冲着 bot。）\n"
+        "只输出 JSON，不要输出任何其他内容：\n"
+        '{"focus": ["冲着 bot 来的人的【昵称】，没有则为空数组"]}\n\n'
+        f"消息：\n{text}"
+    )
+
+
 def build_reminder_attention_prompt(text: str, now: datetime) -> str:
     """提醒意图判定（AttentionThings reminder 种类的 judge_prompt）。
 

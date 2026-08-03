@@ -84,6 +84,24 @@ class AttentionThingsTests(unittest.IsolatedAsyncioTestCase):
         things.register(kind)
         self.assertEqual(len(things._kinds), 1)
 
+    async def test_only_filter_skips_other_kinds(self):
+        calls = []
+
+        async def generate(prompt: str) -> str:
+            calls.append(prompt)
+            return "{}"
+
+        things = AttentionThings(generate)
+        things.register(_FakeKind())
+        other = _FakeKind()
+        other.name = "other"
+        things.register(other)
+        # only 指定 fake：other 连 candidate 都不跑，零调用
+        verdicts = await things.inspect("order something", only={"fake"})
+        self.assertEqual([v.kind for v in verdicts], ["fake"])
+        self.assertEqual(other.candidate_calls, 0)
+        self.assertEqual(len(calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

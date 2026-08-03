@@ -66,12 +66,18 @@ class AttentionThings:
         self._kinds.append(kind)
         logger.debug(f"[attention] 注意力事务已注册: {kind.name}")
 
-    async def inspect(self, text: str) -> list[AttentionVerdict]:
-        """对一段消息文本做注意力判定；返回命中的 verdict 列表（可能为空）。"""
+    async def inspect(self, text: str, *, only: set[str] | None = None) -> list[AttentionVerdict]:
+        """对一段消息文本做注意力判定；返回命中的 verdict 列表（可能为空）。
+
+        only：只跑指定名字的种类（如私聊不跑 reply_at，省一次判定调用）；
+        None 表示全部种类。
+        """
         if not self.enabled or not text.strip():
             return []
         verdicts: list[AttentionVerdict] = []
         for kind in self._kinds:
+            if only is not None and kind.name not in only:
+                continue
             if not kind.candidate(text):
                 continue  # 预筛不过：零成本
             try:
