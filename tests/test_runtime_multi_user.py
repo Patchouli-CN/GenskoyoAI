@@ -262,15 +262,14 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         _register_idle_tenant(service, "nb2", "qq-group-111")
         _register_idle_tenant(service, "nb2", "qq-group-222")
         _register_idle_tenant(service, "nb2", "qq-user-333")
-        _register_idle_tenant(service, "nb2", "nb2-meta")
         service._active_network_operations = 3
 
         status = RuntimeHost(service=service).get_system_status()
-        assert status["tenants"] == {"groups": 2, "users": 1, "meta": 1, "other": 0}
+        assert status["tenants"] == {"groups": 2, "users": 1, "other": 0}
         assert status["active_operations"] == 3
-        assert status["latency"] == {"count": 0}  # 元租户未装配 Agent → 空延迟
+        assert status["latency"] == {"count": 0}  # 租户均未装配 Agent → 空延迟
 
-        # 内心戏延迟聚合自各租户 Agent 的模型客户端（而非元租户）
+        # 内心戏延迟聚合自各租户 Agent 的模型客户端（nb2-meta 元租户已删）
         from types import SimpleNamespace
 
         client_a = SimpleNamespace(
@@ -291,12 +290,12 @@ def test_host_system_status_counts_tenants_and_operations() -> None:
         assert status["latency"]["median_ms"] == 2000.0
         assert status["latency"]["max_ms"] == 3000.0
         # runtime 闸只取 root 入口闸（模板默认 4，不随租户扩容）；
-        # model 闸为每租户一套：instances = root + 4 租户
+        # model 闸为每租户一套：instances = root + 3 租户
         runtime_gate = next(g for g in status["gates"] if g["name"] == "runtime")
         assert runtime_gate["max_concurrent"] == 4
         assert runtime_gate["instances"] == 1
         model_gate = next(g for g in status["gates"] if g["name"] == "model")
-        assert model_gate["instances"] == 5
+        assert model_gate["instances"] == 4
         assert status["load_level"] == {"level": "healthy", "reason": "运行正常"}
 
 

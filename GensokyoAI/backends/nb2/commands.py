@@ -187,7 +187,7 @@ def _format_status(
         )
 
     tenants = status["tenants"]
-    # 元租户（印象/判定等后台设施）不计入会话数，避免「私聊 1 个却显示 2」的误解
+    # 会话租户数 = 群 + 私聊 + 其他（nb2-meta 元租户已删，无后台设施占位）
     total = tenants["groups"] + tenants["users"] + tenants["other"]
     lines.append(f"开户：{tenants['groups']} 群 / {tenants['users']} 私聊（共 {total} 个会话租户）")
     lines.append(f"处理中：{status['active_operations']} 个会话正在生成")

@@ -130,7 +130,7 @@ class StatusCommandTests(unittest.TestCase):
     def test_format_status_full(self):
         text = _format_status(
             {
-                "tenants": {"groups": 5, "users": 3, "meta": 1, "other": 0},
+                "tenants": {"groups": 5, "users": 3, "other": 0},
                 "active_operations": 2,
                 "latency": {
                     "count": 12,
@@ -169,7 +169,7 @@ class StatusCommandTests(unittest.TestCase):
             },
             health_center=_HEALTH_CENTER,
         )
-        # 元租户（后台设施）不计入会话总数：5+3=8，不含 meta 的 1
+        # 会话租户总数 = 群 + 私聊 + 其他（nb2-meta 元租户已删）：5+3+0=8
         self.assertIn("🔴 临界", text)
         self.assertIn("1 个请求排队中", text)
         self.assertIn("5 群 / 3 私聊（共 8 个会话租户）", text)
@@ -183,7 +183,7 @@ class StatusCommandTests(unittest.TestCase):
     def test_format_status_no_latency_samples(self):
         text = _format_status(
             {
-                "tenants": {"groups": 0, "users": 0, "meta": 0, "other": 0},
+                "tenants": {"groups": 0, "users": 0, "other": 0},
                 "active_operations": 0,
                 "latency": {"count": 0},
                 "gates": [{"name": "runtime", "max_concurrent": 8, "active": 0, "waiting": 0}],
@@ -199,7 +199,7 @@ class StatusCommandTests(unittest.TestCase):
         async def run():
             host = RuntimeHost()
             host.get_system_status = lambda: {
-                "tenants": {"groups": 1, "users": 0, "meta": 1, "other": 0},
+                "tenants": {"groups": 1, "users": 0, "other": 0},
                 "active_operations": 0,
                 "latency": {"count": 0},
             }
@@ -219,7 +219,7 @@ class StatusCommandTests(unittest.TestCase):
     def test_format_status_with_all_extras(self):
         text = _format_status(
             {
-                "tenants": {"groups": 2, "users": 1, "meta": 1, "other": 0},
+                "tenants": {"groups": 2, "users": 1, "other": 0},
                 "active_operations": 0,
                 "latency": {"count": 0},
                 "gates": [],
@@ -246,7 +246,7 @@ class StatusCommandTests(unittest.TestCase):
     def test_format_status_minimal_dict_skips_new_lines(self):
         text = _format_status(
             {
-                "tenants": {"groups": 0, "users": 0, "meta": 0, "other": 0},
+                "tenants": {"groups": 0, "users": 0, "other": 0},
                 "active_operations": 0,
                 "latency": {"count": 0},
                 "gates": [],
