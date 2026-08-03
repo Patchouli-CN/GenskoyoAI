@@ -364,10 +364,9 @@ class ToolRobustnessTests(unittest.TestCase):
 
         registry1.register(custom, name="test_iso_tool")
 
-        # 不跨实例泄漏；unregister 真实生效
+        # 不跨实例泄漏（unregister 已删：无生产调用方，注销能力移除）
         self.assertIsNone(registry2.get("test_iso_tool"))
-        self.assertTrue(registry1.unregister("test_iso_tool"))
-        self.assertIsNone(registry1.get("test_iso_tool"))
+        self.assertIsNotNone(registry1.get("test_iso_tool"))
 
 class EventRobustnessTests(unittest.TestCase):
     """事件层：请求 id 全量 uuid、flush_critical 不被普通事件截断。"""
