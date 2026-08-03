@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from ...background import BackgroundManager, TaskPriority
+from ...background.types import TaskResult
 from ...utils.logger import logger
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class SaveCoordinator:
         self._last_saved_content_hash: str = ""  # 用内容哈希去重
         self._save_pending = False
         self._last_saved_turn = 0
+        self._dirty = False  # 保存在途期间又有新内容：完成后补存最新（05#6）
 
         # 后台管理器引用
         self._background_manager: BackgroundManager | None = None
@@ -44,6 +46,7 @@ class SaveCoordinator:
 
     def set_background_manager(self, manager: BackgroundManager) -> None:
         self._background_manager = manager
+        manager.on_complete(self._on_save_task_complete)
 
     def set_shutting_down(self, value: bool) -> None:
         self._shutting_down = value
@@ -57,6 +60,7 @@ class SaveCoordinator:
         self._save_pending = False
         self._last_saved_turn = 0
         self._last_saved_content_hash = ""
+        self._dirty = False
 
     def _get_content_hash(self, working_memory: WorkingMemoryManager) -> str:
         """计算工作记忆内容的简单哈希"""
@@ -103,9 +107,35 @@ class SaveCoordinator:
         self._last_saved_turn = len(working_memory) // 2
         self._last_saved_content_hash = self._get_content_hash(working_memory)
 
-    def mark_saved(self) -> None:
-        """标记保存完成"""
+    def mark_saved(self, *, success: bool = True) -> None:
+        """标记保存结束。success=False 时回滚去重状态（05#13）——否则保存/提交失败后
+        同一轮后续保存被 should_save 永久跳过。"""
         self._save_pending = False
+        if not success:
+            self._last_saved_turn = 0
+            self._last_saved_content_hash = ""
+
+    async def _on_save_task_complete(self, result: TaskResult) -> None:
+        """后台保存任务完成回调：失败回滚去重状态；保存期间又有新内容则补存最新。
+
+        （05#6：同会话不再并发双任务/旧快照回退——在途时置脏，完成后补存最新。）
+        """
+        operation = result.result.get("operation") if isinstance(result.result, dict) else None
+        if operation not in {"save_messages", "save_session"}:
+            return
+        if not result.success:
+            self.mark_saved(success=False)
+            logger.warning(
+                f"后台保存失败，去重状态已回滚（可重试）{self._log_suffix}: {result.error}"
+            )
+            return
+        self._save_pending = False
+        if self._dirty:
+            self._dirty = False
+            session = self._session_manager.get_current_session()
+            if session is not None:
+                working_memory = self._session_manager.get_working_memory(session.session_id)
+                asyncio.create_task(self.save_async(working_memory))
 
     async def start_background_manager(self) -> None:
         """启动后台管理器"""
@@ -134,6 +164,11 @@ class SaveCoordinator:
         if not self.should_save(working_memory, force=force):
             return False
 
+        if self._save_pending:
+            # 已有保存任务在途：置脏标记，由完成回调补存最新（05#6，防旧快照回退）
+            self._dirty = True
+            return False
+
         current_session = self._session_manager.get_current_session()
         if current_session is None:
             return False
@@ -145,7 +180,7 @@ class SaveCoordinator:
         await self.start_background_manager()
 
         if self._background_manager is None:
-            self.mark_saved()
+            self.mark_saved(success=False)
             return False
 
         messages = working_memory.get_context()
@@ -162,7 +197,7 @@ class SaveCoordinator:
         )
 
         if not submitted:
-            self.mark_saved()
+            self.mark_saved(success=False)
             logger.warning("保存任务提交失败")
             return False
 
@@ -182,6 +217,7 @@ class SaveCoordinator:
             return False
 
         self.mark_saving(working_memory)
+        success = False
         try:
             success = await self._session_manager.save_working_memory_async(
                 current_session.session_id
@@ -193,4 +229,4 @@ class SaveCoordinator:
                 )
             return success
         finally:
-            self.mark_saved()
+            self.mark_saved(success=success)

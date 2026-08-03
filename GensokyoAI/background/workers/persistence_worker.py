@@ -49,6 +49,7 @@ class PersistenceWorker(BaseWorker):
                     task_id=task.id,
                     success=False,
                     error="timeout",
+                    result={"operation": data.operation},  # 失败也带操作名，供协调器识别
                     duration_ms=duration_ms,
                 )
 
@@ -68,5 +69,6 @@ class PersistenceWorker(BaseWorker):
                 task_id=task.id,
                 success=False,
                 error=str(e),
+                result={"operation": data.operation},  # 失败也带操作名，供协调器识别
                 duration_ms=duration_ms,
             )
