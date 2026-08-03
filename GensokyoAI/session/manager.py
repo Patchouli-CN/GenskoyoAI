@@ -45,17 +45,17 @@ class SessionManager:
                 self._working_memories[sess.session_id] = wm
         logger.info(f"加载了 {len(self._sessions)} 个历史会话")
 
-    def create_session(self) -> SessionContext:
-        """创建新会话"""
+    async def create_session(self) -> SessionContext:
+        """创建新会话（异步落盘，不阻塞事件循环）"""
         session = SessionContext(character_id=self.character_id)
         self._sessions[session.session_id] = session
         self._working_memories[session.session_id] = WorkingMemoryManager(
             max_turns=self._working_max_turns
         )
         self._current_session_id = session.session_id
-        self._persistence.save_session(session)
+        await self._persistence.save_session_async(session)
         # 保存空消息列表
-        self._persistence.save_messages(session.session_id, [])
+        await self._persistence.async_save_message(session.session_id, [])
         logger.info(f"创建会话: {session.session_id}")
         return session
 
@@ -203,13 +203,13 @@ class SessionManager:
         logger.trace(f"异步替换会话消息: {session_id}, {len(normalized_messages)} 条")
         return True
 
-    def delete_session(self, session_id: str) -> bool:
-        """删除会话"""
+    async def delete_session(self, session_id: str) -> bool:
+        """删除会话（异步落盘，不阻塞事件循环）"""
         if session_id in self._sessions:
             del self._sessions[session_id]
             if session_id in self._working_memories:
                 del self._working_memories[session_id]
-            self._persistence.delete_session(session_id)
+            await self._persistence.delete_session_async(session_id)
             if self._current_session_id == session_id:
                 self._current_session_id = None
             return True

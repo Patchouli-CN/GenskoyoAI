@@ -208,11 +208,11 @@ class SessionScopedResetTests(unittest.TestCase):
     def test_builder_and_handler_rebuilt_on_session_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
             agent = self._agent(tmp)
-            agent.create_session()
+            asyncio.run(agent.create_session())
             builder1 = agent.message_builder
             handler1 = agent.response_handler
 
-            agent.create_session()
+            asyncio.run(agent.create_session())
 
             self.assertIsNot(agent.message_builder, builder1)
             self.assertIsNot(agent.response_handler, handler1)
@@ -223,12 +223,12 @@ class SessionScopedResetTests(unittest.TestCase):
         async def scenario():
             with tempfile.TemporaryDirectory() as tmp:
                 agent = self._agent(tmp)
-                agent.create_session()
+                await agent.create_session()
                 await agent.start()
                 planner = agent._action_planner
                 think_engine = agent._think_engine
 
-                agent.create_session()
+                await agent.create_session()
                 wm2 = agent.working_memory
                 sm2 = agent.semantic_memory
 
@@ -246,7 +246,7 @@ class SessionScopedResetTests(unittest.TestCase):
     def test_replace_messages_reuses_working_memory_instance(self):
         with tempfile.TemporaryDirectory() as tmp:
             agent = self._agent(tmp)
-            session = agent.create_session()
+            session = asyncio.run(agent.create_session())
             wm = agent.working_memory
 
             ok = agent.session_manager.replace_messages(

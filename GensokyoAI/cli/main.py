@@ -148,7 +148,7 @@ async def main():
             return
     elif args.new_session:
         # --new-session 强制创建新会话，不复用
-        session = agent.create_session()
+        session = await agent.create_session()
         console.print(f"[green]✓ 已创建新会话: {session.session_id[:8]}...[/]")
     else:
         # 无参数：尝试恢复最近会话，否则创建新会话
@@ -160,7 +160,7 @@ async def main():
                 f"[green]✓ 已恢复历史会话: {latest.session_id[:8]}... ({latest.total_turns} 轮)[/]"
             )
         else:
-            session = agent.create_session()  # 👈 内部会设置
+            session = await agent.create_session()  # 👈 内部会设置
             console.print(f"[green]✓ 新会话已就绪: {session.session_id[:8]}...[/]")
 
     # 构建并运行控制台后端

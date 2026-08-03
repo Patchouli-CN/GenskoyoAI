@@ -658,8 +658,8 @@ class Agent:
             # 情绪是会话级状态：切会话回到角色卡基线，不把旧会话的愤怒/羞耻带入新对话
             self._think_engine.emotion_state.reset()
 
-    def create_session(self) -> SessionContext:
-        session = self.session_manager.create_session()
+    async def create_session(self) -> SessionContext:
+        session = await self.session_manager.create_session()
         self._reset_session_scoped_state()
         self.scene_manager.reset_for_session(None)
         self.event_bus.publish(
@@ -765,7 +765,7 @@ class Agent:
         self.scene_manager.reset_for_session(resolved)
         if session is not None and resolved and resolved != session_scene_id:
             session.metadata["current_scene_id"] = resolved
-            self.session_manager.persistence.save_session(session)
+            await self.session_manager.persistence.save_session_async(session)
 
     async def _build_tools(self) -> ToolBuildResult:
         """通过 ModelRegistryService + ToolBuildService 构建本轮工具 schema 与 instructions。"""

@@ -170,7 +170,7 @@ def test_runtime_message_operation_is_persisted_and_replayed() -> None:
             root = Path(temp_dir)
             storage_root = root / "tenant"
             manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
-            session = manager.create_session()
+            session = await manager.create_session()
             service = RuntimeService(
                 root,
                 tenant_key=("alice", "agent-1"),
@@ -238,7 +238,7 @@ def test_timeout_without_assistant_records_failed_not_succeeded() -> None:
             root = Path(temp_dir)
             storage_root = root / "tenant"
             manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
-            session = manager.create_session()
+            session = await manager.create_session()
             service = RuntimeService(
                 root, tenant_key=("alice", "agent-1"), storage_root=storage_root
             )
@@ -288,7 +288,7 @@ def test_runtime_message_operation_records_provider_failure() -> None:
             root = Path(temp_dir)
             storage_root = root / "tenant"
             manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
-            session = manager.create_session()
+            session = await manager.create_session()
             service = RuntimeService(
                 root,
                 tenant_key=("alice", "agent-1"),
@@ -334,7 +334,7 @@ def test_runtime_stream_cancellation_records_terminal_operation() -> None:
             root = Path(temp_dir)
             storage_root = root / "tenant"
             manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
-            session = manager.create_session()
+            session = await manager.create_session()
             service = RuntimeService(
                 root,
                 tenant_key=("alice", "agent-1"),
@@ -390,7 +390,7 @@ def test_idempotent_retry_precedes_stale_revision_check() -> None:
     async def run() -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = SessionManager(SessionConfig(save_path=Path(temp_dir)), "reimu")
-            session = manager.create_session()
+            session = await manager.create_session()
             manager.replace_messages(
                 session.session_id,
                 [

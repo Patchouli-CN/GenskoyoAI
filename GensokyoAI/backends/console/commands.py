@@ -38,7 +38,7 @@ async def cmd_back(ctx: CommandContext) -> CommandResult:
 async def cmd_new(ctx: CommandContext) -> CommandResult:
     """创建新会话"""
     backend: ConsoleAdapter = ctx.backend_inst
-    session = ctx.agent_inst.create_session()
+    session = await ctx.agent_inst.create_session()
     backend._prompt_context.clear()
     session_id_short = format_session_id(session.session_id)
 
@@ -280,12 +280,12 @@ async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
 _ALLOWED_HISTORY_ROLES = {"system", "user", "assistant", "tool"}
 
 
-def _current_session_and_messages(ctx: CommandContext) -> tuple[Any, str, list[dict[str, Any]]]:
+async def _current_session_and_messages(ctx: CommandContext) -> tuple[Any, str, list[dict[str, Any]]]:
     manager = ctx.agent_inst.session_manager
     session = manager.get_current_session()
     if session is None:
         raise ValueError("当前没有活动会话")
-    messages = manager.persistence.load_messages(session.session_id)
+    messages = await manager.persistence.load_messages_async(session.session_id)
     return session, session.session_id, [dict(message) for message in messages]
 
 
@@ -309,12 +309,16 @@ def _normalize_history_messages(messages: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _replace_current_session_messages(ctx: CommandContext, messages: list[dict[str, Any]]) -> None:
+async def _replace_current_session_messages(
+    ctx: CommandContext, messages: list[dict[str, Any]]
+) -> None:
     manager = ctx.agent_inst.session_manager
     session = manager.get_current_session()
     if session is None:
         raise ValueError("当前没有活动会话")
-    if not manager.replace_messages(session.session_id, _normalize_history_messages(messages)):
+    if not await manager.replace_messages_async(
+        session.session_id, _normalize_history_messages(messages)
+    ):
         raise ValueError(f"会话不存在: {session.session_id}")
 
 
@@ -339,7 +343,7 @@ async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
     action = parts[0].lower() if parts else "show"
     args = parts[1:]
 
-    session, session_id, messages = _current_session_and_messages(ctx)
+    session, session_id, messages = await _current_session_and_messages(ctx)
 
     if action in {"show", "list", "view"}:
         limit = int(args[0]) if args else 20
@@ -368,7 +372,7 @@ async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
         path = Path(args[0]).expanduser()
         data = json.loads(path.read_text(encoding="utf-8"))
         normalized = _normalize_history_messages(data)
-        _replace_current_session_messages(ctx, normalized)
+        await _replace_current_session_messages(ctx, normalized)
         backend._show_history_messages_panel(normalized, session=session, limit=20)
         return CommandResult.success("history", f"已从 {path} 导入并替换 {len(normalized)} 条消息")
 
@@ -379,7 +383,7 @@ async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
         if index < 0 or index >= len(messages):
             raise ValueError("消息索引超出范围")
         removed = messages.pop(index)
-        _replace_current_session_messages(ctx, messages)
+        await _replace_current_session_messages(ctx, messages)
         backend._show_history_messages_panel(messages, session=session, limit=20)
         return CommandResult.success("history", f"已删除 #{index} {removed.get('role', '?')} 消息")
 
@@ -394,7 +398,7 @@ async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
         if index < 0 or index > len(messages):
             raise ValueError("插入索引超出范围")
         messages.insert(index, {"role": role, "content": insert_content})
-        _replace_current_session_messages(ctx, messages)
+        await _replace_current_session_messages(ctx, messages)
         backend._show_history_messages_panel(messages, session=session, limit=20)
         return CommandResult.success("history", f"已在 #{index} 插入 {role} 消息")
 
@@ -414,9 +418,11 @@ async def cmd_history(ctx: CommandContext, cmd=None) -> CommandResult:
         user_content = messages[user_index].get("content")
         if not isinstance(user_content, str) or not user_content:
             raise ValueError("目标 user 消息内容为空，无法重生成")
-        _replace_current_session_messages(ctx, messages[:user_index])
+        await _replace_current_session_messages(ctx, messages[:user_index])
         response = await ctx.agent_inst.send(user_content, backend._build_system_contexts())
-        new_messages = ctx.agent_inst.session_manager.persistence.load_messages(session_id)
+        new_messages = await ctx.agent_inst.session_manager.persistence.load_messages_async(
+            session_id
+        )
         response_content = response.content if response else ""
         content = response_content if isinstance(response_content, str) else str(response_content)
         backend._show_regenerated_message(content)

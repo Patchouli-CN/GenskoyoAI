@@ -472,7 +472,7 @@ class GensokyoWorld:
         )
         resumed = bool(resume_session_id) and agent.resume_session(resume_session_id)
         if not resumed:
-            agent.create_session()
+            await agent.create_session()
         await agent.start()
         brief = ActorBrief(
             actor_id=actor_cfg.id,
@@ -735,8 +735,14 @@ class GensokyoWorld:
             }
         content = "".join(content_parts)
 
-        # 回合中演员可能用 scene_switch 移动——以其最终所在场景落剧本
+        # 回合中演员可能用 scene_switch 移动——以其最终所在场景落剧本。
+        # 舞台联动（_on_scene_switched）经事件工作器异步落位，正文记录时可能
+        # 还没执行；演员自己的 SceneManager 由 scene_switch 同步更新，回合内
+        # 自移场景以此为准（世界外力移动舞台已同步，仍以舞台为准）。
         final_scene = self._stage.scene_of(actor_id) or scene_id
+        agent_scene = agent.scene_manager.current_scene_id
+        if agent_scene and agent_scene != scene_id:
+            final_scene = agent_scene
         if content.strip():
             self._transcript.add(
                 scene_id=final_scene,

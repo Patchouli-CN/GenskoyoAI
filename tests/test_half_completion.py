@@ -87,7 +87,7 @@ class HalfCompletionTests(unittest.IsolatedAsyncioTestCase):
         _InterruptProvider.reset()
         with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
             agent = Agent(config=_make_config(tmp))
-        agent.create_session()
+        await agent.create_session()
         await agent.start()
         return agent
 
@@ -155,7 +155,7 @@ class HalfCompletionTests(unittest.IsolatedAsyncioTestCase):
                 await self._drain()
                 self.assertIsNotNone(agent._half_completion)
 
-                agent.create_session()
+                await agent.create_session()
                 self.assertIsNone(agent._half_completion)
             finally:
                 await agent.shutdown()

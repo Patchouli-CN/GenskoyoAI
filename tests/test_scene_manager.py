@@ -368,7 +368,7 @@ class SceneAgentIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
             self.agent = Agent(config=config)
-        self.agent.create_session()
+        await self.agent.create_session()
         await self.agent.event_bus.start()
         await self.agent.scene_manager.load_library()
         await self.agent._sync_scene_for_current_session()
@@ -484,7 +484,7 @@ class SceneRuntimeRpcTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
             self.agent = Agent(config=config)
-        self.agent.create_session()
+        await self.agent.create_session()
         await self.agent.event_bus.start()
         await self.agent.scene_manager.load_library()
         await self.agent._sync_scene_for_current_session()

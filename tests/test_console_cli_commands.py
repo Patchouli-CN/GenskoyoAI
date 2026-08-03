@@ -41,7 +41,10 @@ class _FakeSessionManager:
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "你好呀"},
         ]
-        self.persistence = SimpleNamespace(load_messages=self.load_messages)
+        self.persistence = SimpleNamespace(
+            load_messages=self.load_messages,
+            load_messages_async=self.load_messages_async,
+        )
 
     def get_current_session(self):
         return self.session
@@ -50,11 +53,17 @@ class _FakeSessionManager:
         assert session_id == self.session.session_id
         return [dict(message) for message in self.messages]
 
+    async def load_messages_async(self, session_id):
+        return self.load_messages(session_id)
+
     def replace_messages(self, session_id, messages):
         assert session_id == self.session.session_id
         self.messages = [dict(message) for message in messages]
         self.session.total_turns = len(self.messages) // 2
         return True
+
+    async def replace_messages_async(self, session_id, messages):
+        return self.replace_messages(session_id, messages)
 
 
 class _FakeAgent:

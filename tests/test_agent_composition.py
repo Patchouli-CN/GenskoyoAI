@@ -1,5 +1,6 @@
 """Agent 装配收敛回归测试。"""
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,11 +80,11 @@ class AgentCompositionTests(unittest.TestCase):
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
                 agent = Agent(config=self._make_config(tmp))
 
-            first_session = agent.create_session()
+            first_session = asyncio.run(agent.create_session())
             first_working_memory = agent.working_memory
             first_semantic_memory = agent.semantic_memory
 
-            second_session = agent.create_session()
+            second_session = asyncio.run(agent.create_session())
 
             self.assertNotEqual(first_session.session_id, second_session.session_id)
             self.assertIsInstance(first_working_memory, WorkingMemoryManager)
@@ -98,7 +99,7 @@ class AgentCompositionTests(unittest.TestCase):
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
                 agent = Agent(config=self._make_config(tmp))
 
-            session = agent.create_session()
+            session = asyncio.run(agent.create_session())
             semantic_memory = agent.semantic_memory
             agent._half_completion = "没说完的半截"
 
@@ -108,7 +109,7 @@ class AgentCompositionTests(unittest.TestCase):
             self.assertEqual(agent._half_completion, "没说完的半截")
 
             # 真正切换会话：照旧走重置路径
-            agent.create_session()
+            asyncio.run(agent.create_session())
             self.assertTrue(agent.resume_session(session.session_id))
             self.assertIsNone(agent._half_completion)
             self.assertIsNot(agent.semantic_memory, semantic_memory)
@@ -118,7 +119,7 @@ class AgentCompositionTests(unittest.TestCase):
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
                 agent = Agent(config=self._make_config(tmp))
 
-            session = agent.create_session()
+            session = asyncio.run(agent.create_session())
             self.assertIsNotNone(session)
 
             builder = agent.message_builder
@@ -208,7 +209,7 @@ class AgentCompositionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
                 agent = Agent(config=self._make_config(tmp))
-            session = agent.create_session()
+            session = asyncio.run(agent.create_session())
 
             memory = agent.semantic_memory
 
@@ -229,9 +230,9 @@ class AgentCompositionTests(unittest.TestCase):
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
                 agent = Agent(config=config, dependencies=dependencies)
 
-            agent.create_session()
+            asyncio.run(agent.create_session())
             first_memory = agent.semantic_memory
-            agent.create_session()
+            asyncio.run(agent.create_session())
             second_memory = agent.semantic_memory
 
             self.assertIsNot(first_memory, second_memory)

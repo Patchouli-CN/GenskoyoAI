@@ -91,7 +91,7 @@ class WorldTurnBridgeTests(unittest.IsolatedAsyncioTestCase):
         _ScriptedProvider.reset(script)
         with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
             agent = Agent(config=_make_config(tmp))
-        agent.create_session()
+        await agent.create_session()
         await agent.start()
         return agent
 

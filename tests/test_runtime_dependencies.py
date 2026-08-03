@@ -840,7 +840,7 @@ class FakeRuntimeSessionManager:
     async def replace_messages_async(self, session_id, messages):
         return self.replace_messages(session_id, messages)
 
-    def delete_session(self, session_id):
+    async def delete_session(self, session_id):
         if session_id not in self.sessions:
             return False
         self.deleted.append(session_id)

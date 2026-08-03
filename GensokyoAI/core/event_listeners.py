@@ -191,7 +191,7 @@ class SceneServiceListeners:
             self.event_bus.respond(event, {"ok": False, "error": str(e)})
             return
 
-        self._persist_current_scene(scene.id)
+        await self._persist_current_scene(scene.id)
         self.event_bus.respond(event, {"ok": True, "scene_id": scene.id, "name": scene.name})
 
         # 广播场景切换，供前端提示当前场景；from_scene_id/actor_id 供
@@ -258,16 +258,16 @@ class SceneServiceListeners:
         manager.reset_for_session(resolved)
         # 若解析出的场景与会话记录不一致（例如首次落地默认场景），写回会话
         if resolved and resolved != session_scene_id:
-            self._persist_current_scene(resolved)
+            await self._persist_current_scene(resolved)
 
-    def _persist_current_scene(self, scene_id: str) -> None:
+    async def _persist_current_scene(self, scene_id: str) -> None:
         """把当前场景 id 写入当前会话 metadata 并落盘。"""
         try:
             session = self.agent.session_manager.get_current_session()
             if session is None:
                 return
             session.metadata["current_scene_id"] = scene_id
-            self.agent.session_manager.persistence.save_session(session)
+            await self.agent.session_manager.persistence.save_session_async(session)
         except Exception as e:
             logger.error(f"场景服务: 持久化当前场景失败 - {e}")
 

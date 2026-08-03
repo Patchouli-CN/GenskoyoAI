@@ -967,7 +967,7 @@ class RuntimeService(WorldOpsMixin):
                         recoverable=True,
                     )
             elif new_session or not agent.session_manager.list_sessions():
-                agent.create_session()
+                await agent.create_session()
             else:
                 sessions = agent.session_manager.list_sessions()
                 latest = max(sessions, key=lambda item: item.last_active)
@@ -1161,7 +1161,7 @@ class RuntimeService(WorldOpsMixin):
     async def create_session(self) -> dict[str, Any]:
         agent = self._require_agent()
         async with self._lock:
-            session = agent.create_session()
+            session = await agent.create_session()
             return self._session_payload(session)
 
     async def list_sessions(
@@ -1219,7 +1219,7 @@ class RuntimeService(WorldOpsMixin):
             self._assert_session_revision(agent.session_manager, session_id, expected_revision)
             current = agent.session_manager.get_current_session()
             was_current = bool(current and current.session_id == session_id)
-            deleted = agent.session_manager.delete_session(session_id)
+            deleted = await agent.session_manager.delete_session(session_id)
             if not deleted:
                 raise ValueError(f"Session does not exist: {session_id}")
             next_current = agent.session_manager.get_current_session()
@@ -1304,7 +1304,7 @@ class RuntimeService(WorldOpsMixin):
             session.metadata["title"] = normalized_title
             session.revision += 1
             session.touch()
-            manager.persistence.save_session(session)
+            await manager.persistence.save_session_async(session)
             return self._session_payload(session)
 
     async def session_messages(
@@ -1319,7 +1319,7 @@ class RuntimeService(WorldOpsMixin):
         session, _ = self._resolve_target_session(manager, session_id, "read messages")
 
         limit = self._validate_page_limit(limit, maximum=500)
-        messages = manager.persistence.load_messages(session.session_id)
+        messages = await manager.persistence.load_messages_async(session.session_id)
         start = self._cursor_start(
             [str(message.get("message_id", "")) for message in messages],
             cursor,
@@ -1351,10 +1351,10 @@ class RuntimeService(WorldOpsMixin):
         ]
         async with self._lock:
             self._assert_session_revision(manager, session.session_id, expected_revision)
-            if not manager.replace_messages(session.session_id, normalized_messages):
+            if not await manager.replace_messages_async(session.session_id, normalized_messages):
                 raise ValueError(f"Session does not exist: {session.session_id}")
             updated_session = manager.get_session(session.session_id) or session
-            updated_messages = manager.persistence.load_messages(session.session_id)
+            updated_messages = await manager.persistence.load_messages_async(session.session_id)
             return {
                 "replaced": True,
                 **self._session_messages_payload(manager, updated_session, updated_messages),
@@ -1383,7 +1383,7 @@ class RuntimeService(WorldOpsMixin):
             target_session_id = session.session_id
             self._assert_session_revision(manager, target_session_id, expected_revision)
 
-            original_messages = manager.persistence.load_messages(target_session_id)
+            original_messages = await manager.persistence.load_messages_async(target_session_id)
             if message_index >= len(original_messages):
                 raise ValueError("Message index is out of range")
 
@@ -1399,7 +1399,9 @@ class RuntimeService(WorldOpsMixin):
             previous_session_id = current.session_id if current else None
             async with self._lock:
                 self._activate_session_for_regeneration(agent, target_session_id)
-                manager.replace_messages(target_session_id, original_messages[:user_index])
+                await manager.replace_messages_async(
+                    target_session_id, original_messages[:user_index]
+                )
 
             try:
                 response = await agent.send(user_content, system_contexts)
@@ -1409,7 +1411,7 @@ class RuntimeService(WorldOpsMixin):
                     self._activate_session_for_regeneration(agent, previous_session_id)
 
             updated_session = manager.get_session(target_session_id) or session
-            updated_messages = manager.persistence.load_messages(target_session_id)
+            updated_messages = await manager.persistence.load_messages_async(target_session_id)
             return {
                 "regenerated": True,
                 "from_index": message_index,
