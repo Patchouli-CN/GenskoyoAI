@@ -1105,16 +1105,34 @@ class RuntimeService(WorldOpsMixin):
         principal = current_principal()
         service = self._require_tenant_service(principal.user_id, agent_id)
         if service._media_store is None:
-            raise RuntimeError("Runtime media storage is unavailable")
+            raise RpcError(
+                "Runtime media storage is unavailable",
+                code="media.storage_unavailable",
+                user_message="媒体存储不可用。",
+                recoverable=True,
+            )
         return service._media_store.get(media_id)
 
-    async def media_list(self) -> list[dict[str, Any]]:
-        if self._media_store is None:
-            return []
-        return self._media_store.list()
+    def _resolve_media_service(self, agent_id: str | None) -> RuntimeService:
+        """媒体 RPC 的服务定位：带 agent_id 走租户存储，否则落 root（单租户模式）。
 
-    async def media_delete(self, media_id: str) -> dict[str, Any]:
-        if self._media_store is None or not self._media_store.delete(media_id):
+        旧 media.list/media.delete 只碰 root 自身 _media_store，多租户下
+        拿不到租户媒体（03#10）。
+        """
+        if agent_id:
+            principal = current_principal()
+            return self._require_tenant_service(principal.user_id, agent_id)
+        return self
+
+    async def media_list(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        service = self._resolve_media_service(agent_id)
+        if service._media_store is None:
+            return []
+        return service._media_store.list()
+
+    async def media_delete(self, media_id: str, agent_id: str | None = None) -> dict[str, Any]:
+        service = self._resolve_media_service(agent_id)
+        if service._media_store is None or not service._media_store.delete(media_id):
             raise ValueError(f"Runtime media does not exist: {media_id}")
         return {"deleted": True, "media_id": media_id}
 

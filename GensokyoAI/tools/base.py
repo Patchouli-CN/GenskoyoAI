@@ -100,6 +100,41 @@ class ToolDefinition(Struct):
 _TOOL_REGISTRY: dict[str, ToolDefinition] = {}
 
 
+def _parse_docstring_args(docstring: str) -> dict[str, str]:
+    """从 docstring 的 `Args:` 段解析「参数名: 描述」映射（06#7）。
+
+    只认缩进的参数条目；遇到非缩进行（Returns:/Raises:/Example: 等新 section
+    标题）即结束。多行描述追加到上一参数。
+    """
+    if not docstring:
+        return {}
+    args: dict[str, str] = {}
+    in_args = False
+    last_name: str | None = None
+    for raw_line in docstring.splitlines():
+        if raw_line.strip() == "Args:":
+            in_args = True
+            continue
+        if not in_args:
+            continue
+        if raw_line.strip() and not raw_line[:1].isspace():
+            # 新 section 标题（Returns: 等），Args 段结束
+            break
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if ":" in stripped:
+            name, _, desc = stripped.partition(":")
+            name = name.strip()
+            if name:
+                args[name] = desc.strip()
+                last_name = name
+        elif last_name is not None:
+            # 缩进续行：追加到上一参数描述
+            args[last_name] = f"{args[last_name]} {stripped}".strip()
+    return args
+
+
 def build_tool_definition(
     func: Callable,
     *,
@@ -119,6 +154,8 @@ def build_tool_definition(
     sig = inspect.signature(func)
     type_hints = get_type_hints(func)
     parameters = {}
+    # docstring Args 段 → 参数名→描述（06#7）：模型拿到的不再是空 description
+    docstring_args = _parse_docstring_args(func.__doc__ or "")
 
     # 映射 Python 类型到 JSON Schema
     type_map = {
@@ -154,6 +191,7 @@ def build_tool_definition(
         parameters[param_name] = ToolParameter(
             name=param_name,
             type=tool_type,
+            description=docstring_args.get(param_name, ""),
             required=param.default is inspect.Parameter.empty,
             default=None if param.default is inspect.Parameter.empty else param.default,
         )

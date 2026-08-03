@@ -295,6 +295,22 @@ class ToolTypeMappingTests(unittest.TestCase):
         self.assertEqual(by_name["maybe"], ToolParameterType.STRING)
         self.assertEqual(by_name["plain"], ToolParameterType.BOOLEAN)
 
+    def test_docstring_args_section_populates_param_descriptions(self):
+        """06#7：docstring Args 段解析成参数 description，模型不再拿到空描述。"""
+        from GensokyoAI.tools.base import build_tool_definition
+
+        def sample(days_delta: int = 0) -> str:
+            """获取指定日期的月相
+
+            Args:
+                days_delta: 相对于今天的偏移天数，0表示今天
+            """
+            return ""
+
+        definition = build_tool_definition(sample, name="sample", description="sample tool")
+        param = definition.parameters["days_delta"]
+        self.assertEqual(param.description, "相对于今天的偏移天数，0表示今天")
+
 
 class MoonPhaseTests(unittest.TestCase):
     """06#5：月相工具按真实朔望周期计算。"""

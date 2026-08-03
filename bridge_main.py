@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -67,6 +68,10 @@ async def run_bridge(root: Path) -> int:
                 return 0
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
+            if request_id is None:
+                # 整行 JSON 解析失败时连 id 都拿不到：尽量从原始行抠出 id，
+                # 让客户端能关联错误响应（01#13），抠不到才落 null。
+                request_id = _extract_request_id(line)
             await _write_response(
                 {
                     "id": request_id,
@@ -74,6 +79,23 @@ async def run_bridge(root: Path) -> int:
                     "error": _error_payload(exc),
                 }
             )
+
+
+_REQUEST_ID_PATTERN = re.compile(r'"id"\s*:\s*("(?:[^"\\]|\\.)*"|\d+)')
+
+
+def _extract_request_id(raw: str) -> Any:
+    """从原始请求行提取 id（JSON 整体解析失败时的兜底）。"""
+    match = _REQUEST_ID_PATTERN.search(raw)
+    if match is None:
+        return None
+    token = match.group(1)
+    if token.startswith('"'):
+        try:
+            return json.loads(token)
+        except ValueError:
+            return token
+    return int(token)
 
 
 def _error_payload(exc: Exception) -> dict[str, Any]:

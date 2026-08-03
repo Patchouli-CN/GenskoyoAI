@@ -106,6 +106,10 @@ class ConfigLoader(ConfigMerger):
 
     def _dict_to_config(self, data: dict[str, Any]) -> AppConfig:
         """字典转配置对象，并记录用户显式提供的字段。"""
+        # 每次构建配置从零开始记录 provided 字段：避免跨 load 用 id() 键累积泄漏、
+        # 以及旧配置被 GC 后 id 复用串扰（07#4）。merge 只读 override（最近一次
+        # 构建）的 provided 集，base（默认配置）的条目本就不被读。
+        self._provided_fields.clear()
         data = self._normalize_config_aliases(data)
         diagnostics = self._validator.validate_config_dict(data)
         self._validator.raise_for_errors(diagnostics)
@@ -146,7 +150,9 @@ class ConfigLoader(ConfigMerger):
             config.memory = MemoryConfig(**memory_obj_data)
             if isinstance(topic_generation_data, dict):
                 config.memory.topic_generation = TopicGenerationConfig(**topic_generation_data)
-            self._provided_fields[id(config.memory)] = set(memory_data.keys())
+            # 用清洗后的 memory_obj_data（已 pop 掉 removed episodic 键）记录 provided，
+            # 避免残留键进 provided 集、未来 merge 对已删字段 getattr 报错（07#15）
+            self._provided_fields[id(config.memory)] = set(memory_obj_data.keys())
             if isinstance(topic_generation_data, dict):
                 self._provided_fields[id(config.memory.topic_generation)] = set(
                     topic_generation_data.keys()

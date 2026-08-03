@@ -122,6 +122,12 @@ class ToolBuildService:
             if module and module not in allowed_modules:
                 disabled_reasons[tool_def.name] = "not_in_builtin_tools"
                 continue
+            if module is None and self._is_builtin_tool(tool_def):
+                # tool_builtin 包里的工具但未登记进 _MODULE_TOOL_PREFIXES：
+                # fail-closed（06#11），新增内置工具必须补模块映射才能被
+                # builtin_tools 白名单放行，不再静默绕过。
+                disabled_reasons[tool_def.name] = "builtin_tool_not_mapped"
+                continue
             if tool_def.name == "web_search" and not self._web_search_tool_enabled(context):
                 disabled_reasons[tool_def.name] = (
                     "web_search_disabled_or_provider_builtin_search_enabled"
@@ -177,6 +183,12 @@ class ToolBuildService:
             if tool_name in prefixes:
                 return module
         return None
+
+    @staticmethod
+    def _is_builtin_tool(tool_def: ToolDefinition) -> bool:
+        """是否为 tool_builtin 包内置工具（按函数源模块判定，而非全局注册表——后者
+        含 @tool 装饰的测试/自定义工具，会误伤）。"""
+        return (tool_def.func.__module__ or "").startswith("GensokyoAI.tools.tool_builtin")
 
     def _build_instructions(
         self,

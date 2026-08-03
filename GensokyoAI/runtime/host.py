@@ -175,13 +175,16 @@ class RuntimeHost:
         }
         if system_contexts:
             params["system_contexts"] = list(system_contexts)
-        try:
-            result = await self._call("agent.send_message", params)
-        except RuntimeRpcError as error:
-            if error.code != "session.revision_conflict":
-                raise
-            params["expected_revision"] = await self.fetch_revision(agent_id, session_id)
-            result = await self._call("agent.send_message", params)
+        # revision 冲突自动刷新重试（有界）：高并发下同一会话可能连续冲突，
+        # 只重试一次仍可能直接上抛（01#11）。刷新的是服务端最新 revision。
+        for attempt in range(3):
+            try:
+                result = await self._call("agent.send_message", params)
+                break
+            except RuntimeRpcError as error:
+                if error.code != "session.revision_conflict" or attempt == 2:
+                    raise
+                params["expected_revision"] = await self.fetch_revision(agent_id, session_id)
         content = str((result or {}).get("content") or "")
         new_revision = int(((result or {}).get("session") or {}).get("revision") or revision)
         return content, new_revision

@@ -535,7 +535,13 @@ class TopicAwareStore:
         candidates = self._get_candidates(content)
 
         if model_client and candidates:
-            scores = await self._score_topics(content, candidates, model_client)
+            try:
+                scores = await self._score_topics(content, candidates, model_client)
+            except Exception:
+                # LLM 打分失败：记忆已入 _memories 但 topic_id 尚未赋值，
+                # 回滚孤儿记忆，避免残留 topic_id="" 的可检索孤儿（05#9）
+                self._memories.pop(memory.id, None)
+                raise
 
             if scores:
                 best_id, best_score = max(scores.items(), key=lambda x: x[1])
@@ -749,6 +755,9 @@ class TopicAwareStore:
 
         for memory in memories:
             topic = topic_map.get(memory.topic_id)
+            if topic is None:
+                # 孤儿记忆（topic_id 无对应话题，历史残留/损坏）：不参与检索（05#9）
+                continue
             keyword_score, matched_by = self._keyword_memory_score(query_text, memory, topic)
             embedding_score = None
             if use_embedding:

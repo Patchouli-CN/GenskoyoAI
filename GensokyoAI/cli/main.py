@@ -16,7 +16,6 @@ from GensokyoAI.utils.request_utils import close_client_session
 
 # 灵梦，这是异变啊！
 # 灵梦：嗯？让我看看，这也不是没啥事吗？（喝茶）
-set_exechook()
 
 console = Console()
 
@@ -102,6 +101,8 @@ def find_character_file(name: str) -> Path:
 
 async def main():
     """主函数"""
+    # 异常钩子只在 CLI 真正运行时生效（01#8）：不再在 import 期改写进程级 sys.excepthook
+    set_exechook()
     args = parse_args()
 
     # 加载配置（未显式指定时：本地配置优先，首次启动从模板生成）
