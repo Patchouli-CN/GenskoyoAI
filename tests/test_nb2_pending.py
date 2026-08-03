@@ -57,6 +57,23 @@ class PendingChatQueueTests(unittest.TestCase):
         queue.finish("group:1")
         self.assertEqual(queue.pending_count("group:1"), 0)
 
+    def test_add_truncates_oldest_beyond_max_pending(self):
+        queue = PendingChatQueue(max_pending=3)
+        for mid in range(1, 6):
+            queue.add("group:1", _item(f"第{mid}条", mid=mid))
+        batch = queue.take_batch("group:1")
+        # 只保留最近 3 条，最老两条被丢（防刷屏无界堆积）
+        self.assertEqual([item.text for item in batch], ["第3条", "第4条", "第5条"])
+
+    def test_is_active_reflects_processing_slot(self):
+        queue = PendingChatQueue()
+        self.assertFalse(queue.is_active("group:1"))
+        queue.add("group:1", _item("A", mid=1))
+        self.assertTrue(queue.is_active("group:1"))
+        queue.take_batch("group:1")
+        queue.finish("group:1")
+        self.assertFalse(queue.is_active("group:1"))
+
 
 class MergeBatchTests(unittest.TestCase):
     def test_merge_joins_texts_and_dedups_contexts(self):

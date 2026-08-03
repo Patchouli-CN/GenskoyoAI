@@ -635,6 +635,11 @@ async def _fire_reminder(reminder: Reminder) -> None:
         return
     bot = next(iter(bots.values()))
     target_label = f"【{reminder.remind_name}】" if reminder.remind_name else "对方"
+    # 该会话正被用户消息处理中：本轮跳过（下个 tick 再投），避免与用户消息
+    # 并发生成同一会话（revision 乐观锁兜底但有额外开销，旧 CODE_INF 08#6）
+    if _pending.is_active(reminder.key):
+        logger.debug(f"[nb2] 提醒 {reminder.id} 目标会话处理中，下轮再投")
+        return
     contexts = [
         *_EXTRA_CONTEXTS,
         build_reminder_trigger_context(target_label, reminder.content),

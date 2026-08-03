@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Protocol
-
-from msgspec import Struct, field
 
 from .external_manager import (
     ExternalToolDefinition,
@@ -28,28 +27,39 @@ class McpTransport(Protocol):
     async def request(self, method: str, params: dict[str, Any] | None = None) -> Any: ...
 
 
-class McpSource(Struct):
-    """将 MCP server 暴露为 ExternalToolSource。"""
+class McpSource:
+    """将 MCP server 暴露为 ExternalToolSource。
 
-    source_id: str
-    transport: McpTransport
-    metadata: dict[str, Any] = field(default_factory=dict)
-    _initialized: bool = False
+    start() 幂等且加锁：list_tools/call_tool 的惰性 start 与外部并发 start
+    不会重复 initialize/start transport（旧 CODE_INF 06#4）。
+    """
 
-    def __post_init__(self) -> None:
-        self.source_id = normalize_external_name(self.source_id, kind="source_id")
+    def __init__(
+        self,
+        source_id: str,
+        transport: McpTransport,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.source_id = normalize_external_name(source_id, kind="source_id")
+        self.transport = transport
+        self.metadata = metadata or {}
+        self._initialized = False
+        self._start_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        await self.transport.start()
-        await self.transport.request(
-            "initialize",
-            {
-                "clientInfo": {"name": "GensokyoAI", "version": "p1-mcp-minimal"},
-                "protocolVersion": self.metadata.get("protocol_version", "2024-11-05"),
-                "capabilities": {},
-            },
-        )
-        self._initialized = True
+        async with self._start_lock:
+            if self._initialized:
+                return
+            await self.transport.start()
+            await self.transport.request(
+                "initialize",
+                {
+                    "clientInfo": {"name": "GensokyoAI", "version": "p1-mcp-minimal"},
+                    "protocolVersion": self.metadata.get("protocol_version", "2024-11-05"),
+                    "capabilities": {},
+                },
+            )
+            self._initialized = True
 
     async def stop(self) -> None:
         await self.transport.stop()

@@ -28,19 +28,31 @@ class PendingChat:
 
 
 class PendingChatQueue:
-    """按会话 key 的待发队列：有活跃处理时新消息并入下批。"""
+    """按会话 key 的待发队列：有活跃处理时新消息并入下批。
 
-    def __init__(self) -> None:
+    每 key 有容量上限（默认 50）：超限丢最老保最新，防刷屏无界堆积
+    （内存 + 单轮合并文本 token 双风险，旧 CODE_INF 02#7）。
+    """
+
+    def __init__(self, *, max_pending: int = 50) -> None:
         self._queues: dict[str, list[PendingChat]] = {}
         self._active: set[str] = set()
+        self._max_pending = max(1, max_pending)
 
     def add(self, key: str, item: PendingChat) -> bool:
         """入队；返回 True 表示调用方应成为处理者（此前该 key 无活跃处理）。"""
-        self._queues.setdefault(key, []).append(item)
+        queue = self._queues.setdefault(key, [])
+        queue.append(item)
+        if len(queue) > self._max_pending:
+            del queue[: len(queue) - self._max_pending]
         if key in self._active:
             return False
         self._active.add(key)
         return True
+
+    def is_active(self, key: str) -> bool:
+        """该 key 是否有活跃处理中（提醒等旁路据此避让，防与用户消息并发生成）。"""
+        return key in self._active
 
     def take_batch(self, key: str) -> list[PendingChat]:
         """取走当前全部待发（合并为一批）；队列为空返回空列表。"""

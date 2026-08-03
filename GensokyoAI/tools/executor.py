@@ -93,9 +93,8 @@ class ToolExecutor:
                 log_level="error",
             )
 
-        self._publish_tool_event("started", name, arguments)
-
         if is_external_tool_name(name):
+            self._publish_tool_event("started", name, arguments)
             return await self._execute_external(tool_call, name, arguments)
 
         tool_def = self._registry.get(name)
@@ -107,6 +106,9 @@ class ToolExecutor:
                 arguments,
                 legacy_prefix="调用出错啦",
             )
+
+        # started 事件在确认工具存在后发——不存在的工具名不再产生噪音 started
+        self._publish_tool_event("started", name, arguments)
 
         try:
             logger.trace(f"执行工具: {name}({arguments})")
