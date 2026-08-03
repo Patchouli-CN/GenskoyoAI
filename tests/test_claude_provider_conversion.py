@@ -86,6 +86,23 @@ class ClaudeProviderConversionTests(unittest.TestCase):
             },
         )
 
+    def test_empty_assistant_message_without_tool_calls_is_skipped(self):
+        """04#12：空 content 且无 tool_calls 的 assistant 消息跳过，不发 content='' 给 Anthropic。"""
+        messages = [
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "还在吗"},
+        ]
+
+        _system, claude_messages = ClaudeProvider._convert_messages_to_claude(messages)
+
+        self.assertNotIn(
+            {"role": "assistant", "content": ""}, claude_messages
+        )  # 退化 assistant 已被过滤
+        self.assertEqual(
+            [m["role"] for m in claude_messages], ["user", "user"]
+        )  # 剩余 user 消息保留
+
     def test_convert_response_preserves_tool_use_id_and_arguments(self):
         response = SimpleNamespace(
             model="claude-test",

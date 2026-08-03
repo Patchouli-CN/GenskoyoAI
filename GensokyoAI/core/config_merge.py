@@ -828,7 +828,7 @@ class ConfigMerger:
             initiative_max_tokens=choose(
                 "initiative_max_tokens",
                 override.initiative_max_tokens
-                if override.initiative_max_tokens != 100
+                if override.initiative_max_tokens != 0  # 当前默认 0；旧常量 100 已过期
                 else base.initiative_max_tokens,
             ),
         )

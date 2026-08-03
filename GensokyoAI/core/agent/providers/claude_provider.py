@@ -482,7 +482,11 @@ class ClaudeProvider(BaseProvider):
             flush_tool_results()
 
             if role == "assistant":
-                claude_messages.append(cls._convert_assistant_message({**msg, "content": content}))
+                converted = cls._convert_assistant_message({**msg, "content": content})
+                # 空 content 且无 tool_calls 的 assistant 消息是退化消息（Anthropic
+                # 会 400，CODE_INF 04#12）：跳过，不发给 API
+                if converted.get("content"):
+                    claude_messages.append(converted)
             elif role == "user":
                 claude_messages.append({"role": "user", "content": content})
             else:
