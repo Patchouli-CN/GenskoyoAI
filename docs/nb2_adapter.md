@@ -77,8 +77,8 @@ mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/local.env
 | `GSK_NB2_WATCHDOG_MAX_RESTARTS` | `5` | 24h 内自动重启上限，超限告警停手 |
 | `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` | `900` | 重启后等待回连的超时（秒），超时告警 |
 | `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` | `60` | WS 断开的回连宽限期（秒），NapCat 自己连上就不动 |
-| `GSK_NB2_BOT_QQ` | 空（首连 self_id 兜底） | 掉线守护快速登录的 QQ 号（`launcher-win10-user.bat -q <QQ号>`） |
-| `GSK_NB2_REMINDERS` | `true` | 到点提醒：角色经 `set_reminder` 工具接活，到点 @ 人用自己的口吻说出 |
+| `GSK_NB2_BOT_QQ` | 空（首连 self_id 兜底） | 掉线守护快速登录的 QQ 号（`launcher-win10-user.bat <QQ号>` 位置参数）；未配则拉起后走终端扫码登录 |
+| `GSK_NB2_REMINDERS` | `true` | 到点提醒：AttentionThings 判定后**代办登记**（不经工具调用），到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
 | `GSK_NB2_ATTENTION` | `true` | 注意力事务：候选消息经一次性 LLM 判定，待办直接代办登记 |
 
@@ -88,8 +88,17 @@ mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/local.env
 注意力事务是独立管线（`core/agent/attention.py`）：**每条消息都经一次性
 LLM 判定（脱稿不进会话）→ 命中待办直接代办**。`AttentionKind`
 （预筛 + 判定 prompt + 输出解析）可注册扩展，与具体事务零耦合；
-判定失败一律静默降级为普通回复。成本：每轮回复多一次短 JSON 判定调用
-（用户接受换取零漏判）。
+判定失败一律静默降级为普通回复。`inspect(only={...})` 可按场景只跑
+指定种类（如私聊不跑 reply_focus，省判定调用）。
+
+当前注册的种类（nb2）：
+
+| 种类 | 判定什么 | 命中后 |
+| --- | --- | --- |
+| `reminder` | 三态意图：请求提醒（附 ISO 绝对时间）/ 取消 / 无 | 代办登记/取消提醒（见下节） |
+| `reply_focus` | 本轮的**因果关系**：谁冲着 bot 来（提问/委托/等回应） | QQ 端回复 @ 焦点（真 at 段）；无焦点不 @ |
+
+成本：每条消息每种类多一次短 JSON 判定调用（用户接受换取零漏判）。
 
 > `/status` 的额度健康判定阈值不走 env——统一在 yaml `health:` 节
 > （`quota_warn_yuan` / `quota_crit_yuan`，框架 HealthCenter 消费，静态阈值
@@ -118,7 +127,9 @@ ThinkEngine 范式——没有 set_reminder 工具、没有正则解析，主模
 NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自动恢复：
 
 1. **触发**：`bot_offline` 事件立即触发；WS 断开则等
-   `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` 宽限期（NapCat 自己重连上就不动）。
+   `GSK_NB2_WATCHDOG_DISCONNECT_GRACE` 宽限期（NapCat 自己重连上就不动）；
+   另有**启动期引导**：适配器启动后 10 秒宽限内协议端未连接，直接复用
+   恢复流程拉起 NapCat（不用手动先启动）。
 2. **安全清理**：按镜像名清 NapCatWinBootMain 引导器树 + 旧实例卡在
    `pause` 的 bat 窗口。**绝不盲杀 QQ.exe**——QQNT 多开进程互相收养，
    枚举无法区分 bot 与你的个人 QQ；新旧登录冲突由 QQ 服务端裁决
@@ -129,6 +140,8 @@ NapCat 会经 OneBot 推送 `bot_offline` 通知事件；适配器收到后自�
    `set ACCOUNT` + `set NAPCAT_QUICK_PASSWORD_MD5`（在 `config/nb2/.env`
    里配置后，登录态被风控作废时 NapCat 自动密码回退重登——密码登录可能
    触发腾讯验证码，需人工完成一次），独立控制台、UTF-8 不乱码。
+   **QQ 号未知时照常启动**（不带账号参数）：NapCat 终端弹出扫码登录，
+   人工扫一次即可，不算故障不告警。
 4. **确认**：只信 WS 回连（默认 `GSK_NB2_WATCHDOG_RECOVER_TIMEOUT` 900s，
    冷启动实测 6+ 分钟），超时告警（哨兵 + ERROR）。
    ※ 不做基于 pid 的存活探测：引导器拉起 QQ 即退，这类探测必然误判。
@@ -206,13 +219,22 @@ Agent（schema 由函数签名+文档串生成），让 AI 回调适配器能力
   （零 token），有新意的内容则由 LLM 以角色性格裁决：消气原谅 / 破例回一句 / 继续不理。
   阈值与冷却在全局配置 `repeat_guard` 节（`warn_streak` / `mute_streak` / `mute_minutes` /
   `similarity` / `history_size` / `llm_break`），私聊同样生效。
-- **群友印象**（fake db）：与新群友的首轮交谈完成后，适配器用一个隔离的
-  `nb2-meta` 元租户让角色脱稿写一段第一人称「第一印象」，存入
+- **群友印象**（fake db）：与新群友的首轮交谈完成后，适配器用一次性脱稿
+  生成器（`core/agent/oneshot.py` OneShotGenerator，不建租户不进会话）让
+  角色脱稿写一段第一人称「第一印象」，存入
   `nb2_data/known_members.json`（key 为 `{昵称}_{QQ号}`，同名靠 QQ 号后缀区分、
   改名自动迁移）；之后该群友再说话时，印象以 `【你对 某某 的印象】` 注入当轮
   上下文，角色就能「认识」老熟人。生成是后台任务，不阻塞回复，失败自动跳过。
   角色还可以通过 `update_member_impression` 工具**自行更新**印象
   （觉得了解加深或印象过时了自己改写），该工具随宿主注入所有租户。
+- **回复 @（回应焦点）**：群聊回复该 @ 谁由 AttentionThings `reply_focus`
+  种类做**因果判定**（这轮谁冲着 bot 来：提问/委托/等回应）——有焦点才在
+  首条分段拼真 at 段，普通闲聊不 @；模型自己开头写的文本 @焦点会被剥除，
+  避免与真 at 重复。同时，助手消息在工作记忆里带 `@昵称` 前缀（与入站
+  at 渲染同款约定），帮模型归因「我刚才那句话是回谁的」。
+- **待发合并**：处理期间（含首个发言后 1.5s 合并窗口，
+  `GSK_NB2_MERGE_WINDOW_SECONDS`）到达的消息攒成一批、合成一轮输入一次
+  生成——两个人同时 @bot 不会交替回复，也只烧一份 token。
 - **回复**：默认按 QQ 群聊风格——`GSK_NB2_EXTRA_PROMPT` 注入当轮要求
   （简短、口语、每句一行、不写动作、不用「」），发送前再经 `strip_rp_style`
   确定性清洗残留的 `*动作*` 与「」（提示词压不住角色卡的 RP 惯性时兜底），

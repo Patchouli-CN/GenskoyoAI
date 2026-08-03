@@ -274,6 +274,23 @@ class FireReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("吃饭啦", str(message))
         self.assertEqual(self._store.pending_count("qq-group-123"), 0)
 
+    async def test_group_fire_strips_model_own_text_mention(self):
+        # 模型自己开头写的文本 @ 与程序真 at 重复：剥掉只留程序 at
+        reminder = _make_reminder(local_now() - timedelta(seconds=1))
+        self._store.add(reminder)
+        bot = AsyncMock()
+        with (
+            patch.object(plugin, "get_bots", return_value={"1": bot}),
+            patch.object(
+                plugin, "_generate_for_tenant", new=AsyncMock(return_value="@栗子 吃饭啦")
+            ),
+        ):
+            await plugin._fire_reminder(reminder)
+        message = str(bot.send_group_msg.await_args.kwargs["message"])
+        self.assertIn("[CQ:at,qq=456]", message)
+        self.assertNotIn("@栗子", message)
+        self.assertIn("吃饭啦", message)
+
     async def test_private_fire_without_at(self):
         reminder = _make_reminder(
             local_now() - timedelta(seconds=1),

@@ -16,6 +16,33 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.66 @ 全线真 at：文本@转真 at 段 + 形态剥除治双 at（2026-08-03，实机两轮反馈）
+
+- 起因一（双 at 复发）：§8.65 的剥除按**精确名字**匹配，模型把昵称写成
+  错别字变体（「帕秋莉·阿思欧姆」）就漏剥，真 at + 文本 @ 仍显示两个；
+  且提醒投递（`_fire_reminder`）有自己的 at 逻辑，根本没走剥除。
+  用户：「只保留程序 at 就行」。
+- 起因二：模型纯回复里写的 `@某人` 是纯文本（QQ 不显示成 at），用户
+  要求全部成真 at。
+- 定稿：
+  - `_strip_leading_at_mentions` 改为**按形态**剥（开头一切 `@xx` 串），
+    两条拼真 at 的路径（`_process_batch` 焦点 @、`_fire_reminder`）
+    都接上；
+  - `_send_segmented` 新增 `mention_map`（本群 昵称→QQ，群名片缓存
+    反查）：文本里的 `@昵称` 由 `_at_text_to_message` 转成**真 at 段**
+    （名字最长优先防拆名），批处理/提醒/主动消息三条路径全接——
+    不管 at 来自代码还是模型，QQ 端统一是真 at。
+- 测试：剥除 6 例（含错别字变体）+ 转换 5 例（含最长优先、未知名
+  保持文本）+ 提醒投递剥除 1 例；96+35 例全绿，ruff / pyright 全绿。
+- 同批文档大扫除：`docs/nb2_adapter.md` 过时处修正（set_reminder/
+  nb2-meta/守护扫码/待发合并/回复 @）；`ignore/CODE_INF.md` 加
+  「已修与变动」索引并逐条标记（learn_impression 强引用、parse_when、
+  host get_system_status docstring 等）；host.py 的 nb2-meta 分类
+  死代码与过时 docstring 清理。
+
+建议 commit message（用户已授权直接提交）：
+`feat(nb2): @ 全线真 at——文本@昵称按群名片缓存转真 at 段（三路径），开头文本@串按形态剥除只留程序 at（治错别字变体漏剥的双 at）；文档大扫除（nb2_adapter/CODE_INF/host 死代码）`
+
 ## 8.65 @ 由因果判定驱动：reply_focus 注意力种类（2026-08-03，用户定稿语义）
 
 - 起因一（实机翻车）：§8.64 的「批次全员都 @」+ 模型自己写的文本 @

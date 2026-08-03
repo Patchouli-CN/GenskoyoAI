@@ -128,8 +128,14 @@ def _require_host() -> RuntimeHost:
     return _host
 
 
-async def _send_segmented(send: SendCallable, text: str) -> None:
-    """分段发送：清洗 RP 标记后按行拆成多条短消息（QQ 聊天习惯，而非一大段墙）。"""
+async def _send_segmented(
+    send: SendCallable, text: str, mention_map: dict[str, int] | None = None
+) -> None:
+    """分段发送：清洗 RP 标记后按行拆成多条短消息（QQ 聊天习惯，而非一大段墙）。
+
+    mention_map（本群 昵称→QQ）给定时，文本里的 `@昵称` 转成**真 at 段**
+    （QQ 显示并提醒）——模型自己写的 @ 也是程序 at，不再是哑文本。
+    """
     cleaned = strip_rp_style(text) if _config.strip_rp_style else text
     if not cleaned.strip():
         logger.warning(f"[nb2] 清洗后无文本内容（原文 {len(text)} 字），跳过发送: {text[:60]!r}")
@@ -138,7 +144,32 @@ async def _send_segmented(send: SendCallable, text: str) -> None:
     for index, segment in enumerate(segments):
         if index:
             await asyncio.sleep(_REPLY_SEGMENT_DELAY_SECONDS)
-        await send(Message(MessageSegment.text(segment)))  # text 段转义 CQ 码
+        await send(_at_text_to_message(segment, mention_map or {}))
+
+
+def _group_mention_map(group_id: int) -> dict[str, int]:
+    """群名片缓存反查：该群 昵称→QQ 映射（模型文本里的 @昵称 转真 at 用）。"""
+    return {
+        name: qq for (gid, qq), name in _member_names.items() if gid == group_id and name
+    }
+
+
+def _at_text_to_message(text: str, mention_map: dict[str, int]) -> Message:
+    """把文本里的 `@昵称` 转成真 at 段（按名字最长优先匹配），其余保持文本。"""
+    if not mention_map:
+        return Message(MessageSegment.text(text))
+    names = sorted(mention_map, key=len, reverse=True)
+    pattern = re.compile("@(" + "|".join(re.escape(name) for name in names) + ")")
+    segments: list[MessageSegment] = []
+    pos = 0
+    for match in pattern.finditer(text):
+        if match.start() > pos:
+            segments.append(MessageSegment.text(text[pos : match.start()]))
+        segments.append(MessageSegment.at(mention_map[match.group(1)]))
+        pos = match.end()
+    if pos < len(text):
+        segments.append(MessageSegment.text(text[pos:]))
+    return Message(segments)
 
 
 async def _resolve_member_name(bot: Bot, group_id: int, qq: str) -> str:
@@ -285,7 +316,11 @@ async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
             await bot.send_private_msg(user_id=target_id, message=message)
 
     try:
-        await _send_segmented(_send, content)
+        await _send_segmented(
+            _send,
+            content,
+            mention_map=_group_mention_map(target_id) if kind == "group" else None,
+        )
         logger.info(f"[nb2] 主动消息已投递到 {kind}:{target_id}（{len(content)} 字）")
     except Exception:
         logger.exception(f"[nb2] 主动消息投递失败（{agent_id}）")
@@ -546,13 +581,15 @@ def _resolve_focus_targets(key: str, batch: list[PendingChat], names: list[str])
     return targets
 
 
-def _strip_leading_mentions(reply: str, names: list[str]) -> str:
-    """剥掉回复开头的文本 @焦点：模型自己写的 @ 与代码拼的真 at 段重复，
-    只留真 at（剥空了则保留原文，防误伤）。"""
-    stripped = reply.lstrip()
-    for name in names:
-        if stripped.startswith(f"@{name}"):
-            stripped = stripped[len(name) + 1 :].lstrip()
+# 回复开头的文本 @ 串（模型自己写的纯文本 @，QQ 不显示成 at）
+_LEADING_AT_RUN_PATTERN = re.compile(r"^(?:@[^\s@]+\s*)+")
+
+
+def _strip_leading_at_mentions(reply: str) -> str:
+    """剥掉回复开头的文本 @ 串：模型自己写的 @ 是纯文本（QQ 不会显示成
+    at），与代码拼的真 at 段重复——只保留程序 at（剥空了则保留原文，
+    防误伤）。按形态剥（不精确匹配名字）：模型可能把昵称写错成变体。"""
+    stripped = _LEADING_AT_RUN_PATTERN.sub("", reply, count=1)
     return stripped or reply
 
 
@@ -627,7 +664,9 @@ async def _fire_reminder(reminder: Reminder) -> None:
 
     send = _send
     if reminder.kind == "group" and reminder.remind_qq is not None:
-        # @ 拼进首条分段（@ 后补个空格，避免和文字粘在一起）
+        # @ 拼进首条分段（@ 后补个空格，避免和文字粘在一起）；模型自己开头
+        # 写的文本 @ 是纯文本且与真 at 重复，剥掉只留程序 at
+        reply = _strip_leading_at_mentions(reply)
         at_prefix = MessageSegment.at(reminder.remind_qq)
         first = True
 
@@ -640,7 +679,13 @@ async def _fire_reminder(reminder: Reminder) -> None:
 
         send = _send_with_at
     try:
-        await _send_segmented(send, reply)
+        await _send_segmented(
+            send,
+            reply,
+            mention_map=(
+                _group_mention_map(reminder.target_id) if reminder.kind == "group" else None
+            ),
+        )
     except Exception as error:
         attempts = _reminders.bump_attempts(reminder.id)
         logger.warning(f"[nb2] 提醒 {reminder.id} 投递失败（第 {attempts} 次）: {error}")
@@ -1052,9 +1097,9 @@ async def _process_batch(
         at_targets := _resolve_focus_targets(key, batch, focus_names)
     ):
         # 回应焦点（AttentionThings 因果判定：谁冲着 bot 来）才 @——真 at 段
-        # 拼进首条分段；普通闲聊无焦点不 @。模型自己开头写的文本 @焦点剥掉，
-        # 避免与真 at 段重复显示成两个
-        reply = _strip_leading_mentions(reply, focus_names)
+        # 拼进首条分段；普通闲聊无焦点不 @。模型自己开头写的文本 @ 是纯文本
+        # （QQ 不显示成 at）且与真 at 重复，剥掉只留程序 at
+        reply = _strip_leading_at_mentions(reply)
         at_message = Message(
             [
                 segment
@@ -1072,7 +1117,13 @@ async def _process_batch(
             await matcher.send(message)
 
         send = _send_with_at
-    await _send_segmented(send, reply)
+    await _send_segmented(
+        send,
+        reply,
+        mention_map=(
+            _group_mention_map(int(key.split(":", 1)[1])) if key.startswith("group:") else None
+        ),
+    )
 
 
 async def _host_send(

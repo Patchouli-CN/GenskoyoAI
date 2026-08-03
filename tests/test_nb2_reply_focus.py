@@ -47,22 +47,28 @@ class ReplyFocusParseTests(unittest.TestCase):
 class StripLeadingMentionsTests(unittest.TestCase):
     def test_strips_model_own_mention(self):
         self.assertEqual(
-            plugin._strip_leading_mentions("@帕秋莉 好～好～", ["帕秋莉"]), "好～好～"
+            plugin._strip_leading_at_mentions("@帕秋莉 好～好～"), "好～好～"
+        )
+
+    def test_strips_misspelled_mention(self):
+        # 模型把昵称写成错别字变体也照剥（按形态不按名字）
+        self.assertEqual(
+            plugin._strip_leading_at_mentions("@帕秋莉·阿思欧姆🌙 记下了哦"), "记下了哦"
         )
 
     def test_strips_multiple_mentions(self):
+        self.assertEqual(plugin._strip_leading_at_mentions("@甲 @乙 来了"), "来了")
+
+    def test_mid_text_mention_kept(self):
         self.assertEqual(
-            plugin._strip_leading_mentions("@甲 @乙 来了", ["甲", "乙"]), "来了"
+            plugin._strip_leading_at_mentions("@甲 你看 @丙 这个"), "你看 @丙 这个"
         )
 
-    def test_non_target_mention_kept(self):
-        # 模型 @ 的是焦点外的人（有意内容），不动
-        self.assertEqual(
-            plugin._strip_leading_mentions("@丙 你看", ["甲"]), "@丙 你看"
-        )
+    def test_no_leading_mention_unchanged(self):
+        self.assertEqual(plugin._strip_leading_at_mentions("好～好～"), "好～好～")
 
     def test_strip_to_empty_keeps_original(self):
-        self.assertEqual(plugin._strip_leading_mentions("@甲", ["甲"]), "@甲")
+        self.assertEqual(plugin._strip_leading_at_mentions("@甲", ), "@甲")
 
 
 class ResolveFocusTargetsTests(unittest.TestCase):
@@ -81,6 +87,38 @@ class ResolveFocusTargetsTests(unittest.TestCase):
 
     def test_unknown_name_skipped(self):
         self.assertEqual(plugin._resolve_focus_targets("group:123", [], ["不存在"]), [])
+
+
+class AtTextToMessageTests(unittest.TestCase):
+    def tearDown(self):
+        plugin._member_names.clear()
+
+    def test_mention_converts_to_real_at(self):
+        message = plugin._at_text_to_message("喂 @帕秋莉 吃饭啦", {"帕秋莉": 10001})
+        rendered = str(message)
+        self.assertIn("[CQ:at,qq=10001]", rendered)
+        self.assertNotIn("@帕秋莉", rendered)
+        self.assertIn("吃饭啦", rendered)
+
+    def test_longest_name_first(self):
+        # 「某明」与「明」共存：@某明 必须整体命中，不能拆成 @某 + @明
+        message = plugin._at_text_to_message("@某明 好", {"明": 10002, "某明": 10001})
+        rendered = str(message)
+        self.assertIn("[CQ:at,qq=10001]", rendered)
+        self.assertNotIn("[CQ:at,qq=10002]", rendered)
+
+    def test_unknown_mention_stays_text(self):
+        message = plugin._at_text_to_message("@陌生人 你好", {"帕秋莉": 10001})
+        self.assertEqual(str(message), "@陌生人 你好")
+
+    def test_empty_map_plain_text(self):
+        message = plugin._at_text_to_message("@帕秋莉 你好", {})
+        self.assertEqual(str(message), "@帕秋莉 你好")
+
+    def test_group_mention_map_filters_by_group(self):
+        plugin._member_names[(123, 10001)] = "帕秋莉"
+        plugin._member_names[(456, 10002)] = "别的群的人"
+        self.assertEqual(plugin._group_mention_map(123), {"帕秋莉": 10001})
 
 
 if __name__ == "__main__":

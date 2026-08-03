@@ -254,17 +254,15 @@ class RuntimeHost:
 
         闸门用量跨 root 与全部租户服务聚合（各租户各有一套同名闸，
         active/waiting 求和、max_concurrent 求和即系统总容量）。
-        延迟统计借元租户的模型客户端（账户级共享 Provider，样本有代表性）；
-        元租户未初始化时返回空延迟。
+        延迟统计为全租户模型客户端聚合（内心戏样本记在各租户 Agent 的
+        模型客户端上；元租户 nb2-meta 已删除，由 OneShotGenerator 取代）。
         """
-        tenants = {"groups": 0, "users": 0, "meta": 0, "other": 0}
+        tenants = {"groups": 0, "users": 0, "other": 0}
         for _, agent_id in self._service._tenant_services:
             if agent_id.startswith("qq-group-"):
                 tenants["groups"] += 1
             elif agent_id.startswith("qq-user-"):
                 tenants["users"] += 1
-            elif agent_id == "nb2-meta":
-                tenants["meta"] += 1
             else:
                 tenants["other"] += 1
         # 内心戏样本记在各租户 Agent 的模型客户端上（不是元租户）——全租户聚合
