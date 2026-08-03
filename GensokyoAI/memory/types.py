@@ -24,16 +24,6 @@ class WorkingMemory(Struct):
     messages: list[dict] = field(default_factory=list)
     max_turns: int = 20
 
-    def add(self, role: str, content: str, **kwargs) -> None:
-        """添加消息"""
-        self.messages.append({"role": role, "content": content, **kwargs})
-        self._trim()
-
-    def _trim(self) -> None:
-        """裁剪到最大轮数"""
-        if len(self.messages) > self.max_turns * 2:
-            self.messages = self.messages[-self.max_turns * 2 :]
-
     def get_context(self) -> list[dict]:
         """获取上下文"""
         return self.messages.copy()

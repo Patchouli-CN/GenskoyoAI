@@ -262,6 +262,10 @@ class ConfigLoader(ConfigMerger):
         if path in _character_config_cache:
             cached_mtime, cached_config = _character_config_cache[path]
             if cached_mtime == mtime:
+                # 命中即刷新 LRU 位置（pop + 重插）：真「最近使用」淘汰，
+                # 而非按插入顺序淘汰（07#12）
+                _character_config_cache.pop(path)
+                _character_config_cache[path] = (cached_mtime, cached_config)
                 return cached_config
 
         # 加载并验证
