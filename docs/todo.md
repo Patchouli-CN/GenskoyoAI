@@ -16,6 +16,24 @@
 
 ## 8. 更新日志（仅保留当日；更早见 ignore/MEMORY.md）
 
+## 8.62 守护 QR 登录回退：QQ 未知不再 not_ready 告警（2026-08-02，用户拍板）
+
+- 起因：启动引导触发守护时若 bot QQ 未知（二级密码登录会撞腾讯验证码，
+  用户选择手动扫码），直接 not_ready 告警——用户：「没有这个还是走重启
+  （因为终端会弹出扫码登录），不要报错」。
+- `_trigger_inner` 的 not_ready 闸收窄到只剩「NapCat 目录未知」；
+  QQ 未知照常走 清理→启动 流程。
+- `_windows_launch_napcat` 的 bot_qq 改 Optional：None 时不带账号位置
+  参数、不 set ACCOUNT / 密码回退变量——NapCat 终端弹扫码登录，
+  扫码回连后 `notify_connected` 照常记住 QQ 号。
+- 重启日志分两种口吻：带 QQ（快速登录）/ 未配 QQ（提示去终端扫码）。
+- 测试：not_ready 例收窄为仅缺目录；新增「QQ 未知 → launch(q=None) →
+  扫码回连 → restarted 且无哨兵文件」状态机例 + 「None 时不含
+  ACCOUNT/密码变量」命令行例。22 passed，ruff / pyright 全绿。
+
+建议 commit message（用户已授权直接提交）：
+`fix(nb2): 守护 QQ 未知不再 not_ready 告警——照常启动 NapCat 走终端扫码登录（bot_qq 可选），仅目录未知才停手`
+
 ## 8.61 提醒全量重写：判定全权 LLM（ThinkEngine 范式）+ 取消机制（2026-08-02，用户砍令）
 
 - 起因（用户血压时刻）：parse_when 只认阿拉伯数字，「一分钟后」「十点钟」

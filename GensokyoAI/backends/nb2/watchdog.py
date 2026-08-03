@@ -14,6 +14,8 @@ NapCatWinBootMain 是一次性引导器（拉起 QQ 即退）、QQNT 多开进�
   （未配则由首次连接的 self_id 兜底）；命令行同步显式 set
   NAPCAT_QUICK_PASSWORD_MD5 / NAPCAT_QUICK_PASSWORD（取自已加载的
   dotenv），登录态作废时 NapCat 自动密码回退重登（可能触发腾讯验证码）；
+  QQ 号与目录都不同源时也照常启动（不带账号参数）——NapCat 终端会弹出
+  扫码登录，人工扫一次即可，不算故障；
 - 清理只做安全集合：按镜像名清 NapCatWinBootMain 引导器树 + 旧实例卡在
   `pause` 的 bat 窗口（绝不盲杀 QQ.exe，个人 QQ 绝对安全；新旧登录冲突
   由 QQ 服务端裁决——新登录踢旧登录）；
@@ -81,7 +83,7 @@ async def _windows_kill_aux() -> None:
     await _ps(_KILL_AUX_PS)
 
 
-def _windows_launch_napcat(napcat_dir: Path, bot_qq: int) -> int:
+def _windows_launch_napcat(napcat_dir: Path, bot_qq: int | None) -> int:
     """按 main.bat 实证内容启动 NapCat（快速登录），返回 cmd 进程 PID。
 
     命令 = `launcher-win10-user.bat <QQ号>`（**位置参数**——`-q` 形式
@@ -90,18 +92,23 @@ def _windows_launch_napcat(napcat_dir: Path, bot_qq: int) -> int:
     （NAPCAT_QUICK_PASSWORD_MD5 / NAPCAT_QUICK_PASSWORD，取自已加载的
     dotenv 环境）：登录态被风控作废时 NapCat 自动走密码回退重登
     （可能触发腾讯验证码，需人工完成一次）。
+    bot_qq 为 None 时不带账号参数启动——NapCat 终端弹出扫码登录，
+    人工扫码后正常回连（扫码登录后 notify_connected 会记住 QQ 号）。
     """
     # 经 cmd 先把新控制台代码页切到 UTF-8（bat 里的 chcp 65001 同款），
     # 否则守护拉起的 NapCat 控制台默认 GBK，中文日志全是乱码
-    extras = f"set ACCOUNT={bot_qq}&& "
-    quick_md5 = os.environ.get("NAPCAT_QUICK_PASSWORD_MD5", "").strip()
-    quick_plain = os.environ.get("NAPCAT_QUICK_PASSWORD", "").strip()
-    if quick_md5:
-        extras += f"set NAPCAT_QUICK_PASSWORD_MD5={quick_md5}&& "
-    elif quick_plain:
-        extras += f"set NAPCAT_QUICK_PASSWORD={quick_plain}&& "
+    extras = ""
+    if bot_qq is not None:
+        extras += f"set ACCOUNT={bot_qq}&& "
+        quick_md5 = os.environ.get("NAPCAT_QUICK_PASSWORD_MD5", "").strip()
+        quick_plain = os.environ.get("NAPCAT_QUICK_PASSWORD", "").strip()
+        if quick_md5:
+            extras += f"set NAPCAT_QUICK_PASSWORD_MD5={quick_md5}&& "
+        elif quick_plain:
+            extras += f"set NAPCAT_QUICK_PASSWORD={quick_plain}&& "
+    account_arg = f" {bot_qq}" if bot_qq is not None else ""
     process = subprocess.Popen(
-        ["cmd", "/c", f"chcp 65001 >nul && {extras}call launcher-win10-user.bat {bot_qq}"],
+        ["cmd", "/c", f"chcp 65001 >nul && {extras}call launcher-win10-user.bat{account_arg}"],
         cwd=napcat_dir,
         # 独立控制台窗口：存活不依赖本进程，日志对用户可见（与手动启动一致）
         creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -127,7 +134,7 @@ class NapCatWatchdog:
         alert_path: Path | None = None,
         bot_qq: int | None = None,
         kill: Callable[[], Awaitable[None]] = _windows_kill_aux,
-        launch: Callable[[Path, int], int] = _windows_launch_napcat,
+        launch: Callable[[Path, int | None], int] = _windows_launch_napcat,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         now: Callable[[], float] = time.time,
         platform: str = sys.platform,
@@ -256,10 +263,10 @@ class NapCatWatchdog:
         if self._platform != "win32":
             self._alert("not_windows", f"当前平台 {self._platform} 不支持自动恢复（{reason}）")
             return "not_windows"
-        if self._napcat_dir is None or self._bot_qq is None:
+        if self._napcat_dir is None:
             self._alert(
                 "not_ready",
-                "NapCat 目录或 bot QQ 号未知（配置 GSK_NB2_BOT_QQ 或等首次连接），无法自动恢复",
+                "NapCat 目录未知（配置 GSK_NB2_NAPCAT_DIR），无法自动恢复",
             )
             return "not_ready"
         self._last_attempt = now
@@ -274,7 +281,15 @@ class NapCatWatchdog:
             await self._kill()
             await self._sleep(_KILL_SETTLE_SECONDS)
             pid = await asyncio.to_thread(self._launch, self._napcat_dir, self._bot_qq)
-            logger.info(f"[nb2-watchdog] NapCat 已重启（PID {pid}，QQ {self._bot_qq}），等待回连")
+            if self._bot_qq is None:
+                logger.info(
+                    f"[nb2-watchdog] NapCat 已重启（PID {pid}，QQ 未知——"
+                    "请在 NapCat 终端扫码登录），等待回连"
+                )
+            else:
+                logger.info(
+                    f"[nb2-watchdog] NapCat 已重启（PID {pid}，QQ {self._bot_qq}），等待回连"
+                )
         except Exception as error:
             self._alert("restart_failed", f"清理/重启失败: {error}")
             return "restart_failed"

@@ -170,7 +170,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "not_windows")
             self.assertEqual(calls, [])
 
-    async def test_not_ready_without_napcat_dir_or_bot_qq(self):
+    async def test_not_ready_without_napcat_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             options = {
                 "alert_path": Path(tmpdir) / "alert.json",
@@ -178,9 +178,30 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
                 "launch": lambda d, q: 4242,
                 "platform": "win32",
             }
-            watchdog = NapCatWatchdog(**options)  # 未 configure 且 QQ 号未知
+            watchdog = NapCatWatchdog(**options)  # 未 configure：目录未知无法启动
             result = await watchdog.trigger("bot_offline")
             self.assertEqual(result, "not_ready")
+
+    async def test_unknown_bot_qq_launches_for_qr_login(self):
+        # QQ 号未知不再告警：照常启动（不带账号，NapCat 终端弹扫码登录），
+        # 人工扫码回连后恢复成功
+        with tempfile.TemporaryDirectory() as tmpdir:
+            calls: list = []
+            watchdog = _make_watchdog(
+                Path(tmpdir),
+                launch=lambda d, q: calls.append(q) or 4242,
+            )
+
+            async def reconnect() -> None:
+                await asyncio.sleep(0.05)
+                watchdog.notify_connected(3779163297)
+
+            task = asyncio.create_task(reconnect())
+            result = await watchdog.trigger("startup_bootstrap")
+            await task
+            self.assertEqual(result, "restarted")
+            self.assertEqual(calls, [None])  # 启动收到 q=None（不带账号参数）
+            self.assertFalse((Path(tmpdir) / "alert.json").exists())
 
     async def test_config_bot_qq_enables_recovery_without_connect(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -346,6 +367,31 @@ class LaunchCommandTests(unittest.TestCase):
             command = captured["args"][2]
             self.assertNotIn("NAPCAT_QUICK_PASSWORD", command)
             self.assertIn("call launcher-win10-user.bat 3779163297", command)
+
+    def test_launch_without_bot_qq_omits_account(self):
+        # QQ 未知：不带账号参数与密码变量，NapCat 终端弹扫码登录
+        with tempfile.TemporaryDirectory() as tmpdir:
+            captured: dict = {}
+
+            def fake_popen(args, **kwargs):
+                captured["args"] = args
+                return SimpleNamespace(pid=1234)
+
+            with (
+                patch(
+                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
+                ),
+                patch.dict(
+                    "os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False
+                ),
+            ):
+                pid = _windows_launch_napcat(Path(tmpdir), None)
+            self.assertEqual(pid, 1234)
+            command = captured["args"][2]
+            self.assertIn("chcp 65001", command)
+            self.assertIn("call launcher-win10-user.bat", command)
+            self.assertNotIn("ACCOUNT", command)
+            self.assertNotIn("NAPCAT_QUICK_PASSWORD", command)
 
 
 class WatchdogConfigTests(unittest.TestCase):
