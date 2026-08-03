@@ -61,6 +61,22 @@ def sanitize_display_name(name: str, max_chars: int = 24) -> str:
 
 _RP_ACTION_PATTERN = re.compile(r"\*[^*\n]*\*")
 
+# 行首说话人标记（适配器注入的【昵称】前缀约定，见 nb2 plugin）
+_SPEAKER_TAG_PATTERN = re.compile(r"^【([^【】\r\n]+)】", re.MULTILINE)
+
+
+def extract_speaker_tags(text: str) -> list[str]:
+    """提取行首【昵称】说话人标记（去重保序）；无标记返回空列表。
+
+    适配器把群聊消息拼成 `【昵称】内容`（合并批次每行一个），本函数只做
+    机械提取——私聊/控制台等无标记场景自然返回空，调用方无需区分来源。
+    """
+    tags: list[str] = []
+    for name in _SPEAKER_TAG_PATTERN.findall(text):
+        if name not in tags:
+            tags.append(name)
+    return tags
+
 
 def strip_rp_style(text: str) -> str:
     """去除角色扮演风格标记：星号动作描写（``*动作*``）与「」台词引号。

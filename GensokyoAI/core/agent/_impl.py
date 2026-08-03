@@ -15,7 +15,7 @@ from ...session.context import SessionContext
 from ...tools.build_service import ToolBuildContext, ToolBuildResult
 from ...tools.tool_builtin.web_search import configure_web_search_tool
 from ...utils.content_security import detect_prompt_injection
-from ...utils.helpers import safe_get
+from ...utils.helpers import extract_speaker_tags, safe_get
 from ...utils.logger import logger
 from ...utils.path_security import sanitize_path_id
 from ..config import AppConfig, ConfigLoader
@@ -903,6 +903,11 @@ class Agent:
                 # 正常说完：清除可能存在的半截状态，本轮按普通消息处理。
                 self._half_completion = None
                 data = {"content": full_response}
+                # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给
+                # 记忆写入，助手消息在工作记忆里带「（对 某人）」——多人快节奏
+                # 对话中模型据此归因「我刚才那句话是回谁的」，防张冠李戴。
+                if reply_to := extract_speaker_tags(text_input):
+                    data["reply_to"] = reply_to
                 # reasoning_content 对 DeepSeek thinking mode 是多轮协议状态，
                 # 不是调试展示内容；是否显示仍由 UI/日志层的 debug_silent_output 控制。
                 if reasoning := self.response_handler.last_assistant_reasoning:

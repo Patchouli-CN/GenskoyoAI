@@ -101,6 +101,10 @@ class CoreListeners:
         """记录助手消息到工作记忆 - 统一入口"""
         response = event.data.get("content", "")
         reasoning_content = event.data.get("reasoning_content")
+        # 回复对象标记（触发消息带【昵称】前缀时由 agent 附上）：只写进工作
+        # 记忆帮模型归因，不改动投递给用户的 content 本体
+        if reply_to := event.data.get("reply_to"):
+            response = f"（对 {'、'.join(reply_to)}）{response}"
 
         self.agent.working_memory.add_message(
             "assistant",
