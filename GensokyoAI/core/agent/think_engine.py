@@ -14,7 +14,7 @@ import contextlib
 import json
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from msgspec import Struct, field
@@ -168,7 +168,6 @@ class ThinkEngine:
         # 长期思考状态
         self._running = False
         self._long_term_task: asyncio.Task | None = None
-        self._last_long_term_time: datetime | None = None
         self._long_term_interval = timedelta(minutes=config.think_interval_minutes)
 
     def update_semantic_memory(self, semantic_memory: SemanticMemoryManager) -> None:

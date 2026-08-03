@@ -11,6 +11,7 @@ RuntimeHost 由 Nonebot2Adapter.start() 注入（bind_host），生命周期归�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -1118,13 +1119,19 @@ async def _process_batch(
             await matcher.send(message)
 
         send = _send_with_at
-    await _send_segmented(
-        send,
-        reply,
-        mention_map=(
-            _group_mention_map(int(key.split(":", 1)[1])) if key.startswith("group:") else None
-        ),
-    )
+    try:
+        await _send_segmented(
+            send,
+            reply,
+            mention_map=(
+                _group_mention_map(int(key.split(":", 1)[1])) if key.startswith("group:") else None
+            ),
+        )
+    except Exception:
+        # 与 _deliver_initiative / _fire_reminder 对齐：发送失败不静默丢回复
+        logger.exception("[nb2] 回复发送失败")
+        with contextlib.suppress(Exception):
+            await matcher.send(MessageSegment.text("呜……回复发送失败了，请再试一次？"))
 
 
 async def _host_send(

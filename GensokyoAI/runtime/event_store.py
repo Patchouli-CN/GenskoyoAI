@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections import deque
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from GensokyoAI.utils.helpers import utc_now
+from GensokyoAI.utils.logger import logger
 
 
 class RuntimeEventStore:
@@ -40,6 +42,11 @@ class RuntimeEventStore:
                         self._events.append(event)
                         self._sequence = max(self._sequence, event["sequence"])
         except OSError:
+            # 坏文件改名留证：否则每次启动读同一坏文件、清空重来，append 还往坏文件
+            # 里写混合数据（旧 CODE_INF 03#9）
+            logger.warning(f"[event_store] 事件日志读取失败，坏文件改名留证: {self.path}")
+            with contextlib.suppress(OSError):
+                self.path.rename(self.path.with_suffix(self.path.suffix + ".corrupted"))
             self._events.clear()
             self._sequence = 0
 

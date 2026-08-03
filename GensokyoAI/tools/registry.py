@@ -62,10 +62,3 @@ class ToolRegistry:
     def list(self) -> list[ToolDefinition]:
         """列出所有工具"""
         return list(self._tools.values())
-
-    def unregister(self, name: str) -> bool:
-        """注销工具"""
-        if name in self._tools:
-            del self._tools[name]
-            return True
-        return False

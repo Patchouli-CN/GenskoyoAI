@@ -2142,7 +2142,15 @@ class RuntimeService(WorldOpsMixin):
             services = list(self._tenant_services.values())
             self._tenant_services.clear()
             self._tenant_last_active.clear()
-            await asyncio.gather(*(service.shutdown() for service in services))
+            # return_exceptions：单户 shutdown 炸不打断其余租户关闭与 root 自身清理
+            results = await asyncio.gather(
+                *(service.shutdown() for service in services), return_exceptions=True
+            )
+            for result, service in zip(results, services, strict=False):
+                if isinstance(result, Exception):
+                    logger.error(
+                        f"[Runtime] 租户 {service._tenant_key} shutdown 失败: {result}"
+                    )
         async with self._lock:
             await self._shutdown_locked()
         return {"ok": True}

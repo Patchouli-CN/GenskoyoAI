@@ -28,12 +28,11 @@ class InitiativeCoordinator:
     def __init__(self, agent: Agent) -> None:
         self._agent = agent
         self._manager: InitiativeTimerManager | None = None
-        self._last_payload: dict | None = None
 
     async def schedule_bg(self, full_response: str) -> None:
         """后台调度主动定时器，不阻塞主流程。"""
         try:
-            self._last_payload = await self.schedule(full_response)
+            await self.schedule(full_response)
         except Exception as e:
             logger.error(f"后台调度主动定时器失败: {e}")
 
@@ -287,7 +286,7 @@ class InitiativeCoordinator:
         self._ensure_manager().increment_consecutive_initiative_count()
         if self._manager is not None and not self._manager._has_reached_initiative_limit():
             logger.debug("[Agent] 未达连续主动上限，继续调度下一轮主动定时器")
-            self._last_payload = await self.schedule(message)
+            await self.schedule(message)
 
         return {
             "sent": True,
@@ -300,7 +299,6 @@ class InitiativeCoordinator:
     async def discard(self, *, reason: str = "discarded", source: str = "system") -> dict | None:
         if self._manager is None:
             return None
-        self._last_payload = None
         if source == "user":
             self._manager.reset_consecutive_initiative_count()
         return await self._manager.discard(reason=reason, source=source)
@@ -329,7 +327,6 @@ class InitiativeCoordinator:
                 due_at=due_at,
                 pending_summary=pending_summary,
             )
-            self._last_payload = payload
             return payload
         self._agent.config.initiative_timer.enabled = bool(enabled)
         if not enabled:
@@ -341,17 +338,14 @@ class InitiativeCoordinator:
                 due_at=due_at,
                 pending_summary=pending_summary,
             )
-            self._last_payload = payload
         else:
             payload = {"timer": self.current()}
         return {**payload, "enabled": self._agent.config.initiative_timer.enabled}
 
     async def cancel(self, *, timer_id: str | None = None, reason: str = "cancelled") -> dict:
-        self._last_payload = None
         return await self._ensure_manager().cancel(timer_id=timer_id, reason=reason)
 
     async def trigger(self, *, timer_id: str | None = None) -> dict:
-        self._last_payload = None
         return await self._ensure_manager().trigger(timer_id=timer_id)
 
     async def shutdown(self) -> None:

@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from ..utils.logger import logger
 from .character_validator import CharacterValidator
 from .config_env import apply_env_overrides
 from .config_merge import ConfigMerger
@@ -68,9 +69,13 @@ class ConfigLoader(ConfigMerger):
             config = self._load_yaml(default_file)
 
         # 2. 加载用户配置文件
-        if config_file and config_file.exists():
-            user_config = self._load_yaml(config_file)
-            config = self.merge(config, user_config)
+        if config_file:
+            if not config_file.exists():
+                # 拼错路径不再静默以模板默认启动（难排查）
+                logger.warning(f"指定的配置文件不存在，将使用默认配置: {config_file}")
+            else:
+                user_config = self._load_yaml(config_file)
+                config = self.merge(config, user_config)
 
         # 3. 环境变量覆盖
         config = apply_env_overrides(config)

@@ -82,8 +82,8 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         config.embedding.timeout = int(os.getenv("GENSOKYOAI_EMBEDDING_TIMEOUT"))  # type: ignore
     if embedding_use_proxy := os.getenv("GENSOKYOAI_EMBEDDING_USE_PROXY"):
         config.embedding.use_proxy = embedding_use_proxy.lower() == "true"
-    if os.getenv("GENSOKYOAI_LOG_LEVEL"):
-        config.log_level = LogLevel(os.getenv("GENSOKYOAI_LOG_LEVEL"))
+    if (log_level_env := os.getenv("GENSOKYOAI_LOG_LEVEL")):
+        config.log_level = LogLevel(log_level_env.upper())  # 小写 debug 也认，不再 ValueError
     if os.getenv("GENSOKYOAI_LOG_CONSOLE"):
         config.log_console = os.getenv("GENSOKYOAI_LOG_CONSOLE").lower() == "true"  # type: ignore
     if debug_silent_output := os.getenv("GENSOKYOAI_DEBUG_SILENT_OUTPUT"):
