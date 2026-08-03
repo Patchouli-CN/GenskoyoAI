@@ -156,14 +156,11 @@ class RuntimeHost:
         *,
         idempotency_key: str,
         system_contexts: list[str] | None = None,
-        record_in_working_memory: bool = True,
     ) -> tuple[str, int]:
         """发送一条用户消息，返回 (角色回复, 新 revision)；revision 冲突自动刷新重试一次。
 
         `system_contexts` 透传 RPC 同名字段：随本轮消息注入的附加上下文
         （如 QQ 聊天风格要求），只影响本轮回复，不写入会话。
-        `record_in_working_memory=False` 时触发文本只注入本轮生成，不持久化
-        （02#15：到点提醒等瞬态触发）。
         """
         params: dict[str, Any] = {
             "agent_id": agent_id,
@@ -171,7 +168,6 @@ class RuntimeHost:
             "expected_revision": int(revision),
             "idempotency_key": idempotency_key,
             "message": text,
-            "record_in_working_memory": bool(record_in_working_memory),
         }
         if system_contexts:
             params["system_contexts"] = list(system_contexts)

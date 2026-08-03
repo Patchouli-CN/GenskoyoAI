@@ -297,11 +297,7 @@ class Agent:
     # ==================== 核心 API ====================
 
     async def send(
-        self,
-        user_input: str,
-        system_contexts: list[str] | None = None,
-        *,
-        record_in_working_memory: bool = True,
+        self, user_input: str, system_contexts: list[str] | None = None
     ) -> UnifiedMessage | None:
         """发送消息（非流式）- 完全事件驱动。"""
         return await self._send_impl(
@@ -309,15 +305,12 @@ class Agent:
             system_contexts,
             timeout_log="等待响应超时",
             cancel_reason="send timeout",
-            record_in_working_memory=record_in_working_memory,
         )
 
     async def send_multimodal(
         self,
         content_parts: list[dict[str, Any]],
         system_contexts: list[str] | None = None,
-        *,
-        record_in_working_memory: bool = True,
     ) -> UnifiedMessage | None:
         """发送多模态消息（非流式）。"""
         return await self._send_impl(
@@ -325,7 +318,6 @@ class Agent:
             system_contexts,
             timeout_log="多模态响应超时",
             cancel_reason="send multimodal timeout",
-            record_in_working_memory=record_in_working_memory,
         )
 
     async def _send_impl(
