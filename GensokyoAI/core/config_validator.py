@@ -8,7 +8,6 @@ from typing import Any, Literal
 from msgspec import Struct
 
 from ..utils.url_security import UnsafeUrlError, validate_external_url
-from .agent.providers.specs import PROVIDER_SPECS, ProviderSpec
 from .config_schema import (
     EmbeddingConfig,
     HealthConfig,
@@ -28,6 +27,7 @@ from .config_schema import (
     WorldPersistenceConfig,
     WorldTranscriptConfig,
 )
+from .provider_specs import PROVIDER_SPECS, ProviderSpec
 from .schema_versions import CONFIG_SCHEMA_VERSION
 
 DiagnosticSeverity = Literal["error", "warning"]
@@ -514,7 +514,7 @@ class ConfigValidator:
                         code="config.provider.unknown",
                     )
                 )
-        # Provider 元数据（providers/specs.py）——字段约束、api_key 要求与专属规则的唯一事实源
+        # Provider 元数据（core/provider_specs.py）——字段约束、api_key 要求与专属规则的唯一事实源
         spec = PROVIDER_SPECS.get(provider) if isinstance(provider, str) else None
 
         # SSRF 防护：base_url 不能指向内网 / 元数据服务（本地服务如 ollama 由 spec 放行）

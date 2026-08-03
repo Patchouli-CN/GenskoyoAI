@@ -11,6 +11,7 @@ from pathlib import Path
 from ..utils.logger import logger
 from ..utils.url_security import validate_external_url
 from .config_schema import AppConfig, AuthConfig, LogLevel
+from .provider_specs import PROVIDER_SPECS
 
 
 def apply_env_overrides(config: AppConfig) -> AppConfig:
@@ -23,10 +24,7 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         config.model.api_key = os.getenv("GENSOKYOAI_API_KEY")  # type: ignore
     if (base_url := os.getenv("GENSOKYOAI_BASE_URL")):
         config.model.base_url = base_url  # type: ignore
-        # SSRF 校验对齐 YAML 层（config_validator 518-528）：本地 ollama 由 provider spec 放行。
-        # 延迟导入：adapters→config_env 在包初始化早期被引入，模块级引 specs 会触发循环
-        from .agent.providers.specs import PROVIDER_SPECS
-
+        # SSRF 校验对齐 YAML 层（config_validator 518-528）：本地 ollama 由 provider spec 放行
         model_spec = (
             PROVIDER_SPECS.get(config.model.provider)
             if isinstance(config.model.provider, str)
