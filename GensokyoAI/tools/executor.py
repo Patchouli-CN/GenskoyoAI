@@ -111,7 +111,7 @@ class ToolExecutor:
         self._publish_tool_event("started", name, arguments)
 
         try:
-            logger.trace(f"执行工具: {name}({arguments})")
+            logger.debug(f"执行工具: {name}({str(arguments)[:150]})")
 
             async with (
                 resource_scope(self._resource_gates.get("tool"), f"tool:{name}"),
@@ -138,7 +138,7 @@ class ToolExecutor:
 
             result = self._serialize_tool_result(result)
 
-            logger.trace(f"工具 {name} 执行成功: {result[:100]}...")
+            logger.debug(f"工具 {name} 执行成功（{len(result)} 字）: {result[:80]}")
             self._publish_tool_event("completed", name, arguments, result=result)
 
             return {

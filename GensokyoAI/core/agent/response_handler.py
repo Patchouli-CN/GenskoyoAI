@@ -71,8 +71,14 @@ class ResponseHandler:
     async def _handle_tool_calls(self, message: UnifiedMessage) -> list[dict] | None:
         if not message.tool_calls:
             return None
-        logger.info(f"检测到 {len(message.tool_calls)} 个工具调用")
-        if parsed := self._tool_executor.parse_tool_calls(message):
+        parsed = self._tool_executor.parse_tool_calls(message)
+        names = "、".join(item.get("name", "?") for item in (parsed or []))
+        logger.info(f"检测到 {len(message.tool_calls)} 个工具调用: {names}")
+        if parsed:
+            for item in parsed:
+                logger.debug(
+                    f"调用工具: {item.get('name')}({str(item.get('arguments', ''))[:150]})"
+                )
             return await self._tool_executor.execute_batch(parsed)
         return None
 
