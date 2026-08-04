@@ -230,6 +230,60 @@ def test_runtime_message_operation_is_persisted_and_replayed() -> None:
     asyncio.run(run())
 
 
+def test_finalize_matches_assistant_by_content_when_memory_is_trimming() -> None:
+    """满员工作记忆（_trim 头部裁剪稳态）下，finalize 必须按内容定位本轮
+    assistant——回归：索引水位线把每次成功生成误记 failed。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage_root = root / "tenant"
+            manager = SessionManager(SessionConfig(save_path=storage_root / "sessions"), "reimu")
+            session = await manager.create_session()
+            service = RuntimeService(
+                root, tenant_key=("alice", "agent-1"), storage_root=storage_root
+            )
+
+            class FakeAgent:
+                session_manager = manager
+
+                @staticmethod
+                def resume_session(session_id: str) -> bool:
+                    return manager.set_current_session(session_id)
+
+                @staticmethod
+                async def send(message: str, system_contexts: list[str] | None = None):
+                    memory = manager.get_working_memory(session.session_id)
+                    memory.add_message("user", message)
+                    memory.add_message("assistant", "world")
+                    manager.save_working_memory(session.session_id)
+                    return SimpleNamespace(content="world", reasoning_content=None)
+
+            # 填满到裁剪稳态（超过 max_turns*2，头部开始被裁）
+            memory = manager.get_working_memory(session.session_id)
+            for turn in range(30):
+                memory.add_message("user", f"u{turn}")
+                memory.add_message("assistant", f"a{turn}")
+
+            cast(Any, service.state).agent = FakeAgent()
+            service.state.started = True
+
+            result = await service.send_message(
+                "hello",
+                session_id=session.session_id,
+                idempotency_key="send-trim",
+                expected_revision=session.revision,
+            )
+            status = await service.message_status(session.session_id, "send-trim")
+
+            # 成功生成必须记 succeeded 并盖章（回归：此前误记 failed、message_id=None）
+            assert result["message_id"] is not None
+            assert status["status"] == "succeeded"
+            assert status["result"]["content"] == "world"
+
+    asyncio.run(run())
+
+
 def test_timeout_without_assistant_records_failed_not_succeeded() -> None:
     """02#2：生成未写入 assistant（超时/中断兜底）→ 账本记 failed，重试不再重放兜底文案。"""
 

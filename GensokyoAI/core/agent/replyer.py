@@ -60,13 +60,26 @@ class Replyer:
             for _ in range(self._config.max_retries + 1):
                 verdict = await self._judge.judge(current, character, context)
                 if verdict is None:  # 判定失败：放行
+                    logger.debug(f"[OOC] 判定失败，放行原回复（{source}）")
                     return current
                 if not self._needs_rewrite(verdict):  # 通过：放行
+                    logger.debug(
+                        f"[OOC] 判定通过（{source}，OOC 分 {verdict.ooc_score:.2f} "
+                        f"< 阈值 {self._config.threshold}）"
+                    )
                     return current
+                issues = "、".join(verdict.issues[:3]) or "无明细"
+                logger.info(
+                    f"[OOC] 判出戏（{source}，OOC 分 {verdict.ooc_score:.2f} "
+                    f"≥ 阈值 {self._config.threshold}）：{issues}，重写"
+                )
                 rewritten = await self._judge.rewrite(current, character, context, verdict)
                 if not rewritten or rewritten.strip() == current.strip():
+                    logger.debug(f"[OOC] 重写失败或无变化，放行原回复（{source}）")
                     return current  # 重写失败/无变化：放行
+                logger.trace(f"[OOC] 重写: {current[:40]!r} → {rewritten[:40]!r}")
                 current = rewritten
+            logger.info(f"[OOC] 重写重判轮数耗尽，接受最后结果（{source}）")
             return current  # 轮数耗尽：接受最后结果（有界）
         except Exception as error:
             logger.warning(f"[OOC] 回复管线异常，放行原回复: {error}")

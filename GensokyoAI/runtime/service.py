@@ -1528,10 +1528,6 @@ class RuntimeService(WorldOpsMixin):
                     return begin_replay
                 try:
                     resolved_message = self._resolve_message_input(message)
-                    # 本次生成前的工作记忆长度：盖章只认此之后的 assistant（02#3/14）
-                    before_len = len(
-                        agent.session_manager.get_working_memory(operation_session_id).get_context()
-                    )
                     response = (
                         await agent.send_multimodal(resolved_message, system_contexts)
                         if isinstance(resolved_message, list)
@@ -1543,7 +1539,7 @@ class RuntimeService(WorldOpsMixin):
                         operation_session_id,
                         idempotency_key,
                         generation_id=generation_id,
-                        until_index=before_len,
+                        expected_content=content,
                     )
                     session = agent.session_manager.get_current_session()
                     result = {
@@ -1715,8 +1711,6 @@ class RuntimeService(WorldOpsMixin):
 
         try:
             resolved_message = self._resolve_message_input(message)
-            # 本次生成前的工作记忆长度：盖章只认此之后的 assistant（02#3/14）
-            before_len = len(agent.session_manager.get_working_memory(session_id).get_context())
             stream = (
                 agent.send_multimodal_stream(resolved_message, system_contexts)
                 if isinstance(resolved_message, list)
@@ -1764,7 +1758,7 @@ class RuntimeService(WorldOpsMixin):
             session.session_id if session else "",
             idempotency_key,
             generation_id=generation_id,
-            until_index=before_len,
+            expected_content=full_content,
         )
         result = {
             "role": "assistant",
@@ -3052,25 +3046,30 @@ class RuntimeService(WorldOpsMixin):
         idempotency_key: str | None,
         *,
         generation_id: str | None = None,
-        until_index: int | None = None,
+        expected_content: str | None = None,
     ) -> dict[str, Any]:
         if not session_id:
             return {}
         key = self._normalize_idempotency_key(idempotency_key) if idempotency_key else None
         manager = agent.session_manager
         messages = manager.get_working_memory(session_id).get_context()
-        # 只对本次生成之后（index >= until_index）写入的 assistant 盖章——超时/中断时
-        # 工作记忆里没有当前轮 assistant，防止把 generation_id/幂等键盖到上一轮旧消息
-        # （旧 CODE_INF 02#3/02#14）
-        search_start = until_index if until_index is not None else 0
-        assistant_index = next(
-            (
-                index
-                for index in range(len(messages) - 1, search_start - 1, -1)
-                if messages[index].get("role") == "assistant"
-            ),
-            None,
-        )
+        # 按内容定位本轮写入的 assistant（从尾向前找首个以本轮回复结尾的）：
+        # 超时/中断时工作记忆里没有当前轮 assistant，防止把 generation_id/幂等键
+        # 盖到上一轮旧消息（旧 CODE_INF 02#3/02#14）。不能用「生成前长度」水位线
+        # ——工作记忆满员后 _trim 从头部裁剪，新 assistant 会落在水位线之下，
+        # 导致每次成功生成都被误记 failed。
+        # 注：存储侧可能带 @昵称 前缀（nb2 归因标记），故用 endswith 匹配。
+        assistant_index = None
+        if expected_content:
+            assistant_index = next(
+                (
+                    index
+                    for index in range(len(messages) - 1, -1, -1)
+                    if messages[index].get("role") == "assistant"
+                    and str(messages[index].get("content") or "").endswith(expected_content)
+                ),
+                None,
+            )
         if assistant_index is None:
             return {}
         if generation_id:

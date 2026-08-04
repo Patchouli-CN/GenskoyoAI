@@ -49,7 +49,10 @@ class PersistenceWorker(BaseWorker):
                     task_id=task.id,
                     success=False,
                     error="timeout",
-                    result={"operation": data.operation},  # 失败也带操作名，供协调器识别
+                    result={
+                        "operation": data.operation,
+                        "session_id": data.data.get("session_id"),
+                    },
                     duration_ms=duration_ms,
                 )
 
@@ -58,7 +61,10 @@ class PersistenceWorker(BaseWorker):
             return TaskResult(
                 task_id=task.id,
                 success=True,
-                result={"operation": data.operation},
+                result={
+                    "operation": data.operation,
+                    "session_id": data.data.get("session_id"),
+                },
                 duration_ms=duration_ms,
             )
 
@@ -69,6 +75,7 @@ class PersistenceWorker(BaseWorker):
                 task_id=task.id,
                 success=False,
                 error=str(e),
-                result={"operation": data.operation},  # 失败也带操作名，供协调器识别
+                # task.data 非法时上面先 raise，data 未绑定——从 task.data 安全取操作名
+                result={"operation": getattr(task.data, "operation", None)},
                 duration_ms=duration_ms,
             )

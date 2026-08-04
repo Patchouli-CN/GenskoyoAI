@@ -37,9 +37,15 @@ def test_env_base_url_blocks_metadata_service(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_env_base_url_blocks_private_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认 provider（openai，allow_private_base_url=False）：内网 base_url 被拒。"""
+    """放行私网的 provider（openai，allow_private_base_url=False）：内网 base_url 被拒。"""
     with pytest.raises(UnsafeUrlError):
-        _load_with_env(monkeypatch, {"GENSOKYOAI_BASE_URL": "http://127.0.0.1:11434"})
+        _load_with_env(
+            monkeypatch,
+            {
+                "GENSOKYOAI_PROVIDER": "openai",
+                "GENSOKYOAI_BASE_URL": "http://127.0.0.1:11434",
+            },
+        )
 
 
 def test_env_base_url_allows_public(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,4 +78,5 @@ def test_env_token_url_blocks_private(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_apply_env_overrides_without_url_env_is_noop() -> None:
     """无 URL env 时不触发校验（回归：不破坏无 env 路径）。"""
     config = ConfigLoader().load(_TEMPLATE)
-    assert config.model.base_url  # 模板默认值仍在
+    assert config.model.provider  # 模板默认值仍在
+    assert config.model.name

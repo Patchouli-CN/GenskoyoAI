@@ -114,6 +114,22 @@ class AgentCompositionTests(unittest.TestCase):
             self.assertIsNone(agent._half_completion)
             self.assertIsNot(agent.semantic_memory, semantic_memory)
 
+    def test_session_switch_resets_save_coordinator_dedup_state(self):
+        """会话切换时 SaveCoordinator 去重基线重置——否则新会话在轮数超过
+        旧会话前所有自动保存被 should_save 静默跳过。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):
+                agent = Agent(config=self._make_config(tmp))
+
+            asyncio.run(agent.create_session())
+            coordinator = agent.save_coordinator  # 触发懒装配
+            coordinator._last_saved_turn = 10  # 旧会话的保存基线
+
+            asyncio.run(agent.create_session())
+
+            self.assertEqual(coordinator._last_saved_turn, 0)
+            self.assertFalse(coordinator.save_pending)
+
     def test_agent_bootstrap_state_tracks_lazy_components_created_after_startup(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("GensokyoAI.core.agent.lifecycle.LifecycleManager.setup_signal_handlers"):

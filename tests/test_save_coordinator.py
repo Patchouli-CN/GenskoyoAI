@@ -46,3 +46,44 @@ def test_successful_save_keeps_dedup_state() -> None:
 
     # 内容没变 → 跳过
     assert coordinator.should_save(wm) is False
+
+
+def test_stale_session_completion_ignored() -> None:
+    """会话切换后到达的旧会话保存结果不得清掉新会话的 _save_pending。"""
+    import asyncio
+
+    from GensokyoAI.background.types import TaskResult
+
+    coordinator = _coordinator()
+    coordinator._save_pending = True
+    coordinator._save_session_id = "sess-new"
+
+    stale = TaskResult(
+        task_id="t1",
+        success=True,
+        result={"operation": "save_messages", "session_id": "sess-old"},
+        duration_ms=1.0,
+    )
+    asyncio.run(coordinator._on_save_task_complete(stale))
+    assert coordinator._save_pending is True  # 旧会话结果：不动新会话状态
+
+    current = TaskResult(
+        task_id="t2",
+        success=True,
+        result={"operation": "save_messages", "session_id": "sess-new"},
+        duration_ms=1.0,
+    )
+    asyncio.run(coordinator._on_save_task_complete(current))
+    assert coordinator._save_pending is False
+    assert coordinator._save_session_id is None
+
+
+def test_reset_clears_save_session_id() -> None:
+    coordinator = _coordinator()
+    coordinator._save_pending = True
+    coordinator._save_session_id = "sess-1"
+    coordinator._dirty = True
+    coordinator.reset()
+    assert coordinator._save_pending is False
+    assert coordinator._save_session_id is None
+    assert coordinator._dirty is False

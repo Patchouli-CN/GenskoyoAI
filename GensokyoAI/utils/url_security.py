@@ -76,12 +76,64 @@ _PRIVATE_NETWORKS = frozenset(
 _ALL_FORBIDDEN_NETWORKS = _ALWAYS_FORBIDDEN_NETWORKS | _LOOPBACK_NETWORKS | _PRIVATE_NETWORKS
 
 
+def _coerce_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """把主机名归一化为 IP 对象；非 IP 字面量返回 None。
+
+    除标准写法外，按 inet_aton 语义归一化非标准变体——不处理这些会被
+    SSRF 绕过（`ipaddress.ip_address` 解析失败即放行）：
+    - 尾点：`169.254.169.254.`
+    - 短写回环/短写：`127.1`、`10.1`
+    - 单整数（十进制/十六进制/八进制）：`2852039166`、`0xa9fea9fe`、`0251`
+    - v4-mapped v6：`::ffff:169.254.169.254`
+    """
+    candidate = host.strip().rstrip(".")
+    # v6 / v4-mapped v6
+    try:
+        addr6 = ipaddress.IPv6Address(candidate)
+        return addr6.ipv4_mapped or addr6
+    except ValueError:
+        pass
+    # v4 标准形
+    try:
+        return ipaddress.IPv4Address(candidate)
+    except ValueError:
+        pass
+    # inet_aton：1~4 段，每段十进制/0x 十六进制/前导 0 八进制
+    parts = candidate.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        if not part:
+            return None
+        try:
+            value = int(part, 0)
+        except ValueError:
+            try:
+                value = int(part, 8) if part.startswith("0") else -1
+            except ValueError:
+                return None
+        if value < 0:
+            return None
+        numbers.append(value)
+    # 除最后一段外每段占 1 字节；最后一段占剩余字节
+    if any(value > 0xFF for value in numbers[:-1]):
+        return None
+    remaining_bytes = 4 - (len(numbers) - 1)
+    if numbers[-1] > (1 << (8 * remaining_bytes)) - 1:
+        return None
+    packed = 0
+    for value in numbers[:-1]:
+        packed = (packed << 8) | value
+    packed = (packed << (8 * remaining_bytes)) | numbers[-1]
+    return ipaddress.IPv4Address(packed)
+
+
 def _is_private_ip(host: str) -> bool:
     """判断主机名是否为私有网段 IP。"""
 
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
+    addr = _coerce_ip(host)
+    if addr is None:
         return False
 
     return any(addr in network for network in _PRIVATE_NETWORKS)
@@ -90,9 +142,8 @@ def _is_private_ip(host: str) -> bool:
 def _is_loopback_ip(host: str) -> bool:
     """判断主机名是否为回环 IP。"""
 
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
+    addr = _coerce_ip(host)
+    if addr is None:
         return False
 
     return any(addr in network for network in _LOOPBACK_NETWORKS)
@@ -101,27 +152,11 @@ def _is_loopback_ip(host: str) -> bool:
 def _is_always_forbidden_ip(host: str) -> bool:
     """判断主机名是否为永远禁止的 IP（链路本地、元数据、0.0.0.0）。"""
 
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
+    addr = _coerce_ip(host)
+    if addr is None:
         return False
 
     return any(addr in network for network in _ALWAYS_FORBIDDEN_NETWORKS)
-
-
-def _hostname_is_forbidden(hostname: str) -> bool:
-    """判断主机名是否在显式禁止列表中或为禁止 IP。"""
-
-    if not hostname:
-        return True
-    lower = hostname.lower()
-    if lower in _ALWAYS_FORBIDDEN_HOSTNAMES:
-        return True
-    if lower.startswith("169.254."):
-        return True
-    return (
-        _is_always_forbidden_ip(hostname) or _is_private_ip(hostname) or _is_loopback_ip(hostname)
-    )
 
 
 def validate_external_url(

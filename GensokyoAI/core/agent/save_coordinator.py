@@ -38,6 +38,9 @@ class SaveCoordinator:
         self._save_pending = False
         self._last_saved_turn = 0
         self._dirty = False  # 保存在途期间又有新内容：完成后补存最新（05#6）
+        # 当前在途提交所属的会话：完成回调只认它——会话切换后旧会话的任务结果
+        # 不得清掉新会话的 _save_pending（否则「同会话不并发」保证失效）
+        self._save_session_id: str | None = None
 
         # 后台管理器引用
         self._background_manager: BackgroundManager | None = None
@@ -61,6 +64,7 @@ class SaveCoordinator:
         self._last_saved_turn = 0
         self._last_saved_content_hash = ""
         self._dirty = False
+        self._save_session_id = None
 
     def _get_content_hash(self, working_memory: WorkingMemoryManager) -> str:
         """计算工作记忆内容的简单哈希"""
@@ -111,6 +115,7 @@ class SaveCoordinator:
         """标记保存结束。success=False 时回滚去重状态（05#13）——否则保存/提交失败后
         同一轮后续保存被 should_save 永久跳过。"""
         self._save_pending = False
+        self._save_session_id = None
         if not success:
             self._last_saved_turn = 0
             self._last_saved_content_hash = ""
@@ -119,9 +124,15 @@ class SaveCoordinator:
         """后台保存任务完成回调：失败回滚去重状态；保存期间又有新内容则补存最新。
 
         （05#6：同会话不再并发双任务/旧快照回退——在途时置脏，完成后补存最新。）
+        只处理当前在途提交所属会话的结果：会话切换后到达的旧会话结果直接忽略
+        （旧任务自身已落盘，去重状态属于新会话，不得动）。
         """
         operation = result.result.get("operation") if isinstance(result.result, dict) else None
         if operation not in {"save_messages", "save_session"}:
+            return
+        result_session = result.result.get("session_id") if isinstance(result.result, dict) else None
+        if self._save_session_id is None or result_session != self._save_session_id:
+            logger.trace(f"忽略非当前提交的保存结果（{result_session}）{self._log_suffix}")
             return
         if not result.success:
             self.mark_saved(success=False)
@@ -129,7 +140,7 @@ class SaveCoordinator:
                 f"后台保存失败，去重状态已回滚（可重试）{self._log_suffix}: {result.error}"
             )
             return
-        self._save_pending = False
+        self.mark_saved(success=True)
         if self._dirty:
             self._dirty = False
             session = self._session_manager.get_current_session()
@@ -175,6 +186,7 @@ class SaveCoordinator:
 
         # 标记正在保存
         self.mark_saving(working_memory)
+        self._save_session_id = current_session.session_id
 
         # 确保后台管理器启动
         await self.start_background_manager()

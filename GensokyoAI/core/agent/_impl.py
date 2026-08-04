@@ -76,6 +76,9 @@ class Agent:
         # 响应中断时未说完的半截回复（中间状态）：下轮生成前注入提示词让角色
         # 接着说完，正常完成后清除；错误标记不进模型上下文。
         self._half_completion: HalfCompletionMessage | None = None
+        # 被流式消费（chunk 已实时投递给用户）的请求 id：OOC 判定对这类请求
+        # 必须跳过——重写只改进记忆的版本会造成「用户看到的 ≠ 角色记住的」分叉
+        self._live_stream_request_ids: set[str] = set()
         self._init_config(config, config_file, character_file)
         self._init_infrastructure()
         self._init_core_components()
@@ -416,6 +419,7 @@ class Agent:
             else:
                 await self.discard_initiative_timer(reason="user_message_received", source="user")
             request_id = uuid4().hex
+            self._live_stream_request_ids.add(request_id)
             response_future = self._action_executor.prepare_response(request_id)  # type: ignore
             self._publish_message_received(
                 user_input,
@@ -657,6 +661,10 @@ class Agent:
         self._half_completion = None
         self._lazy_components.message_builder = None
         self._lazy_components.response_handler = None
+        if self._save_coordinator is not None:
+            # 去重基线是「上一个会话」的轮数/哈希：不重置会让新会话在轮数
+            # 超过旧会话前所有自动保存被 should_save 静默跳过
+            self._save_coordinator.reset()
         if self._action_planner is not None:
             self._action_planner.update_memory_context(self.working_memory, self.semantic_memory)
         if self._think_engine is not None:
@@ -928,7 +936,15 @@ class Agent:
                 self._half_completion = None
                 # OOC 投递前自查（Replyer）：full_response 拼完后、MESSAGE_SENT 前。
                 # 判定/重写失败一律放行原回复（增强绝不能拖垮主回复）。
-                if not self.is_shutting_down and self._replyer is not None:
+                # 跳过两类：World 回合（舞台旁白/动作是正当格式，QQ 口语标准会误改）；
+                # 流式实时消费（chunk 已投递，重写会造成用户所见与记忆分叉）。
+                if (
+                    not self.is_shutting_down
+                    and self._replyer is not None
+                    and self.config.character is not None  # 无人设卡可对照时不判定
+                    and not world_turn
+                    and request_id not in self._live_stream_request_ids
+                ):
                     try:
                         full_response = await self._replyer.ensure_in_character(
                             full_response,
@@ -947,9 +963,15 @@ class Agent:
                         )
                     except Exception as error:
                         logger.warning(f"OOC 判定/重写失败，放行原回复: {error}")
+                elif self._replyer is not None and (
+                    world_turn or request_id in self._live_stream_request_ids
+                ):
+                    logger.trace(
+                        f"OOC 判定跳过（{'World 回合' if world_turn else '流式实时消费'}）"
+                    )
                 data: dict[str, Any] = {"content": full_response}
                 # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给
-                # 记忆写入，助手消息在工作记忆里带「（对 某人）」——多人快节奏
+                # 记忆写入，助手消息在工作记忆里带「@昵称」前缀——多人快节奏
                 # 对话中模型据此归因「我刚才那句话是回谁的」，防张冠李戴。
                 if reply_to := extract_speaker_tags(text_input):
                     data["reply_to"] = reply_to
@@ -982,6 +1004,7 @@ class Agent:
             # 🔑 无论如何都要把控制权还给用户（过期请求由 id 校验忽略）
             if self._action_executor:
                 self._action_executor.complete_response(full_response, request_id=request_id)
+            self._live_stream_request_ids.discard(request_id)
 
     # ==================== 主动定时器（委托 InitiativeCoordinator） ====================
 

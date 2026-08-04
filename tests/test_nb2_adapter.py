@@ -119,7 +119,7 @@ class AdapterConfigDirTests(unittest.TestCase):
     """config/{adapter_name}/ 私有配置目录约定（框架只给目录，不管格式）。"""
 
     def test_adapter_config_dir(self):
-        from GensokyoAI.core.config_env import adapter_config_dir
+        from GensokyoAI.core.config_dirs import adapter_config_dir
 
         self.assertEqual(adapter_config_dir("nb2", Path("/proj")), Path("/proj/config/nb2"))
         self.assertEqual(adapter_config_dir("cli", Path("/proj")), Path("/proj/config/cli"))
@@ -171,7 +171,7 @@ class AdapterConfigDirTests(unittest.TestCase):
             self.assertFalse(is_fallback)
 
     def test_ensure_local_config_seeds_once(self):
-        from GensokyoAI.core.config_env import ensure_local_config
+        from GensokyoAI.core.config_dirs import ensure_local_config
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
