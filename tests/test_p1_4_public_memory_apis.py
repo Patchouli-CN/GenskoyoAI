@@ -135,6 +135,18 @@ class TopicAwareStorePublicApiTests(unittest.TestCase):
             self.assertNotIn(topic_a.id, store._topics)  # 空话题已移除
             self.assertNotIn(topic_a.id, store._topics[topic_b.id].related_topics)  # 边已清
 
+    def test_get_candidates_fallback_dedups_by_id_not_hash(self):
+        """Topic 是 msgspec Struct（不可哈希），候选兜底路径去重必须用 id——
+        否则 set(Topic) 抛 unhashable 崩溃（DMN 思考写入记忆时实机触发）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TopicAwareStore(Path(tmp) / "topics.json")
+            asyncio.run(store.add_async("博丽神社的赛钱箱", topic_name="神社"))
+            asyncio.run(store.add_async("雾雨魔理沙的魔法书", topic_name="魔法"))
+
+            # 查询词不命中任何关键词索引 → 走 recent 兜底路径（原 set(candidates) 崩）
+            candidates = store._get_candidates("完全无关的词")
+            self.assertEqual(len(candidates), 2)
+
     def test_embedding_similarity_can_rank_memory_above_keyword_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = TopicAwareStore(Path(tmp) / "topics.json")

@@ -400,11 +400,12 @@ class TopicAwareStore:
 
         if len(candidates) < max_candidates:
             recent = sorted(topics, key=lambda t: t.last_updated, reverse=True)
-            candidate_set = set(candidates)
+            # Topic 是 msgspec Struct（默认不可哈希），去重必须用 id 而非对象进 set
+            candidate_ids = {t.id for t in candidates}
             for t in recent:
-                if t not in candidate_set:
+                if t.id not in candidate_ids:
                     candidates.append(t)
-                    candidate_set.add(t)
+                    candidate_ids.add(t.id)
                     if len(candidates) >= max_candidates:
                         break
 
