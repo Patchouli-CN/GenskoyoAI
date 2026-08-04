@@ -31,6 +31,12 @@ from GensokyoAI.core.config import ConfigLoader
 from GensokyoAI.core.config_validator import ConfigDiagnostic, ConfigValidator
 from GensokyoAI.core.events import Event, EventBus, SystemEvent
 from GensokyoAI.core.migrations import migration_diagnostics_summary
+from GensokyoAI.core.release_resources import (
+    find_character_resource,
+    logical_character_path,
+    resolve_resource_path,
+    resource_directories,
+)
 from GensokyoAI.core.schema_versions import (
     CONFIG_SCHEMA_VERSION,
     MEMORY_SCHEMA_VERSION,
@@ -422,9 +428,7 @@ class RuntimeService(WorldOpsMixin):
         ]
         if not candidates:
             return False
-        key, service = min(
-            candidates, key=lambda item: self._tenant_last_active.get(item[0], 0.0)
-        )
+        key, service = min(candidates, key=lambda item: self._tenant_last_active.get(item[0], 0.0))
         if self._tenant_services.pop(key, None) is None:
             return False
         self._tenant_last_active.pop(key, None)
@@ -933,17 +937,14 @@ class RuntimeService(WorldOpsMixin):
             if self.state.agent is not None:
                 await self._shutdown_locked()
 
-            config_file = (
-                self._resolve_optional(config_path)
-                or self._fallback_config_path()
-            )
+            config_file = self._resolve_optional(config_path) or self._fallback_config_path()
             char_file = self._resolve_character(
                 character_path=character_path,
                 character=character,
             )
 
             loader = ConfigLoader()
-            config = loader.load(config_file)
+            config = loader.load(config_file, resource_root=self.state.root_dir)
             if self._storage_root is not None:
                 config.session.save_path = self._storage_root / "sessions"
                 config.session.save_path.mkdir(parents=True, exist_ok=True)
@@ -994,24 +995,23 @@ class RuntimeService(WorldOpsMixin):
             }
 
     async def list_characters(self, locale: str | None = None) -> list[dict[str, Any]]:
-        characters_dir = self.state.root_dir / "characters"
-        search_dirs = []
-        if locale:
-            search_dirs.append(characters_dir / locale)
-        search_dirs.append(characters_dir)
-        if characters_dir.exists():
-            search_dirs.extend(path for path in characters_dir.iterdir() if path.is_dir())
+        search_dirs: list[Path] = []
+        for characters_dir in resource_directories(self.state.root_dir, "characters"):
+            if locale:
+                search_dirs.append(characters_dir / locale)
+            search_dirs.append(characters_dir)
+            if characters_dir.exists() and not locale:
+                search_dirs.extend(path for path in characters_dir.iterdir() if path.is_dir())
 
-        seen: set[Path] = set()
+        seen: set[str] = set()
         characters: list[dict[str, Any]] = []
         for directory in search_dirs:
             if not directory.exists():
                 continue
             for path in sorted([*directory.glob("*.yaml"), *directory.glob("*.yml")]):
-                resolved = path.resolve()
-                if resolved in seen:
+                if path.stem in seen:
                     continue
-                seen.add(resolved)
+                seen.add(path.stem)
                 try:
                     with open(path, encoding="utf-8") as file:
                         data = yaml.safe_load(file) or {}
@@ -1023,7 +1023,7 @@ class RuntimeService(WorldOpsMixin):
                         {
                             "id": path.stem,
                             "name": preview.get("name") or path.stem,
-                            "path": str(path.relative_to(self.state.root_dir)),
+                            "path": logical_character_path(path, self.state.root_dir),
                             "greeting": data.get("greeting", "") if isinstance(data, dict) else "",
                             "metadata": preview.get("metadata", {}),
                             "preview": preview,
@@ -1883,7 +1883,6 @@ class RuntimeService(WorldOpsMixin):
             "message": "犹豫链已退役，本次设置未生效：主动发言改由 drive_threshold 阈值判断。",
         }
 
-
     async def dependency_status(self, providers: list[str] | None = None) -> dict[str, Any]:
         """Return optional Provider dependency status for generic clients."""
 
@@ -2275,7 +2274,9 @@ class RuntimeService(WorldOpsMixin):
         return ConfigLoader().load(self._fallback_config_path()).resource_control
 
     def _build_resource_gates(self, resource_control: Any | None = None) -> dict[str, ResourceGate]:
-        config = resource_control or ConfigLoader().load(self._fallback_config_path()).resource_control
+        config = (
+            resource_control or ConfigLoader().load(self._fallback_config_path()).resource_control
+        )
         return build_resource_gates(config)
 
     def _resource_limit_rpc_error(self, error: ResourceLimitError) -> RpcError:
@@ -2389,7 +2390,7 @@ class RuntimeService(WorldOpsMixin):
         local = self.state.root_dir / "config" / "local.yaml"
         if local.exists():
             return local
-        return self.state.root_dir / "tmp" / "template-conf.yaml"
+        return resolve_resource_path(self.state.root_dir, "tmp", "template-conf.yaml")
 
     def _resolve_optional(self, value: str | None) -> Path | None:
         if not value:
@@ -2408,32 +2409,20 @@ class RuntimeService(WorldOpsMixin):
 
     def _resolve_character(self, character_path: str | None, character: str | None) -> Path | None:
         if character_path:
-            return self._resolve_optional(character_path)
+            local = self._resolve_optional(character_path)
+            if local is not None and local.is_file():
+                return local
+            return find_character_resource(character_path, self.state.root_dir)
         if not character:
             return None
 
-        base = self.state.root_dir / "characters"
-        candidates = [
-            base / f"{character}.yaml",
-            base / f"{character}.yml",
-            base / "zh_cn" / f"{character}.yaml",
-            base / "zh_cn" / f"{character}.yml",
-            self.state.root_dir / character,
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return self._resolve_sandboxed_path(str(candidate))
-        raise FileNotFoundError(f"Character not found: {character}")
+        return find_character_resource(character, self.state.root_dir)
 
     def _character_payload(self, path: Path | None, name: str | None = None) -> dict[str, Any]:
         return {
             "id": path.stem if path else name,
             "name": name or (path.stem if path else "Unknown"),
-            "path": (
-                str(path.relative_to(self.state.root_dir))
-                if path and path.is_relative_to(self.state.root_dir)
-                else (str(path) if path else None)
-            ),
+            "path": (logical_character_path(path, self.state.root_dir) if path else None),
         }
 
     @staticmethod

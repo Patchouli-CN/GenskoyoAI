@@ -281,7 +281,7 @@ class ConsoleAdapter(RuntimeAdapter):
         for sess in sorted_sessions:
             session_id_short = format_session_id(sess.session_id)
             created_str = format_datetime(sess.created_at)
-            status = "●" if sess.is_active else "○"
+            status = "*" if sess.is_active else "-"
             status_color = "green" if sess.is_active else "dim"
 
             panel_content.append(f"  {status} ", style=status_color)
@@ -561,11 +561,11 @@ class ConsoleAdapter(RuntimeAdapter):
 
     def _print_success_message(self, message: str) -> None:
         """打印成功消息"""
-        self._print_system_message(f"✓ {message}", style="success")
+        self._print_system_message(f"OK: {message}", style="success")
 
     def _print_error_message(self, message: str) -> None:
         """打印错误消息"""
-        self._print_system_message(f"✗ {message}", style="error")
+        self._print_system_message(f"ERROR: {message}", style="error")
 
     def _print_tool_call_indicator(self, tool_info: dict) -> None:
         """打印工具调用指示器"""
@@ -660,8 +660,8 @@ class ConsoleAdapter(RuntimeAdapter):
     async def run_interactive(self) -> None:
         await self.start()
 
-        self.console.print("[dim]💡 输入 [/][bold cyan]<cmd>help</cmd>[/] [dim]查看所有命令[/]")
-        self.console.print("[dim]💡 按 Ctrl+C 安全退出（会自动保存）[/]\n")
+        self.console.print("[dim]Tip: 输入 [/][bold cyan]<cmd>help</cmd>[/] [dim]查看所有命令[/]")
+        self.console.print("[dim]Tip: 按 Ctrl+C 安全退出（会自动保存）[/]\n")
 
         exited_normally = False
 

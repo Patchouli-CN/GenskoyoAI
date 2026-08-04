@@ -73,7 +73,7 @@
 ```python
 class ToolRuntimeContext(Struct):
     event_bus: EventBus | None = None
-    actor_id: str = SINGLE_ACTOR_ID   # 单角色默认 "__single__"
+    actor_id: str = SINGLE_ACTOR_ID  # 单角色默认 "__single__"
     world_id: str | None = None
 ```
 

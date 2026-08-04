@@ -189,13 +189,14 @@ class AdapterConfigDirTests(unittest.TestCase):
             self.assertFalse(created_again)
             self.assertIn("user-edited", path.read_text(encoding="utf-8"))
 
-    def test_ensure_local_config_missing_template_no_crash(self):
-        from GensokyoAI.core.config_env import ensure_local_config
+    def test_ensure_local_config_uses_bundled_template_outside_checkout(self):
+        from GensokyoAI.core.config_dirs import ensure_local_config
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path, created = ensure_local_config(Path(tmpdir))
-            self.assertFalse(created)
-            self.assertFalse(path.exists())  # 只返回路径，不报错
+            self.assertTrue(created)
+            self.assertTrue(path.exists())
+            self.assertIn("config_schema_version", path.read_text(encoding="utf-8"))
 
     def test_seed_local_env_from_template(self):
         from GensokyoAI.backends.nb2.config import resolve_env_file, seed_local_env
@@ -308,9 +309,7 @@ class StripRpStyleTests(unittest.TestCase):
 
     def test_combined_rp_style(self):
         text = "「那孩子反应总是很大呢～」\n*用扇子轻点下巴*\n「可爱得让人想再捉弄一次呢～」"
-        self.assertEqual(
-            strip_rp_style(text), "那孩子反应总是很大呢～\n可爱得让人想再捉弄一次呢～"
-        )
+        self.assertEqual(strip_rp_style(text), "那孩子反应总是很大呢～\n可爱得让人想再捉弄一次呢～")
 
     def test_empty_after_strip(self):
         self.assertEqual(strip_rp_style("*微笑*"), "")
@@ -617,9 +616,7 @@ class RuntimeHostEventTests(unittest.TestCase):
 
                 event_bus = EventBus(enable_trace=False)
                 await event_bus.start()
-                child.state.agent = SimpleNamespace(
-                    event_bus=event_bus, shutdown=_noop_shutdown
-                )
+                child.state.agent = SimpleNamespace(event_bus=event_bus, shutdown=_noop_shutdown)
 
                 host = RuntimeHost(user_id="nb2", service=service)
                 received = []
@@ -679,9 +676,7 @@ class RuntimeHostEventTests(unittest.TestCase):
 
                 event_bus = EventBus(enable_trace=False)
                 await event_bus.start()
-                child.state.agent = SimpleNamespace(
-                    event_bus=event_bus, shutdown=_noop_shutdown
-                )
+                child.state.agent = SimpleNamespace(event_bus=event_bus, shutdown=_noop_shutdown)
 
                 # 先录制一条历史主动消息进事件存储（模拟上次运行留下的 events.jsonl）
                 child._start_event_recording(event_bus)
@@ -758,22 +753,16 @@ class ClaudeProviderQuotaTests(AioHTTPTestCase):
     async def test_moonshot_quota_query(self):
         provider = self._provider("https://api.moonshot.cn/anthropic")
         # 用桩端点替换推导出的余额地址（保留真实的 Moonshot 判定逻辑）
-        provider._balance_url = (
-            lambda: f"http://127.0.0.1:{self.server.port}/v1/users/me/balance"
-        )
+        provider._balance_url = lambda: f"http://127.0.0.1:{self.server.port}/v1/users/me/balance"
         data = await provider.get_quota()
         self.assertEqual(data["available_balance"], 49.59)
         self.assertEqual(self.balance_calls[0], "Bearer sk-test")
 
     async def test_balance_url_derivation(self):
         provider = self._provider("https://api.moonshot.cn/anthropic")
-        self.assertEqual(
-            provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance"
-        )
+        self.assertEqual(provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance")
         provider = self._provider("https://api.moonshot.cn")
-        self.assertEqual(
-            provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance"
-        )
+        self.assertEqual(provider._balance_url(), "https://api.moonshot.cn/v1/users/me/balance")
 
     async def test_non_moonshot_returns_none(self):
         self.assertIsNone(await self._provider("https://api.anthropic.com").get_quota())

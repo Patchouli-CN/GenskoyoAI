@@ -510,8 +510,8 @@ class PackagingConfigurationTests(unittest.TestCase):
         self.assertIn("ollama", optional["all"])
         self.assertIn("openai>=1.0.0", optional["all"])
         self.assertIn("pytest>=8.0", groups["dev"])
-        self.assertIn("ruff>=0.6.0", groups["dev"])
-        self.assertIn("pyright>=1.1.390", groups["dev"])
+        self.assertIn("ruff==0.16.1", groups["dev"])
+        self.assertIn("pyright==1.1.411", groups["dev"])
         self.assertIn("build>=1.2.0", groups["dev"])
         self.assertEqual(
             pyproject["tool"]["pytest"]["ini_options"]["testpaths"],

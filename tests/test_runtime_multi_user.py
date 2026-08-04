@@ -108,7 +108,9 @@ def test_runtime_drain_rejects_new_work_and_waits_for_active_operation() -> None
     asyncio.run(run())
 
 
-async def _as_chat_user(service: RuntimeService, user_id: str, method: str, params: dict | None = None):
+async def _as_chat_user(
+    service: RuntimeService, user_id: str, method: str, params: dict | None = None
+):
     """以无 admin 角色的普通聊天身份调用（审计闸门测试专用）。"""
     token = set_current_principal(
         RuntimePrincipal(user_id=user_id, roles=frozenset({"read", "chat"}), auth_type="test")

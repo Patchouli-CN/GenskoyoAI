@@ -410,9 +410,7 @@ OpenAI Provider 提供统一图片生成入口：
 from GensokyoAI.core.agent.model_client import ModelClient
 from GensokyoAI.core.config import ModelConfig
 
-client = ModelClient(
-    ModelConfig(provider="openai", name="gpt-image-1", api_key="sk-...")
-)
+client = ModelClient(ModelConfig(provider="openai", name="gpt-image-1", api_key="sk-..."))
 
 result = await client.generate_image(
     "画一只在博丽神社喝茶的猫",

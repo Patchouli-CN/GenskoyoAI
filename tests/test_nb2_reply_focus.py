@@ -46,9 +46,7 @@ class ReplyFocusParseTests(unittest.TestCase):
 
 class StripLeadingMentionsTests(unittest.TestCase):
     def test_strips_model_own_mention(self):
-        self.assertEqual(
-            plugin._strip_leading_at_mentions("@帕秋莉 好～好～"), "好～好～"
-        )
+        self.assertEqual(plugin._strip_leading_at_mentions("@帕秋莉 好～好～"), "好～好～")
 
     def test_strips_misspelled_mention(self):
         # 模型把昵称写成错别字变体也照剥（按形态不按名字）
@@ -60,15 +58,18 @@ class StripLeadingMentionsTests(unittest.TestCase):
         self.assertEqual(plugin._strip_leading_at_mentions("@甲 @乙 来了"), "来了")
 
     def test_mid_text_mention_kept(self):
-        self.assertEqual(
-            plugin._strip_leading_at_mentions("@甲 你看 @丙 这个"), "你看 @丙 这个"
-        )
+        self.assertEqual(plugin._strip_leading_at_mentions("@甲 你看 @丙 这个"), "你看 @丙 这个")
 
     def test_no_leading_mention_unchanged(self):
         self.assertEqual(plugin._strip_leading_at_mentions("好～好～"), "好～好～")
 
     def test_strip_to_empty_keeps_original(self):
-        self.assertEqual(plugin._strip_leading_at_mentions("@甲", ), "@甲")
+        self.assertEqual(
+            plugin._strip_leading_at_mentions(
+                "@甲",
+            ),
+            "@甲",
+        )
 
 
 class ResolveFocusTargetsTests(unittest.TestCase):

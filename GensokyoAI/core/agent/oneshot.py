@@ -15,6 +15,7 @@ from typing import Any
 from ...utils.logger import logger
 from ..config import ConfigLoader
 from ..config_schema import CharacterConfig
+from ..release_resources import find_character_resource, resolve_resource_path
 from .model_client import ModelClient
 from .prompts import build_roleplay_system_prompt
 
@@ -51,7 +52,7 @@ class OneShotGenerator:
         if cached is not None:
             return cached
         loader = ConfigLoader()
-        app_config = loader.load(self._config_path())
+        app_config = loader.load(self._config_path(), resource_root=self._root_dir)
         character_config = self._load_character(loader, character)
         client = ModelClient(app_config.model, embedding_config=app_config.embedding)
         system_prompt = build_roleplay_system_prompt(
@@ -67,18 +68,7 @@ class OneShotGenerator:
         local = self._root_dir / "config" / "local.yaml"
         if local.exists():
             return local
-        return self._root_dir / "tmp" / "template-conf.yaml"
+        return resolve_resource_path(self._root_dir, "tmp", "template-conf.yaml")
 
     def _load_character(self, loader: ConfigLoader, character: str) -> CharacterConfig:
-        base = self._root_dir / "characters"
-        candidates = [
-            base / f"{character}.yaml",
-            base / f"{character}.yml",
-            base / "zh_cn" / f"{character}.yaml",
-            base / "zh_cn" / f"{character}.yml",
-            self._root_dir / character,
-        ]
-        for candidate in candidates:
-            if candidate.exists() and candidate.is_file():
-                return loader.load_character(candidate)
-        raise FileNotFoundError(f"角色文件不存在: {character}（已搜索 {base} 及其 zh_cn）")
+        return loader.load_character(find_character_resource(character, self._root_dir))

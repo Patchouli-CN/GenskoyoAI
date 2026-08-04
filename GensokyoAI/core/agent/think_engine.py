@@ -207,7 +207,9 @@ class ThinkEngine:
             self._long_term_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._long_term_task
-        logger.info(f"🧠 [ThinkEngine] 思考引擎已停止 (角色: {self.character_name}{self._log_suffix})")
+        logger.info(
+            f"🧠 [ThinkEngine] 思考引擎已停止 (角色: {self.character_name}{self._log_suffix})"
+        )
 
     # ==================== 长期思考（定时话题游走）====================
 

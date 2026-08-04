@@ -947,7 +947,7 @@ class Agent:
                         )
                     except Exception as error:
                         logger.warning(f"OOC 判定/重写失败，放行原回复: {error}")
-                data = {"content": full_response}
+                data: dict[str, Any] = {"content": full_response}
                 # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给
                 # 记忆写入，助手消息在工作记忆里带「（对 某人）」——多人快节奏
                 # 对话中模型据此归因「我刚才那句话是回谁的」，防张冠李戴。

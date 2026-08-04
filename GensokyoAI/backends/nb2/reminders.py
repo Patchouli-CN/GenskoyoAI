@@ -170,9 +170,7 @@ class ReminderStore:
         """取消某租户最近创建的一条待办提醒（用户定稿的取消机制）。"""
         with self._lock:
             candidates = [
-                entry
-                for entry in self._entries.values()
-                if entry["agent_id"] == agent_id
+                entry for entry in self._entries.values() if entry["agent_id"] == agent_id
             ]
             if not candidates:
                 return None
@@ -186,11 +184,7 @@ class ReminderStore:
     def cancel_all(self, agent_id: str) -> list[Reminder]:
         """取消某租户全部待办提醒，返回被取消的列表。"""
         with self._lock:
-            ids = [
-                key
-                for key, entry in self._entries.items()
-                if entry["agent_id"] == agent_id
-            ]
+            ids = [key for key, entry in self._entries.items() if entry["agent_id"] == agent_id]
             items = [Reminder.from_dict(self._entries.pop(key)) for key in ids]
             if items:
                 self._save_locked()
@@ -212,7 +206,7 @@ class ReminderStore:
         for key, entry in raw.items():
             try:
                 reminder = Reminder.from_dict(entry)
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
             if now - reminder.due > REMINDER_EXPIRE_AFTER:
                 logger.info(f"[nb2] 过期提醒已作废（逾期超 24h）: {reminder.content[:30]}")
@@ -229,4 +223,3 @@ class ReminderStore:
             json.dumps(self._entries, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         os.replace(tmp_path, self._path)
-

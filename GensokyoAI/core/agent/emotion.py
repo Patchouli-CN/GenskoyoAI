@@ -89,12 +89,7 @@ class Emotion(Struct):
         """
         positive = max(self.happy, self.love, self.surprised * 0.5)
         withdrawal = max(self.sorrow, self.fear, self.shame)
-        adjust = (
-            -0.08 * positive
-            + 0.10 * withdrawal
-            - 0.04 * self.anger
-            + 0.04 * self.disgust
-        )
+        adjust = -0.08 * positive + 0.10 * withdrawal - 0.04 * self.anger + 0.04 * self.disgust
         return max(-0.10, min(0.12, adjust))
 
     def behavior_tendency(self) -> str:

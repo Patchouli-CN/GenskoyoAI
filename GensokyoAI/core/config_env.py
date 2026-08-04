@@ -1,14 +1,11 @@
-"""环境变量配置覆盖 + 适配器配置目录约定 + 本地配置播种。
+"""环境变量配置覆盖。
 
-原独立模块 core/config_dirs.py 仅两个纯函数，并入本文件（避免为两个函数
-单独拆文件；2026-08-02 用户定稿的 config/{adapter}/ 约定不变）。
+适配器配置目录约定与本地配置播种在 core/config_dirs.py（配合 release_resources
+支持源码/wheel 安装，2026-08-04 上游重建）——本文件只做环境变量覆盖。
 """
 
 import os
-import shutil
-from pathlib import Path
 
-from ..utils.logger import logger
 from ..utils.url_security import validate_external_url
 from .config_schema import AppConfig, AuthConfig, LogLevel
 from .provider_specs import PROVIDER_SPECS
@@ -102,33 +99,3 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
             os.getenv("GENSOKYOAI_MEMORY_WORKING_TURNS")  # type: ignore
         )
     return config
-
-
-def adapter_config_dir(adapter_name: str, root_dir: Path | None = None) -> Path:
-    """适配器私有配置目录（root_dir 为项目根解析基准，默认 cwd）。
-
-    框架只约定目录（config/{adapter}/），配置格式与加载器完全归适配器自己——
-    框架只做路径约定，零格式耦合。
-    """
-    return (root_dir or Path.cwd()) / "config" / adapter_name
-
-
-def ensure_local_config(root_dir: Path | None = None) -> tuple[Path, bool]:
-    """框架本地配置（config/local.yaml）不存在时从发行模板播种一份。
-
-    返回 (配置路径, 是否本次新生成)。模板缺失时只返回路径不报错
-    （加载层会按缺省继续）；已存在则原样返回、绝不覆盖。
-    """
-    base = root_dir or Path.cwd()
-    local_path = base / "config" / "local.yaml"
-    if local_path.exists():
-        return local_path, False
-    template = base / "tmp" / "template-conf.yaml"
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    if template.exists():
-        shutil.copyfile(template, local_path)
-        logger.info(
-            f"首次运行已生成本地配置: {local_path}（请修改它，不要改 tmp/ 模板）"
-        )
-        return local_path, True
-    return local_path, False

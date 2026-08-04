@@ -57,7 +57,7 @@ class WorldOpsMixin:
                 or self._fallback_config_path()
             )
             loader = ConfigLoader()
-            config = loader.load(config_file)
+            config = loader.load(config_file, resource_root=self.state.root_dir)
             if self._storage_root is not None:
                 # 网络租户：World 存档与 Actor 会话根按租户隔离，绝不跨用户共享
                 config.world.persistence.save_path = self._storage_root / "world"

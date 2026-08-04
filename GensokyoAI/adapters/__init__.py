@@ -20,7 +20,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from ..core.config_env import ensure_local_config
+from ..core.config_dirs import ensure_local_config
 from ..runtime.host import RuntimeHost
 from ..utils.logger import logger
 
@@ -57,7 +57,9 @@ async def serve_adapters(*adapters: RuntimeAdapter, root_dir: Path | None = None
         for adapter in adapters:
             await adapter.start(host)
             started.append(adapter)
-            logger.info(f"[adapters] 适配器已启动: {getattr(adapter, 'name', type(adapter).__name__)}")
+            logger.info(
+                f"[adapters] 适配器已启动: {getattr(adapter, 'name', type(adapter).__name__)}"
+            )
         await asyncio.Event().wait()  # 永久驻留，直至被取消
     finally:
         for adapter in reversed(started):

@@ -136,9 +136,7 @@ class GeminiProvider(BaseProvider):
     ) -> UnifiedResponse:
         """非流式调用 Gemini API"""
         genai_types = self._load_genai_types()
-        config, gemini_contents = self._build_content_config(
-            messages, tools, options, genai_types
-        )
+        config, gemini_contents = self._build_content_config(messages, tools, options, genai_types)
 
         response = await self._client.aio.models.generate_content(
             model=model,
@@ -159,9 +157,7 @@ class GeminiProvider(BaseProvider):
         """流式调用 Gemini API"""
         options = options or {}
         genai_types = self._load_genai_types()
-        config, gemini_contents = self._build_content_config(
-            messages, tools, options, genai_types
-        )
+        config, gemini_contents = self._build_content_config(messages, tools, options, genai_types)
 
         async for chunk in self._client.aio.models.generate_content_stream(
             model=model,

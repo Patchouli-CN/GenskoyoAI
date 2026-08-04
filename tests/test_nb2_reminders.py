@@ -92,12 +92,15 @@ class ReminderStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ReminderStore(Path(tmpdir) / "r.json")
             now = local_now()
-            store.add(_make_reminder(now + timedelta(hours=1), id="old",
-                                       created_at=now - timedelta(hours=1)))
-            store.add(_make_reminder(now + timedelta(hours=2), id="new",
-                                       created_at=now))
-            self.assertEqual([item.id for item in store.pending("qq-group-123")],
-                             ["old", "new"])  # due 升序
+            store.add(
+                _make_reminder(
+                    now + timedelta(hours=1), id="old", created_at=now - timedelta(hours=1)
+                )
+            )
+            store.add(_make_reminder(now + timedelta(hours=2), id="new", created_at=now))
+            self.assertEqual(
+                [item.id for item in store.pending("qq-group-123")], ["old", "new"]
+            )  # due 升序
             # 取消最近创建的（不是最早到点的）
             cancelled = store.cancel_latest("qq-group-123")
             self.assertEqual(cancelled.id, "new")
@@ -109,9 +112,16 @@ class ReminderStoreTests(unittest.TestCase):
             store = ReminderStore(Path(tmpdir) / "r.json")
             store.add(_make_reminder(local_now() + timedelta(hours=1), id="a"))
             store.add(_make_reminder(local_now() + timedelta(hours=2), id="b"))
-            store.add(_make_reminder(local_now() + timedelta(hours=3), id="c",
-                                     agent_id="qq-user-999", key="user:999",
-                                     kind="user", target_id=999))
+            store.add(
+                _make_reminder(
+                    local_now() + timedelta(hours=3),
+                    id="c",
+                    agent_id="qq-user-999",
+                    key="user:999",
+                    kind="user",
+                    target_id=999,
+                )
+            )
             items = store.cancel_all("qq-group-123")
             self.assertEqual({item.id for item in items}, {"a", "b"})
             self.assertEqual(store.pending_count("qq-group-123"), 0)
@@ -215,9 +225,7 @@ class ReminderAttentionDispatchTests(_AttentionCase):
 
     async def test_dispatch_cancel_latest(self):
         self._store.add(_make_reminder(local_now() + timedelta(hours=1)))
-        verdict = AttentionVerdict(
-            kind="reminder", data={"intent": "cancel", "scope": "latest"}
-        )
+        verdict = AttentionVerdict(kind="reminder", data={"intent": "cancel", "scope": "latest"})
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
         self.assertIn("已代办", note)
         self.assertIn("取消", note)
@@ -227,17 +235,13 @@ class ReminderAttentionDispatchTests(_AttentionCase):
         store = self._store
         store.add(_make_reminder(local_now() + timedelta(hours=1), id="a"))
         store.add(_make_reminder(local_now() + timedelta(hours=2), id="b"))
-        verdict = AttentionVerdict(
-            kind="reminder", data={"intent": "cancel", "scope": "all"}
-        )
+        verdict = AttentionVerdict(kind="reminder", data={"intent": "cancel", "scope": "all"})
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
         self.assertIn("取消", note)
         self.assertEqual(store.pending_count("qq-group-123"), 0)
 
     async def test_dispatch_cancel_with_nothing_pending(self):
-        verdict = AttentionVerdict(
-            kind="reminder", data={"intent": "cancel", "scope": "all"}
-        )
+        verdict = AttentionVerdict(kind="reminder", data={"intent": "cancel", "scope": "all"})
         note = await plugin._dispatch_attention(verdict, "qq-group-123")
         self.assertIn("没有登记", note)
 
@@ -294,15 +298,17 @@ class FireReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_private_fire_without_at(self):
         reminder = _make_reminder(
             local_now() - timedelta(seconds=1),
-            kind="user", target_id=3072252442, key="user:3072252442",
-            agent_id="qq-user-3072252442", remind_qq=3072252442, remind_name="帕秋莉",
+            kind="user",
+            target_id=3072252442,
+            key="user:3072252442",
+            agent_id="qq-user-3072252442",
+            remind_qq=3072252442,
+            remind_name="帕秋莉",
         )
         bot = AsyncMock()
         with (
             patch.object(plugin, "get_bots", return_value={"1": bot}),
-            patch.object(
-                plugin, "_generate_for_tenant", new=AsyncMock(return_value="该吃饭啦")
-            ),
+            patch.object(plugin, "_generate_for_tenant", new=AsyncMock(return_value="该吃饭啦")),
         ):
             await plugin._fire_reminder(reminder)
         bot.send_private_msg.assert_awaited_once()

@@ -33,9 +33,7 @@ class ThirdPartyNoiseFilterTests(unittest.TestCase):
         self.assertTrue(_third_party_noise_filter(_record("uvicorn.error", 40)))
 
     def test_own_logs_never_filtered(self):
-        self.assertTrue(
-            _third_party_noise_filter(_record("GensokyoAI.backends.nb2.plugin", 10))
-        )
+        self.assertTrue(_third_party_noise_filter(_record("GensokyoAI.backends.nb2.plugin", 10)))
         self.assertTrue(_third_party_noise_filter(_record("plugin", 20)))
 
     def test_missing_name_kept(self):

@@ -37,9 +37,7 @@ def compute_burn_rate(
     以 BURN_MIN_SPAN_SECONDS 为下限摊薄。无有效样本返回 {"count": 0}。
     """
     current = time.time() if now is None else now
-    recent = [
-        (ts, cost) for ts, cost in samples if 0.0 <= current - ts <= BURN_WINDOW_SECONDS
-    ]
+    recent = [(ts, cost) for ts, cost in samples if 0.0 <= current - ts <= BURN_WINDOW_SECONDS]
     if not recent:
         return {"count": 0}
     total = sum(cost for _, cost in recent)

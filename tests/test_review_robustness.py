@@ -369,6 +369,7 @@ class ToolRobustnessTests(unittest.TestCase):
         self.assertIsNone(registry2.get("test_iso_tool"))
         self.assertIsNotNone(registry1.get("test_iso_tool"))
 
+
 class EventRobustnessTests(unittest.TestCase):
     """事件层：请求 id 全量 uuid、flush_critical 不被普通事件截断。"""
 

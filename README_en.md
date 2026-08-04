@@ -407,9 +407,7 @@ The OpenAI provider offers a unified image generation entry point:
 from GensokyoAI.core.agent.model_client import ModelClient
 from GensokyoAI.core.config import ModelConfig
 
-client = ModelClient(
-    ModelConfig(provider="openai", name="gpt-image-1", api_key="sk-...")
-)
+client = ModelClient(ModelConfig(provider="openai", name="gpt-image-1", api_key="sk-..."))
 
 result = await client.generate_image(
     "Draw a cat drinking tea at the Hakurei Shrine",

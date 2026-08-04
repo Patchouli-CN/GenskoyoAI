@@ -790,7 +790,9 @@ class ConfigMerger:
             ),
             similarity=choose(
                 "similarity",
-                override.similarity if override.similarity != defaults.similarity else base.similarity,
+                override.similarity
+                if override.similarity != defaults.similarity
+                else base.similarity,
             ),
             history_size=choose(
                 "history_size",

@@ -209,9 +209,7 @@ class TopicEvictionTests(unittest.TestCase):
 
     def test_pinned_topic_survives_eviction(self):
         with TemporaryDirectory() as tmpdir:
-            store = TopicAwareStore(
-                Path(tmpdir) / "topics.json", max_topics=2, pin_importance=8.0
-            )
+            store = TopicAwareStore(Path(tmpdir) / "topics.json", max_topics=2, pin_importance=8.0)
             self._add(store, "核心", 9.0)
             self._add(store, "路人", 0.1)
             self._add(store, "新人", 0.5)

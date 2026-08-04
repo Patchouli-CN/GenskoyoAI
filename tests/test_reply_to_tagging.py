@@ -55,18 +55,14 @@ class ReplyToMemoryTaggingTests(unittest.TestCase):
         return working_memory
 
     def test_reply_to_prefix_written_to_memory(self):
-        wm = self._run_listener(
-            {"content": "到时间了哦～", "reply_to": ["帕秋莉", "赤色杀人魔"]}
-        )
+        wm = self._run_listener({"content": "到时间了哦～", "reply_to": ["帕秋莉", "赤色杀人魔"]})
         message = wm.get_context()[-1]
         self.assertEqual(message["role"], "assistant")
         self.assertEqual(message["content"], "@帕秋莉 @赤色杀人魔 到时间了哦～")
 
     def test_model_own_mention_not_duplicated(self):
         # 模型自己开头写了 @目标：良性模仿，不重复加标记
-        wm = self._run_listener(
-            {"content": "@帕秋莉 到时间了哦～", "reply_to": ["帕秋莉"]}
-        )
+        wm = self._run_listener({"content": "@帕秋莉 到时间了哦～", "reply_to": ["帕秋莉"]})
         self.assertEqual(wm.get_context()[-1]["content"], "@帕秋莉 到时间了哦～")
 
     def test_no_reply_to_stores_plain(self):
