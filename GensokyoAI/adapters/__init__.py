@@ -57,7 +57,9 @@ async def serve_adapters(*adapters: RuntimeAdapter, root_dir: Path | None = None
         for adapter in adapters:
             await adapter.start(host)
             started.append(adapter)
-            logger.info(f"[adapters] 适配器已启动: {getattr(adapter, 'name', type(adapter).__name__)}")
+            logger.info(
+                f"[adapters] 适配器已启动: {getattr(adapter, 'name', type(adapter).__name__)}"
+            )
         await asyncio.Event().wait()  # 永久驻留，直至被取消
     finally:
         for adapter in reversed(started):

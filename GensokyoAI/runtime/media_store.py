@@ -149,7 +149,7 @@ class MediaStore:
             return {}
         try:
             data = json.loads(self.metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return {}
         return data if isinstance(data, dict) else {}
 

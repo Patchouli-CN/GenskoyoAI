@@ -20,11 +20,11 @@ begin_scene: true
 
 # 主聊天模型配置
 model:
-  provider: "openai"    # LLM Provider: ollama / openai / openrouter / deepseek / openai_responses / gemini / claude
-  name: "claude-sonnet-4-6-thinking"
-  base_url: "https://api.lmuai.com/v1"   # 走 lmuai 中转
+  provider: "ollama"    # LLM Provider: ollama / openai / openrouter / deepseek / openai_responses / gemini / claude
+  name: "qwen3.5:9b"
+  base_url: null         # Ollama 默认 http://127.0.0.1:11434
   api_path: null        # 自定义 API path；OpenAI 默认 /chat/completions，Responses 默认 /responses
-  api_key: ""  # 运行时从环境变量 GENSOKYOAI_API_KEY 读取，不要硬编码真实 key
+  api_key: null         # OpenAI/Gemini/Claude 等可从环境变量 GENSOKYOAI_API_KEY 读取
   extra_headers: {}     # 额外 HTTP 请求头；OpenRouter 可配置 HTTP-Referer / X-Title
   web_search_enabled: false      # Web search 总开关；默认 false，避免隐私和成本风险
   web_search_strategy: "off"     # off / explicit / auto；当前执行层仅在 enabled 且非 off 时注入 Provider 内置搜索
@@ -33,9 +33,9 @@ model:
   web_search_allow_fallback: true # 搜索不可用时允许降级为普通回答
   web_search_metadata: {}         # Provider 特定搜索参数扩展
   stream: true
-  think: true                                  # 打开 thinking,匹配 claude-sonnet-4-6-thinking
+  think: false            # Provider 支持时可开启 reasoning/thinking 输出
   thinking_enabled: null # DeepSeek 专用；null 表示使用 Provider 默认值（DeepSeek 默认 true）
-  reasoning_effort: "high" # Claude thinking 模型透传(OpenAI 兼容 SDK 会走 extra_body)
+  reasoning_effort: null # 支持该参数的 Provider 可设 low / medium / high
   temperature: 0.7
   top_p: 0.9
   max_tokens: 2048
@@ -57,10 +57,9 @@ model:
   # price_input_cache_write_per_million: 12.5
 
 # Embedding 模型配置（独立于主聊天模型，避免误用聊天模型调用 embeddings）
-# Claude 原生不支持 embeddings；当前用 claude-sonnet-4-6-thinking，先禁用语义记忆以免启动报错。
-# 如需恢复语义记忆，可改成 OpenAI 兼容的 embedding 模型（参照下方示例）。
+# 默认关闭语义记忆；如需启用，请配置 Provider 支持的 embedding 模型。
 embedding:
-  provider: null        # null 表示默认复用 model.provider；Claude 不支持 embeddings，需改用 openai/gemini/ollama 等
+  provider: null        # null 表示默认复用 model.provider
   name: null            # 例如 text-embedding-3-small / BAAI/bge-m3 / nomic-embed-text / gemini-embedding-001
   base_url: null        # null 表示复用 model.base_url
   api_key: null         # null 表示复用 model.api_key
@@ -169,7 +168,7 @@ embedding:
 # 记忆配置
 memory:
   working_max_turns: 20
-  semantic_enabled: false  # 当前用 Claude 不带 embedding，临时关闭语义记忆；后续接 embedding 后改回 true
+  semantic_enabled: false  # 配好 embedding 模型后可改为 true
   semantic_top_k: 5
   semantic_similarity_threshold: 0.7
   semantic_max_topics: 50        # 话题数上限：达到后新增话题时淘汰回忆权重最低的非 pin 话题

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...core.config_dirs import adapter_config_dir
+from ...core.release_resources import resolve_resource_path
 from ...utils.logger import logger
 
 
@@ -45,7 +46,7 @@ def seed_local_env(root_dir: Path | None = None) -> Path:
     base = adapter_config_dir("nb2", root_dir)
     base.mkdir(parents=True, exist_ok=True)
     target = base / "local.env"
-    template = (root_dir or Path.cwd()) / "tmp" / "nb2.env.example"
+    template = resolve_resource_path(root_dir, "tmp", "nb2.env.example")
     if template.exists():
         shutil.copyfile(template, target)
         logger.info(f"[nb2] 首次运行已生成配置: {target}（请修改它，不要改 tmp/ 模板）")
@@ -114,7 +115,9 @@ class Nb2Config:
     napcat_dir: Path = Path("ignore/NapCat.Shell")  # 相对 root_dir/cwd 或绝对路径
     watchdog_cooldown_seconds: float = 600.0  # 两次自动重启的最小间隔
     watchdog_max_restarts: int = 5  # 24h 内自动重启上限
-    watchdog_recover_timeout: float = 900.0  # 重启后等待回连的超时（超时告警；冷启动实测可达 6+ 分钟）
+    watchdog_recover_timeout: float = (
+        900.0  # 重启后等待回连的超时（超时告警；冷启动实测可达 6+ 分钟）
+    )
     watchdog_disconnect_grace: float = 60.0  # WS 断开的回连宽限期（NapCat 自己会重连）
     # 掉线守护快速登录用的 bot QQ 号（硬编码 launcher 不带 main.bat 依赖）；
     # 未配置则由首次协议连接的 self_id 兜底

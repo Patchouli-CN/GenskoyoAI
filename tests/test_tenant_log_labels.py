@@ -20,7 +20,11 @@ class TenantSuffixTests(unittest.TestCase):
 
     def test_think_engine_suffix(self):
         labeled = ThinkEngine(
-            MagicMock(), MagicMock(), MagicMock(), "幽幽子", ThinkEngineConfig(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            "幽幽子",
+            ThinkEngineConfig(),
             log_label="qq-group-1",
         )
         self.assertEqual(labeled._log_suffix, ", 租户: qq-group-1")

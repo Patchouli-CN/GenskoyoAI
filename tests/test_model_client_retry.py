@@ -193,7 +193,12 @@ class ModelClientRetryTests(unittest.TestCase):
             ModelConfig(provider="retryable_test", name="test-model", retry_max_attempts=1)
         )
         self.assertEqual(client.latency_stats(), {"count": 0})
-        for context, ms in (("think_engine", 100.0), ("chat", 900.0), ("think_engine", 300.0), ("think_engine", 200.0)):
+        for context, ms in (
+            ("think_engine", 100.0),
+            ("chat", 900.0),
+            ("think_engine", 300.0),
+            ("think_engine", 200.0),
+        ):
             client._latency_samples.append((context, ms))
         # 全量统计
         stats = client.latency_stats()

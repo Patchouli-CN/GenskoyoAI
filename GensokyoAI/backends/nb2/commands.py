@@ -182,9 +182,7 @@ def _format_status(
     if quota_fetched:
         # 健康判定统一走框架 HealthCenter（静态阈值）；日耗计量仅展示
         burn_per_day = (status.get("cost") or {}).get("burn_per_day")
-        lines.append(
-            _format_quota_health(quota, health_center, burn_per_day=burn_per_day)
-        )
+        lines.append(_format_quota_health(quota, health_center, burn_per_day=burn_per_day))
 
     tenants = status["tenants"]
     # 会话租户数 = 群 + 私聊 + 其他（nb2-meta 元租户已删，无后台设施占位）

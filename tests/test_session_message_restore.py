@@ -46,11 +46,7 @@ class SessionMessageRestoreTests(unittest.TestCase):
             manager = SessionManager(SessionConfig(save_path=save_path), "reimu")
             restored = manager.get_working_memory(session.session_id).get_context()
             without_identity = [
-                {
-                    key: value
-                    for key, value in item.items()
-                    if key not in {"message_id", "revision"}
-                }
+                {key: value for key, value in item.items() if key not in {"message_id", "revision"}}
                 for item in restored
             ]
             self.assertEqual(without_identity, messages)

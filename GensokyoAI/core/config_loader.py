@@ -35,6 +35,11 @@ from .config_validator import (
     ConfigDiagnostic,
     ConfigValidator,
 )
+from .release_resources import (
+    bundled_resource_path,
+    find_character_resource,
+    resolve_resource_path,
+)
 
 # 角色配置缓存（LRU 简化版）：path -> (mtime, config)
 _character_config_cache: dict[Path, tuple[float, CharacterConfig]] = {}
@@ -56,9 +61,14 @@ class ConfigLoader(ConfigMerger):
     @staticmethod
     def default_config_path() -> Path:
         """返回配置模板路径（发行文件；用户配置应为 config/local.yaml）。"""
-        return Path(__file__).parent.parent.parent / "tmp" / "template-conf.yaml"
+        return bundled_resource_path("tmp", "template-conf.yaml")
 
-    def load(self, config_file: Path | None = None) -> AppConfig:
+    def load(
+        self,
+        config_file: Path | None = None,
+        *,
+        resource_root: Path | None = None,
+    ) -> AppConfig:
         """加载配置"""
         config = AppConfig()
 
@@ -75,11 +85,29 @@ class ConfigLoader(ConfigMerger):
         # 3. 环境变量覆盖
         config = apply_env_overrides(config)
 
-        # 4. 重新应用日志配置（确保使用最终配置）
+        # 4. 相对发行资源在工作目录缺失时回退到 wheel 内置资源
+        self._resolve_release_resources(config, resource_root)
+
+        # 5. 重新应用日志配置（确保使用最终配置）
         config._apply_logging_config()
 
         self._config = config
         return config
+
+    @staticmethod
+    def _resolve_release_resources(config: AppConfig, resource_root: Path | None) -> None:
+        scene_path = Path(config.scene.library_path)
+        if scene_path == Path("scenes") and (resource_root is not None or not scene_path.exists()):
+            config.scene.library_path = resolve_resource_path(resource_root, "scenes")
+
+        for actor in config.world.actors:
+            character_file = actor.character_file
+            if character_file is None or character_file.is_file():
+                continue
+            try:
+                actor.character_file = find_character_resource(str(character_file), resource_root)
+            except FileNotFoundError:
+                continue
 
     def _load_yaml(self, path: Path) -> AppConfig:
         """从 YAML 加载配置"""

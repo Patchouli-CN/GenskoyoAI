@@ -54,7 +54,9 @@ class EmotionTests(unittest.TestCase):
         self.assertGreater(Emotion(disgust=0.9).threshold_adjustment(), 0)
         # 平静无调制；极端值钳制在 [-0.10, +0.12]
         self.assertEqual(Emotion().threshold_adjustment(), 0)
-        self.assertGreaterEqual(Emotion(sorrow=1.0, fear=1.0, shame=1.0).threshold_adjustment(), -0.10)
+        self.assertGreaterEqual(
+            Emotion(sorrow=1.0, fear=1.0, shame=1.0).threshold_adjustment(), -0.10
+        )
         self.assertLessEqual(Emotion(sorrow=1.0, fear=1.0, shame=1.0).threshold_adjustment(), 0.12)
 
     def test_behavior_tendency(self):

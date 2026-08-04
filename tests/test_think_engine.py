@@ -188,9 +188,7 @@ class ThinkEngineDistillTests(unittest.TestCase):
 
         class _FakeMemory:
             def __init__(self):
-                self.config = SimpleNamespace(
-                    distill_enabled=enabled, distill_turns=turns
-                )
+                self.config = SimpleNamespace(distill_enabled=enabled, distill_turns=turns)
                 self.added = []
                 self.store = SimpleNamespace(get_all_topics=lambda: [])
 
@@ -362,6 +360,7 @@ class ThinkEngineDecisionTests(unittest.TestCase):
 
     def test_evaluate_speaking_drive_updates_emotion_state(self):
         """评估 JSON 中的八维情绪自评驱动 EmotionState（零新增 LLM 调用）。"""
+
         async def run():
             model_client = _FakeModelClient(
                 '{"message": "哼", "delay_seconds": 120, "reason": "烦", '
@@ -379,11 +378,13 @@ class ThinkEngineDecisionTests(unittest.TestCase):
             self.assertIn("愤怒", engine.emotion_context_line())
 
             # 缺 emotion 字段：不清空当前状态
-            engine2, _ = self._make_engine(_FakeModelClient(
-                '{"message": "x", "delay_seconds": 1, "reason": "", "enthusiasm": 0.5, '
-                '"motivation": {"expression_drive": 0.1, "emotional_charge": 0.1, '
-                '"relational_need": 0.1, "situational_relevance": 0.1}}'
-            ))
+            engine2, _ = self._make_engine(
+                _FakeModelClient(
+                    '{"message": "x", "delay_seconds": 1, "reason": "", "enthusiasm": 0.5, '
+                    '"motivation": {"expression_drive": 0.1, "emotional_charge": 0.1, '
+                    '"relational_need": 0.1, "situational_relevance": 0.1}}'
+                )
+            )
             engine2.emotion_state.current = Emotion(happy=0.9)
             await engine2.evaluate_speaking_drive("刚才的回复", [])
             self.assertAlmostEqual(engine2.emotion_state.current.happy, 0.9, places=2)
@@ -392,6 +393,7 @@ class ThinkEngineDecisionTests(unittest.TestCase):
 
     def test_evaluate_speaking_drive_prompt_carries_emotion_fields(self):
         """评估提示词包含情绪自评要求与当前情绪注入行。"""
+
         async def run():
             model_client = _FakeModelClient()
             engine, _ = self._make_engine(model_client)

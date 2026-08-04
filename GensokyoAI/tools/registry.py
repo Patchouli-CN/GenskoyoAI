@@ -47,9 +47,7 @@ class ToolRegistry:
         if existing is not None and existing.func is func:
             self._tools[tool_name] = existing
             return
-        self._tools[tool_name] = build_tool_definition(
-            func, name=name, parallel_safe=parallel_safe
-        )
+        self._tools[tool_name] = build_tool_definition(func, name=name, parallel_safe=parallel_safe)
 
     def get(self, name: str) -> ToolDefinition | None:
         """获取工具（仅查本实例注册表）。

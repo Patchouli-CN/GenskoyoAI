@@ -133,9 +133,7 @@ class CharacterValidator:
             begin_scene=self._normalize_begin_scene(data.get("begin_scene")),
             example_dialogue=data.get("example_dialogue"),
             metadata=data.get("metadata", {}),
-            motivation_weights=self._normalize_motivation_weights(
-                data.get("motivation_weights")
-            ),
+            motivation_weights=self._normalize_motivation_weights(data.get("motivation_weights")),
             emotion_baseline=self._normalize_emotion_baseline(data.get("emotion_baseline")),
         )
 

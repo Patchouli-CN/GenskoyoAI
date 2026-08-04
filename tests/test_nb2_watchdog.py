@@ -144,7 +144,9 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
     async def test_daily_cap_stops_auto_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             watchdog = _make_watchdog(
-                Path(tmpdir), cooldown_seconds=0.0, max_restarts_per_day=2,
+                Path(tmpdir),
+                cooldown_seconds=0.0,
+                max_restarts_per_day=2,
                 recover_timeout_seconds=0.01,
             )
             watchdog.notify_connected(3779163297)
@@ -224,6 +226,7 @@ class TriggerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_failure_alerts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+
             def bad_launch(d, q):
                 raise FileNotFoundError("NapCatWinBootMain.exe 不存在")
 
@@ -248,9 +251,7 @@ class DisconnectGraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_within_grace_skips_restart(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             calls: list[str] = []
-            watchdog = _make_watchdog(
-                Path(tmpdir), launch=lambda d: calls.append("launch") or 4242
-            )
+            watchdog = _make_watchdog(Path(tmpdir), launch=lambda d: calls.append("launch") or 4242)
             watchdog.notify_connected(3779163297)
             watchdog.notify_disconnected()
             await asyncio.sleep(0.01)
@@ -328,12 +329,8 @@ class LaunchCommandTests(unittest.TestCase):
                 return SimpleNamespace(pid=1234)
 
             with (
-                patch(
-                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
-                ),
-                patch.dict(
-                    "os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False
-                ),
+                patch("GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen),
+                patch.dict("os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False),
             ):
                 pid = _windows_launch_napcat(Path(tmpdir), 3779163297)
             self.assertEqual(pid, 1234)
@@ -356,12 +353,8 @@ class LaunchCommandTests(unittest.TestCase):
                 return SimpleNamespace(pid=1234)
 
             with (
-                patch(
-                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
-                ),
-                patch.dict(
-                    "os.environ", {}, clear=True
-                ),
+                patch("GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen),
+                patch.dict("os.environ", {}, clear=True),
             ):
                 _windows_launch_napcat(Path(tmpdir), 3779163297)
             command = captured["args"][2]
@@ -378,12 +371,8 @@ class LaunchCommandTests(unittest.TestCase):
                 return SimpleNamespace(pid=1234)
 
             with (
-                patch(
-                    "GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen
-                ),
-                patch.dict(
-                    "os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False
-                ),
+                patch("GensokyoAI.backends.nb2.watchdog.subprocess.Popen", fake_popen),
+                patch.dict("os.environ", {"NAPCAT_QUICK_PASSWORD_MD5": "abc123"}, clear=False),
             ):
                 pid = _windows_launch_napcat(Path(tmpdir), None)
             self.assertEqual(pid, 1234)

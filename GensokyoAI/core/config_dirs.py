@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 
 from ..utils.logger import logger
+from .release_resources import resolve_resource_path
 
 
 def adapter_config_dir(adapter_name: str, root_dir: Path | None = None) -> Path:
@@ -29,12 +30,10 @@ def ensure_local_config(root_dir: Path | None = None) -> tuple[Path, bool]:
     local_path = base / "config" / "local.yaml"
     if local_path.exists():
         return local_path, False
-    template = base / "tmp" / "template-conf.yaml"
+    template = resolve_resource_path(base, "tmp", "template-conf.yaml")
     local_path.parent.mkdir(parents=True, exist_ok=True)
     if template.exists():
         shutil.copyfile(template, local_path)
-        logger.info(
-            f"首次运行已生成本地配置: {local_path}（请修改它，不要改 tmp/ 模板）"
-        )
+        logger.info(f"首次运行已生成本地配置: {local_path}（请修改它，不要改 tmp/ 模板）")
         return local_path, True
     return local_path, False

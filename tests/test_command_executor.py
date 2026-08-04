@@ -59,9 +59,11 @@ class PermissionGateTests(unittest.TestCase):
         executor = CommandExecutor(registry=self.registry)
 
         async def run():
-            return (await executor.execute(
-                "/opencmd", CommandContext(source="test", permission=PermissionLevel.USER)
-            ))[0]
+            return (
+                await executor.execute(
+                    "/opencmd", CommandContext(source="test", permission=PermissionLevel.USER)
+                )
+            )[0]
 
         results = asyncio.run(run())
         self.assertEqual(results[0].status, CommandStatus.SUCCESS)

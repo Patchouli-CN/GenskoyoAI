@@ -480,7 +480,7 @@ _PROMPT_PREFIXES = {
 _PROMPT_ICONS = {
     "know": "📚",
     "meta": "🎬",
-    "attention": "⚠️",
+    "attention": "!",
 }
 
 

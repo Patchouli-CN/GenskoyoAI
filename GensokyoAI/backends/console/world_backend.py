@@ -137,10 +137,10 @@ class WorldConsoleBackend(RuntimeAdapter):
         self.console.print(f"[{self.colors.get(style, style)}]{message}[/]")
 
     def _print_success_message(self, message: str) -> None:
-        self._print_system_message(f"✓ {message}", style="success")
+        self._print_system_message(f"OK: {message}", style="success")
 
     def _print_error_message(self, message: str) -> None:
-        self._print_system_message(f"✗ {message}", style="error")
+        self._print_system_message(f"ERROR: {message}", style="error")
 
     def _print_info_message(self, message: str) -> None:
         self._print_system_message(f"ℹ {message}", style="info")
@@ -253,7 +253,7 @@ class WorldConsoleBackend(RuntimeAdapter):
                 actor_id,
                 name,
                 snapshot.stage.get(actor_id, "?"),
-                "●" if actor_id == snapshot.current_actor_id else "",
+                "*" if actor_id == snapshot.current_actor_id else "",
             )
         self.console.print(table)
 
@@ -404,8 +404,8 @@ class WorldConsoleBackend(RuntimeAdapter):
     async def run_interactive(self) -> None:
         await self.start()
 
-        self.console.print("[dim]💡 输入 [/][bold cyan]<cmd>help</cmd>[/] [dim]查看所有命令[/]")
-        self.console.print("[dim]💡 按 Ctrl+C 安全退出（会自动保存）[/]\n")
+        self.console.print("[dim]Tip: 输入 [/][bold cyan]<cmd>help</cmd>[/] [dim]查看所有命令[/]")
+        self.console.print("[dim]Tip: 按 Ctrl+C 安全退出（会自动保存）[/]\n")
 
         exited_normally = False
 

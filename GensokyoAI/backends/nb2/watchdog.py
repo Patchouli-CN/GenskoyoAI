@@ -70,7 +70,11 @@ _KILL_SETTLE_SECONDS = 3.0
 async def _ps(script: str) -> tuple[int, str]:
     """aiosubprocess 跑一段 PowerShell，返回 (returncode, stdout)。"""
     process = await asyncio.create_subprocess_exec(
-        "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

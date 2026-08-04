@@ -149,9 +149,7 @@ async def _send_segmented(
 
 def _group_mention_map(group_id: int) -> dict[str, int]:
     """群名片缓存反查：该群 昵称→QQ 映射（模型文本里的 @昵称 转真 at 用）。"""
-    return {
-        name: qq for (gid, qq), name in _member_names.items() if gid == group_id and name
-    }
+    return {name: qq for (gid, qq), name in _member_names.items() if gid == group_id and name}
 
 
 def _at_text_to_message(text: str, mention_map: dict[str, int]) -> Message:
@@ -506,9 +504,7 @@ async def _dispatch_attention(
         logger.info(f"[nb2] {agent_id} 注意力事务：提醒时间待确认")
         return build_reminder_clarify_context("", verdict.data["content"])
     target_name = verdict.data.get("target_name") or (sender_name or "")
-    outcome = _register_reminder(
-        agent_id, due, verdict.data["content"], target_name
-    )
+    outcome = _register_reminder(agent_id, due, verdict.data["content"], target_name)
     if outcome.ok:
         logger.info(
             f"[nb2] {agent_id} 注意力事务已代办：{outcome.due_text} 提醒 "
@@ -1093,8 +1089,10 @@ async def _process_batch(
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
     send = matcher.send
-    if key.startswith("group:") and focus_names and (
-        at_targets := _resolve_focus_targets(key, batch, focus_names)
+    if (
+        key.startswith("group:")
+        and focus_names
+        and (at_targets := _resolve_focus_targets(key, batch, focus_names))
     ):
         # 回应焦点（AttentionThings 因果判定：谁冲着 bot 来）才 @——真 at 段
         # 拼进首条分段；普通闲聊无焦点不 @。模型自己开头写的文本 @ 是纯文本

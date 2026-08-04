@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from ..core.release_resources import resolve_resource_path
 from ..utils.logger import logger
 from .types import Scene
 
@@ -64,6 +65,8 @@ class SceneManager:
                 return self._library
 
             library_path = Path(self.config.library_path)
+            if library_path == Path("scenes"):
+                library_path = resolve_resource_path(None, "scenes")
             if not library_path.exists():
                 logger.warning(f"场景库目录不存在: {library_path}")
                 self._loaded = True

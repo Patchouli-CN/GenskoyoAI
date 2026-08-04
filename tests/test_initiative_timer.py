@@ -262,7 +262,6 @@ class InitiativeCoordinatorDriveTests(unittest.TestCase):
     def _make_agent(self, event_bus: EventBus, decision):
         from types import SimpleNamespace
 
-
         class _FakeThinkEngine:
             def __init__(self, drive_decision):
                 self._decision = drive_decision
