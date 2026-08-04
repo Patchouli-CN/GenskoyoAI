@@ -636,3 +636,69 @@ def build_reminder_preregistered_context(due_text: str, remind_name: str, conten
         "到点会由系统触发你来说（不是现在）。现在**只**用自己的口吻告诉对方你已记下"
         "（一两句话）——**绝对不要**自己表演「到点提醒」或说「时间到了」。"
     )
+
+
+def build_ooc_judge_prompts(
+    character_name: str,
+    persona_text: str,
+    candidate: str,
+    context_text: str,
+    pending_summary: str,
+    thought: str,
+    emotion_line: str,
+) -> tuple[str, str]:
+    """OOC 判定（解析方：core.agent.ooc_judge.OocJudge._parse_ooc_verdict）。
+
+    输出 JSON 字段契约：ooc_score / character_match / naturalness /
+    copied_inner_monologue / issues——改字段必须与解析方同步。
+    """
+    system = (
+        "你是 GensokyoAI 的回复质检员。判断一段要发给用户的回复：\n"
+        f"（1）是否符合 {character_name} 的人设；（2）是否自然口语、是否模板化；\n"
+        "（3）是否照抄了内部思考或待表达摘要。\n\n"
+        f"【角色人设】\n{persona_text[:1200]}\n\n"
+        "【打分标准】\n"
+        "- ooc_score（0~1，越高越脱角色）：第三人称旁白、AI/旁观者口吻、出现\n"
+        "  「定时器/主动开口/系统」等幕后词汇、照抄内部思考 → 高分。\n"
+        "- character_match（0~1）：与人设契合度。\n"
+        "- naturalness（0~1）：口语自然度；模板化/每句一个样/过度结构化压低分。\n"
+        "- copied_inner_monologue（bool）：是否明显照抄「内部整理/待表达摘要」原文。\n"
+        "- issues：列出具体问题点，最多 3 条，供重写参考。\n\n"
+        "只输出一个原始 JSON 对象；不要 Markdown 代码块、解释或任何前后缀。"
+    )
+    user = (
+        f"【候选回复】\n{candidate}\n\n"
+        f"【近期对话上下文】\n{context_text or '（无）'}\n\n"
+        "【参考（仅供检测照抄，不是要复述的内容）】\n"
+        f"内部整理：{thought or '无'}\n"
+        f"待表达摘要：{pending_summary or '无'}\n\n"
+        f"【当前情绪状态】{emotion_line or '平稳'}\n\n"
+        '输出必须且只能是下面的 JSON 对象：\n'
+        '{"ooc_score": 0.0, "character_match": 0.0, "naturalness": 0.0, '
+        '"copied_inner_monologue": false, "issues": []}'
+    )
+    return system, user
+
+
+def build_ooc_rewrite_prompt(
+    character_name: str,
+    persona_text: str,
+    candidate: str,
+    issues: list[str],
+    emotion_line: str,
+) -> str:
+    """OOC 重写（解析方：core.agent.ooc_judge.OocJudge.rewrite）。"""
+    issue_lines = "\n".join(f"- {issue}" for issue in issues) or "- 无"
+    return (
+        f"你是 {character_name} 的润色师。下面这条回复有脱角色问题，请按人设重写它：\n"
+        "- 保留原回复的意图、回应对象与信息量，不要删掉要表达的事。\n"
+        f"- 用 {character_name} 的第一人称口吻，口语、自然、句式多样。\n"
+        "- 不要复述/提及「内部整理」「待表达摘要」；不要出现「定时器」「主动开口」\n"
+        "  「系统」等幕后词汇；不要用「也罢」「既然……」这类承接内心思考的过渡开头。\n"
+        "- 只输出重写后的正文：不加角色引号、不加 *动作* 装饰、不加解释、不加任何前后缀。\n\n"
+        f"【角色人设】\n{persona_text[:1200]}\n\n"
+        f"【候选回复（原样）】\n{candidate}\n\n"
+        f"【判定指出的问题】\n{issue_lines}\n\n"
+        f"【当前情绪状态】{emotion_line or '平稳'}\n\n"
+        "请重写并只输出正文。"
+    )

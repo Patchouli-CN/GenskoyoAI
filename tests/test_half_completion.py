@@ -25,6 +25,7 @@ from GensokyoAI.core.config import (
     InitiativeTimerConfig,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     SessionConfig,
     ThinkEngineConfig,
 )
@@ -65,6 +66,7 @@ def _make_config(tmp: str) -> AppConfig:
         memory=MemoryConfig(semantic_enabled=False, auto_memory_enabled=False),
         think_engine=ThinkEngineConfig(enabled=False),
         initiative_timer=InitiativeTimerConfig(enabled=False),
+        ooc_judge=OocJudgeConfig(enabled=False),  # 隔离被测逻辑，不跑投递前判定
     )
 
 

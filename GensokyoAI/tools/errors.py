@@ -8,20 +8,23 @@ from msgspec import Struct, field
 
 
 class ToolError(Struct):
-    """工具错误的双层结构。
+    """工具错误的三层结构。
 
-    technical_message 给日志/模型诊断使用；user_message 给调用方/UI 展示使用。
+    technical_message 给日志/事件诊断；user_message 给调用方/UI 展示；
+    model_message 给模型上下文（干净、角色能自然回应的文本，不泄漏原始诊断串，
+    如 ddg 超时的 startpage URL）。model_message 为 None 时回退 user/technical。
     """
 
     error_code: str
     technical_message: str
     user_message: str
+    model_message: str | None = None
     recoverable: bool = True
     action_hint: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "error_code": self.error_code,
             "technical_message": self.technical_message,
             "user_message": self.user_message,
@@ -29,6 +32,9 @@ class ToolError(Struct):
             "action_hint": self.action_hint,
             "details": dict(self.details),
         }
+        if self.model_message is not None:
+            payload["model_message"] = self.model_message
+        return payload
 
 
 class ToolExecutionError(Exception):

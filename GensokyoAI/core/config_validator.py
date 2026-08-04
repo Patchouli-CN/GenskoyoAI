@@ -15,6 +15,7 @@ from .config_schema import (
     LogLevel,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     RepeatGuardConfig,
     ResourceControlConfig,
     SceneConfig,
@@ -259,6 +260,8 @@ class ConfigValidator:
             self._validate_repeat_guard_data(data.get("repeat_guard") or {}, diagnostics)
         if "health" in data:
             self._validate_health_data(data.get("health") or {}, diagnostics)
+        if "ooc_judge" in data:
+            self._validate_ooc_judge_data(data.get("ooc_judge") or {}, diagnostics)
         if "resource_control" in data:
             self._validate_resource_control_data(data.get("resource_control") or {}, diagnostics)
         if "world" in data:
@@ -1376,6 +1379,46 @@ class ConfigValidator:
                 )
             )
 
+    def _validate_ooc_judge_data(self, data: Any, diagnostics: list[ConfigDiagnostic]) -> None:
+        self._validate_object("ooc_judge", data, diagnostics)
+        if not isinstance(data, dict):
+            return
+        self._validate_unknown_fields(
+            "ooc_judge", data, self._struct_field_names(OocJudgeConfig), diagnostics
+        )
+        self._validate_numeric_range(
+            "ooc_judge.threshold", data.get("threshold"), diagnostics, minimum=0, maximum=1
+        )
+        self._validate_numeric_range(
+            "ooc_judge.judge_temperature",
+            data.get("judge_temperature"),
+            diagnostics,
+            minimum=0,
+            maximum=1,
+        )
+        self._validate_numeric_range(
+            "ooc_judge.judge_max_tokens", data.get("judge_max_tokens"), diagnostics, minimum=16
+        )
+        self._validate_numeric_range(
+            "ooc_judge.rewrite_temperature",
+            data.get("rewrite_temperature"),
+            diagnostics,
+            minimum=0,
+            maximum=1,
+        )
+        self._validate_numeric_range(
+            "ooc_judge.rewrite_max_tokens", data.get("rewrite_max_tokens"), diagnostics, minimum=16
+        )
+        self._validate_numeric_range(
+            "ooc_judge.similarity_threshold",
+            data.get("similarity_threshold"),
+            diagnostics,
+            minimum=0,
+            maximum=1,
+        )
+        self._validate_field_type("ooc_judge.max_retries", data.get("max_retries"), int, diagnostics)
+        self._validate_field_type("ooc_judge.enabled", data.get("enabled"), bool, diagnostics)
+
     @staticmethod
     def _validate_hesitation_delay_seconds(value: Any, diagnostics: list[ConfigDiagnostic]) -> None:
         if value is None:
@@ -1698,6 +1741,7 @@ class ConfigValidator:
             "initiative_timer",
             "repeat_guard",
             "health",
+            "ooc_judge",
             "resource_control",
             "world",
             "character",

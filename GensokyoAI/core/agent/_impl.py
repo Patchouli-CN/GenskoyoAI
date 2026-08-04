@@ -34,7 +34,9 @@ from .emotion import Emotion
 from .initiative_coordinator import InitiativeCoordinator
 from .lifecycle import LifecycleManager
 from .message_builder import MessageBuilder
+from .ooc_judge import OocContext, OocJudge
 from .prompts import build_half_completion_context, build_roleplay_system_prompt
+from .replyer import Replyer
 from .response_handler import STREAM_INTERRUPT_MARKER, ResponseHandler, strip_interrupt_marker
 from .runtime_context import AgentDependencies, AgentLazyComponents
 from .save_coordinator import SaveCoordinator
@@ -115,6 +117,7 @@ class Agent:
         self._stream_idle_timeout = 30.0
         # 非流式/流式统一的整轮响应总超时（04#9：同一慢响应不再因模式不同提前超时）
         self._response_total_timeout = 120.0
+        self._replyer: Replyer | None = None  # OOC 投递前自查（start 时装配）
 
     def _init_core_components(self) -> None:
         self.character_name = safe_get(self.config, "character.name", "default")
@@ -743,6 +746,18 @@ class Agent:
             self._action_executor = ActionExecutor(self, self.event_bus)
             self._lazy_components.action_executor = self._action_executor
 
+        # OOC 判定/重写管线（Replyer）：投递前自查，独立于主生成模型
+        if self._replyer is None:
+            self._replyer = Replyer(
+                OocJudge(
+                    model_client=self._model_client,
+                    config=self.config.ooc_judge,
+                    character_name=self.character_name,
+                    log_label=self._log_label or None,
+                ),
+                config=self.config.ooc_judge,
+            )
+
         if self._generate_response_subscription_id is None:
             self._generate_response_subscription_id = self.event_bus.subscribe(
                 SystemEvent.GENERATE_RESPONSE,
@@ -911,6 +926,27 @@ class Agent:
                 # error_fallback（生成异常无产出）不写 MESSAGE_SENT——兜底文案
                 # 只投递给用户，不进工作记忆污染历史（02#1）。
                 self._half_completion = None
+                # OOC 投递前自查（Replyer）：full_response 拼完后、MESSAGE_SENT 前。
+                # 判定/重写失败一律放行原回复（增强绝不能拖垮主回复）。
+                if not self.is_shutting_down and self._replyer is not None:
+                    try:
+                        full_response = await self._replyer.ensure_in_character(
+                            full_response,
+                            character=self.config.character,
+                            context=OocContext(
+                                context_text=ThinkEngine._format_context_for_decision(
+                                    self.working_memory.get_recent(8), full_response
+                                ),
+                                emotion_line=(
+                                    self._think_engine.emotion_state.context_line()
+                                    if self._think_engine is not None
+                                    else ""
+                                ),
+                            ),
+                            source="speak",
+                        )
+                    except Exception as error:
+                        logger.warning(f"OOC 判定/重写失败，放行原回复: {error}")
                 data = {"content": full_response}
                 # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给
                 # 记忆写入，助手消息在工作记忆里带「（对 某人）」——多人快节奏

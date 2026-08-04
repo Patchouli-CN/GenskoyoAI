@@ -73,6 +73,7 @@ async def web_search(
                 error_code="web_search.unexpected_error",
                 technical_message=f"web_search 执行异常: {e}",
                 user_message="联网搜索执行失败。",
+                model_message="搜索服务暂时不可用，稍后再试。",
                 recoverable=True,
                 action_hint="请稍后重试；如果持续失败，请检查网络、代理或搜索 Provider 配置。",
                 details={
@@ -98,6 +99,7 @@ def _result_to_tool_error(result) -> ToolError:
             error_code="web_search.disabled",
             technical_message=result.errors.get("config") or "web_search 工具未启用",
             user_message="联网搜索工具未启用。",
+            model_message="联网搜索工具未启用。",
             recoverable=True,
             action_hint="请在配置中启用 tool.web_search.enabled。",
             details=result.to_dict()["diagnostics"],
@@ -107,6 +109,7 @@ def _result_to_tool_error(result) -> ToolError:
             error_code="web_search.unsupported_provider",
             technical_message=result.errors["provider"],
             user_message="当前联网搜索 Provider 不可用。",
+            model_message="当前搜索服务不可用，换个方式问吧。",
             recoverable=True,
             action_hint="请将 tool.web_search.provider 设置为 ddg、bing、api 或 mixed。",
             details=result.to_dict()["diagnostics"],
@@ -116,6 +119,9 @@ def _result_to_tool_error(result) -> ToolError:
             error_code="web_search.provider_failed",
             technical_message=result.fallback_reason or "web_search provider 执行失败",
             user_message="联网搜索 Provider 执行失败。",
+            # 不把 fallback_reason（含 ddg 原始 URL）给模型——角色只需知道
+            # 搜索不可用，能自然回应即可（ddg 错误泄漏修复）
+            model_message="搜索服务暂时不可用，稍后再试。",
             recoverable=True,
             action_hint="请检查网络、API key、endpoint 或稍后重试。",
             details=result.to_dict()["diagnostics"],
@@ -124,6 +130,7 @@ def _result_to_tool_error(result) -> ToolError:
         error_code="web_search.no_results",
         technical_message="web_search 未返回结果",
         user_message="联网搜索没有找到可用结果。",
+        model_message="没有找到相关结果。",
         recoverable=True,
         action_hint="请换一个更具体的查询词后重试。",
         details=result.to_dict()["diagnostics"],

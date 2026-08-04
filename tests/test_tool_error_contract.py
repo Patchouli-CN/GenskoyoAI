@@ -319,5 +319,55 @@ class ToolErrorContractTests(unittest.TestCase):
         self.assertEqual(response["error_object"]["details"], {"scope": "runtime"})
 
 
+class ToolErrorModelMessageTests(unittest.TestCase):
+    """给模型的错误 content 用干净 model_message，不泄漏原始诊断（ddg 修复）。"""
+
+    def test_error_result_uses_model_message_for_content(self):
+        error = ToolError(
+            error_code="web_search.provider_failed",
+            technical_message="ddg: error sending request for url (https://www.startpage.com/)",
+            user_message="联网搜索 Provider 执行失败。",
+            model_message="搜索服务暂时不可用，稍后再试。",
+        )
+        result = ToolExecutor._error_result(
+            {"id": "call-x"}, "web_search", error, legacy_prefix="错误"
+        )
+        self.assertEqual(result["content"], "错误: 搜索服务暂时不可用，稍后再试。")
+        self.assertNotIn("startpage", result["content"])  # 原始 URL 不泄漏给模型
+        # 原始诊断仍保留在 error.technical_message 供日志/事件观测
+        self.assertIn("startpage", result["error"]["technical_message"])
+        self.assertEqual(result["error"]["model_message"], "搜索服务暂时不可用，稍后再试。")
+
+    def test_error_result_falls_back_to_user_message(self):
+        error = ToolError(
+            error_code="tool.generic",
+            technical_message="raw technical detail",
+            user_message="给用户看的干净信息",
+        )
+        result = ToolExecutor._error_result(
+            {"id": "call-y"}, "generic_tool", error, legacy_prefix="错误"
+        )
+        self.assertEqual(result["content"], "错误: 给用户看的干净信息")
+        self.assertNotIn("raw technical", result["content"])
+        self.assertNotIn("model_message", result["error"])  # None 时 to_dict 省略
+
+    def test_web_search_provider_failed_sets_clean_model_message(self):
+        from GensokyoAI.tools.tool_builtin.web_search import _result_to_tool_error
+
+        result = WebSearchResult(
+            query="test",
+            provider="mixed",
+            status="failed",
+            fallback_reason="ddg: ddg: error sending request for url "
+            "(https://www.startpage.com/) > operation timed out",
+            errors={"ddg": "ddg: error sending request for url "
+            "(https://www.startpage.com/) > operation timed out"},
+        )
+        error = _result_to_tool_error(result)
+        self.assertEqual(error.model_message, "搜索服务暂时不可用，稍后再试。")
+        self.assertIn("startpage", error.technical_message)  # 诊断保留
+        self.assertNotIn("startpage", error.model_message)  # 模型面干净
+
+
 if __name__ == "__main__":
     unittest.main()

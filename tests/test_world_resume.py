@@ -22,6 +22,7 @@ from GensokyoAI.core.config import (
     InitiativeTimerConfig,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     SceneConfig,
     SessionConfig,
     ThinkEngineConfig,
@@ -100,6 +101,7 @@ def _make_config(tmp: str, *, actors: list[WorldActorConfig] | None = None) -> A
         session=SessionConfig(save_path=Path(tmp)),
         memory=MemoryConfig(semantic_enabled=False, auto_memory_enabled=False),
         think_engine=ThinkEngineConfig(enabled=False),
+        ooc_judge=OocJudgeConfig(enabled=False),  # 隔离被测逻辑，不跑投递前判定
         initiative_timer=InitiativeTimerConfig(enabled=False),
         scene=SceneConfig(enabled=False),
         world=WorldConfig(

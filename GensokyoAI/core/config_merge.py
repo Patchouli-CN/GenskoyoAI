@@ -12,6 +12,7 @@ from .config_schema import (
     LogLevel,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     RepeatGuardConfig,
     ResourceControlConfig,
     SceneConfig,
@@ -87,6 +88,7 @@ class ConfigMerger:
         )
         result.repeat_guard = self._merge_repeat_guard(base.repeat_guard, override.repeat_guard)
         result.health = self._merge_health(base.health, override.health)
+        result.ooc_judge = self._merge_ooc_judge(base.ooc_judge, override.ooc_judge)
         result.resource_control = self._merge_resource_control(
             base.resource_control,
             override.resource_control,
@@ -723,6 +725,56 @@ class ConfigMerger:
                 override.quota_crit_yuan
                 if override.quota_crit_yuan != defaults.quota_crit_yuan
                 else base.quota_crit_yuan,
+            ),
+        )
+
+    def _merge_ooc_judge(self, base: OocJudgeConfig, override: OocJudgeConfig) -> OocJudgeConfig:
+        """合并 OOC 判定配置（yaml `ooc_judge:` 节）。"""
+        choose = self._chooser(base, override)
+        defaults = OocJudgeConfig()
+        return OocJudgeConfig(
+            enabled=choose("enabled", override.enabled or base.enabled),
+            threshold=choose(
+                "threshold",
+                override.threshold
+                if override.threshold != defaults.threshold
+                else base.threshold,
+            ),
+            max_retries=choose(
+                "max_retries",
+                override.max_retries
+                if override.max_retries != defaults.max_retries
+                else base.max_retries,
+            ),
+            judge_temperature=choose(
+                "judge_temperature",
+                override.judge_temperature
+                if override.judge_temperature != defaults.judge_temperature
+                else base.judge_temperature,
+            ),
+            judge_max_tokens=choose(
+                "judge_max_tokens",
+                override.judge_max_tokens
+                if override.judge_max_tokens != defaults.judge_max_tokens
+                else base.judge_max_tokens,
+            ),
+            rewrite_temperature=choose(
+                "rewrite_temperature",
+                override.rewrite_temperature
+                if override.rewrite_temperature != defaults.rewrite_temperature
+                else base.rewrite_temperature,
+            ),
+            rewrite_max_tokens=choose(
+                "rewrite_max_tokens",
+                override.rewrite_max_tokens
+                if override.rewrite_max_tokens != defaults.rewrite_max_tokens
+                else base.rewrite_max_tokens,
+            ),
+            similarity_threshold=choose(
+                "similarity_threshold",
+                override.similarity_threshold
+                if override.similarity_threshold != defaults.similarity_threshold
+                else base.similarity_threshold,
             ),
         )
 

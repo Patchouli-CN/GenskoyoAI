@@ -196,6 +196,24 @@ class HealthConfig(Struct):
     quota_crit_yuan: float = 5.0  # 低于该值 → 🔴 临界；≤ 0 → 🟣 耗尽
 
 
+class OocJudgeConfig(Struct):
+    """回复投递前的 OOC（脱角色/模板化）判定与重写配置。
+
+    enabled 时每次回复在 MESSAGE_SENT 前多一次轻量判定调用（温度 0.1、
+    ~200 token、call_context="ooc_judge"）；判 OOC 后再多一次重写调用
+    （有界，max_retries 轮重判）。判定/重写失败一律放行原回复。
+    """
+
+    enabled: bool = True
+    threshold: float = 0.7  # ooc_score ≥ 该值判定 OOC（分越高越 OOC/模板化）
+    max_retries: int = 1  # 重写-重判的有界轮数（每轮 1 判定 + 1 重写）
+    judge_temperature: float = 0.1
+    judge_max_tokens: int = 200
+    rewrite_temperature: float = 0.6  # 重写要多样性，温度略高于判定
+    rewrite_max_tokens: int = 300
+    similarity_threshold: float = 0.7  # 预检：candidate vs pending_summary/thought 相似度
+
+
 class WebSearchAPIConfig(Struct):
     """自有 Web search API Provider 配置。"""
 
@@ -445,6 +463,7 @@ class AppConfig(Struct):
     initiative_timer: InitiativeTimerConfig = field(default_factory=InitiativeTimerConfig)
     repeat_guard: RepeatGuardConfig = field(default_factory=RepeatGuardConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
+    ooc_judge: OocJudgeConfig = field(default_factory=OocJudgeConfig)
     resource_control: ResourceControlConfig = field(default_factory=ResourceControlConfig)
     world: WorldConfig = field(default_factory=WorldConfig)
 

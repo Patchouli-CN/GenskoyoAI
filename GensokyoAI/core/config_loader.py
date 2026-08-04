@@ -18,6 +18,7 @@ from .config_schema import (
     LogLevel,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     RepeatGuardConfig,
     ResourceControlConfig,
     SceneConfig,
@@ -202,6 +203,11 @@ class ConfigLoader(ConfigMerger):
             health_data = data["health"] or {}
             config.health = HealthConfig(**health_data)
             self._provided_fields[id(config.health)] = set(health_data.keys())
+
+        if "ooc_judge" in data:
+            ooc_data = data["ooc_judge"] or {}
+            config.ooc_judge = OocJudgeConfig(**ooc_data)
+            self._provided_fields[id(config.ooc_judge)] = set(ooc_data.keys())
 
         if "resource_control" in data:
             resource_control_data = data["resource_control"] or {}

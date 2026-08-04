@@ -16,6 +16,7 @@ from ..events import Event, SystemEvent
 from ..exceptions import AgentError
 from .actions import ActionFactory
 from .initiative_timer import InitiativeTimerManager
+from .ooc_judge import OocContext
 from .prompts import build_initiative_continue_cue, build_initiative_message_context
 
 if TYPE_CHECKING:
@@ -250,6 +251,28 @@ class InitiativeCoordinator:
                 "pending_summary": pending_summary,
                 "thought": thought,
             }
+
+        # OOC 投递前自查（Replyer）：主动消息发出去前检测照抄内心独白/模板化。
+        # context 带 pending_summary/thought，预检可免 LLM 抓住照抄。失败放行。
+        if agent._replyer is not None:
+            try:
+                message = await agent._replyer.ensure_in_character(
+                    message,
+                    character=agent.config.character,
+                    context=OocContext(
+                        context_text=recent_context,
+                        pending_summary=pending_summary,
+                        thought=thought or "",
+                        emotion_line=(
+                            agent._think_engine.emotion_state.context_line()
+                            if agent._think_engine is not None
+                            else ""
+                        ),
+                    ),
+                    source="initiative",
+                )
+            except Exception as error:
+                logger.warning(f"主动消息 OOC 判定/重写失败，放行原消息: {error}")
 
         # 发布完整消息事件（供持久化/记忆记录等下游消费）
         agent.event_bus.publish(

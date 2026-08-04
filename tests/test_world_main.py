@@ -28,6 +28,7 @@ from GensokyoAI.core.config import (
     InitiativeTimerConfig,
     MemoryConfig,
     ModelConfig,
+    OocJudgeConfig,
     SceneConfig,
     SessionConfig,
     ThinkEngineConfig,
@@ -147,6 +148,7 @@ def _make_config(
         session=SessionConfig(save_path=Path(tmp)),
         memory=MemoryConfig(semantic_enabled=False, auto_memory_enabled=False),
         think_engine=ThinkEngineConfig(enabled=False),
+        ooc_judge=OocJudgeConfig(enabled=False),  # 隔离被测逻辑，不跑投递前判定
         initiative_timer=InitiativeTimerConfig(enabled=False),
         scene=SceneConfig(enabled=scene_enabled, library_path=Path(tmp) / "scenes"),
         world=WorldConfig(

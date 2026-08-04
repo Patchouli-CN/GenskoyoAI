@@ -288,12 +288,18 @@ class ToolExecutor:
         *,
         legacy_prefix: str,
     ) -> dict[str, Any]:
-        """构造兼容旧字段的结构化错误结果。"""
+        """构造兼容旧字段的结构化错误结果。
+
+        给模型的 content 用干净的 model_message（回退 user/technical），
+        原始技术诊断只进 error.technical_message 供日志/事件观测——否则
+        ddg 超时的原始 URL 会顺着工具结果泄漏进角色台词。
+        """
+        model_content = error.model_message or error.user_message or error.technical_message
         return {
             "role": "tool",
             "tool_call_id": tool_call.get("id", ""),
             "name": name,
-            "content": f"{legacy_prefix}: {error.technical_message}",
+            "content": f"{legacy_prefix}: {model_content}",
             "is_error": True,
             "error": error.to_dict(),
         }

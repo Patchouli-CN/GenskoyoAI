@@ -353,7 +353,8 @@ class ToolRobustnessTests(unittest.TestCase):
 
         result2 = asyncio.run(in_loop())
         self.assertNotEqual(result2["content"], "ran")
-        self.assertIn("execute_sync", result2["content"])
+        # 给模型的 content 用干净 user_message，不泄漏 execute_sync 技术细节（ddg 修复同款）
+        self.assertIn("同步", result2["content"])
 
     def test_registry_get_has_no_global_fallback(self):
         registry2 = ToolRegistry()  # 先建，避免 _load_builtin 拾起后注册的工具
