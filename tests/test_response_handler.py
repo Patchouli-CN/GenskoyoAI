@@ -111,5 +111,79 @@ class ToolPrefaceRecordTests(unittest.TestCase):
         self.assertEqual(preface_occurrences, 1)
 
 
+class ToolFollowupRoundTests(unittest.TestCase):
+    """工具追问轮（有界）：模型看完结果想再查一次，第二轮的 tool_calls 照常执行。"""
+
+    def _make_handler(self, streams, executor):
+        working_memory = WorkingMemoryManager()
+        handler = ResponseHandler(
+            SimpleNamespace(character=SimpleNamespace(name="test")),
+            working_memory,
+            executor,
+            _FakeModelClient(streams),
+            _FakeMessageBuilder(working_memory),
+        )
+        return handler, working_memory
+
+    def test_second_tool_round_is_executed(self):
+        executor = _FakeToolExecutor()
+        handler, _ = self._make_handler(
+            [
+                [StreamChunk(is_tool_call=True, tool_info={
+                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
+                        ToolCall(id="c1", provider="openai",
+                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
+                    ])})],
+                [StreamChunk(is_tool_call=True, tool_info={
+                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
+                        ToolCall(id="c2", provider="openai",
+                                 function=ToolCallFunction(name="fetch_url", arguments={}, provider="openai"))
+                    ])})],
+                [StreamChunk(content="查到了，灵梦是红白巫女。")],
+            ],
+            executor,
+        )
+
+        async def collect():
+            output = ""
+            async for chunk in handler.process_stream([{"role": "user", "content": "灵梦"}], []):
+                output += chunk.content or ""
+            return output
+
+        self.assertEqual(asyncio.run(collect()), "查到了，灵梦是红白巫女。")
+
+    def test_tool_calls_beyond_budget_are_dropped_with_text_kept(self):
+        handler, _ = self._make_handler(
+            [
+                [StreamChunk(is_tool_call=True, tool_info={
+                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
+                        ToolCall(id="c1", provider="openai",
+                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
+                    ])})],
+                [StreamChunk(is_tool_call=True, tool_info={
+                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
+                        ToolCall(id="c2", provider="openai",
+                                 function=ToolCallFunction(name="fetch_url", arguments={}, provider="openai"))
+                    ])})],
+                # 第三轮仍想调工具，但带着正文：正文投递、tool_calls 丢弃
+                [StreamChunk(content="就查到这吧。"),
+                 StreamChunk(is_tool_call=True, tool_info={
+                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
+                        ToolCall(id="c3", provider="openai",
+                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
+                    ])})],
+            ],
+            _FakeToolExecutor(),
+        )
+
+        async def collect():
+            output = ""
+            async for chunk in handler.process_stream([{"role": "user", "content": "灵梦"}], []):
+                output += chunk.content or ""
+            return output
+
+        self.assertEqual(asyncio.run(collect()), "就查到这吧。")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -140,72 +140,77 @@ class ResponseHandler:
         continuation_input: str = "",
     ) -> AsyncIterator[StreamChunk]:
         self._last_assistant_reasoning = None
-        tool_calls_message: UnifiedMessage | None = None
-        assistant_content = ""
-        assistant_reasoning = ""
+        current_messages = messages
+        # 工具追问轮（有界，默认最多 2 轮执行）：模型看完结果可能想再查一次
+        # （换关键词/换站）。此前第二轮里它只发 tool_calls 没正文也照样丢，
+        # 整轮回复变空触发兜底文案（实机事故「搜了但不回」）。
+        max_tool_rounds = 2
+        for round_index in range(max_tool_rounds + 1):
+            tool_calls_message: UnifiedMessage | None = None
+            assistant_content = ""
+            assistant_reasoning = ""
 
-        # 第一次流式调用
-        async for chunk in self._safe_stream(messages, tools, "第一次流式调用"):
-            if self._shutting_down:
-                break
-            if chunk.reasoning_content:
-                assistant_reasoning += chunk.reasoning_content
-                yield chunk
-                continue
-            if chunk.is_tool_call and chunk.tool_info:
-                message = chunk.tool_info.get("message")
-                if not isinstance(message, UnifiedMessage):
+            async for chunk in self._safe_stream(
+                current_messages, tools, f"第{round_index + 1}次流式调用"
+            ):
+                if self._shutting_down:
+                    return
+                if chunk.reasoning_content:
+                    assistant_reasoning += chunk.reasoning_content
+                    yield chunk
                     continue
-                tool_calls_message = message
-                if assistant_reasoning and not tool_calls_message.reasoning_content:
-                    tool_calls_message.reasoning_content = assistant_reasoning
-            else:
-                cleaned = self._clean_chunk(chunk)
-                if cleaned.content:
-                    assistant_content += cleaned.content
-                yield cleaned
+                if chunk.is_tool_call and chunk.tool_info:
+                    message = chunk.tool_info.get("message")
+                    if not isinstance(message, UnifiedMessage):
+                        continue
+                    tool_calls_message = message
+                    if assistant_reasoning and not tool_calls_message.reasoning_content:
+                        tool_calls_message.reasoning_content = assistant_reasoning
+                else:
+                    cleaned = self._clean_chunk(chunk)
+                    if cleaned.content:
+                        assistant_content += cleaned.content
+                    yield cleaned
 
-        if self._shutting_down or not tool_calls_message:
-            self._last_assistant_reasoning = assistant_reasoning or None
-            return
-
-        if assistant_content and not tool_calls_message.content:
-            tool_calls_message.content = assistant_content
-        if assistant_reasoning and not tool_calls_message.reasoning_content:
-            tool_calls_message.reasoning_content = assistant_reasoning
-
-        # 工具调用
-        tool_results = await self._safe_tool_calls(tool_calls_message)
-        if not tool_results:
-            return
-
-        for result in tool_results:
-            if error_chunk := self._tool_error_chunk(result):
-                yield error_chunk
-
-        self._safe_record_results(tool_calls_message, tool_results)
-        # 仅 world 回合注入临时触发；单角色保持旧调用形态（行为零变化，
-        # 也避免依赖旧签名的 duck 类型在单角色路径上被新参数破坏）。
-        if continuation_input:
-            cont_messages = self._message_builder.build_continuation(
-                continuation_contexts, ephemeral_input=continuation_input
-            )
-        else:
-            cont_messages = self._message_builder.build_continuation(continuation_contexts)
-
-        continuation_reasoning = ""
-
-        # 第二次流式调用
-        async for chunk in self._safe_stream(cont_messages, tools, "第二次流式调用"):
             if self._shutting_down:
-                break
-            if chunk.reasoning_content:
-                continuation_reasoning += chunk.reasoning_content
-                yield chunk
-                continue
-            yield self._clean_chunk(chunk)
+                return
+            if not tool_calls_message:
+                self._last_assistant_reasoning = assistant_reasoning or None
+                return
+            # 轮数已尽仍有 tool_calls：不执行，其前言/正文已照常投递
+            if round_index >= max_tool_rounds:
+                logger.warning(
+                    f"工具追问超 {max_tool_rounds} 轮上限，丢弃后续 tool_calls"
+                    f"（{[tc.function.name for tc in tool_calls_message.tool_calls or []]}）"
+                )
+                self._last_assistant_reasoning = assistant_reasoning or None
+                return
 
-        self._last_assistant_reasoning = continuation_reasoning or None
+            if assistant_content and not tool_calls_message.content:
+                tool_calls_message.content = assistant_content
+            if assistant_reasoning and not tool_calls_message.reasoning_content:
+                tool_calls_message.reasoning_content = assistant_reasoning
+
+            # 工具调用
+            tool_results = await self._safe_tool_calls(tool_calls_message)
+            if not tool_results:
+                return
+
+            for result in tool_results:
+                if error_chunk := self._tool_error_chunk(result):
+                    yield error_chunk
+
+            self._safe_record_results(tool_calls_message, tool_results)
+            # 仅 world 回合注入临时触发；单角色保持旧调用形态（行为零变化，
+            # 也避免依赖旧签名的 duck 类型在单角色路径上被新参数破坏）。
+            if continuation_input:
+                current_messages = self._message_builder.build_continuation(
+                    continuation_contexts, ephemeral_input=continuation_input
+                )
+            else:
+                current_messages = self._message_builder.build_continuation(
+                    continuation_contexts
+                )
 
     # ==================== 私有容错方法 ====================
 
