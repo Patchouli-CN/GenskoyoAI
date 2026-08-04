@@ -101,10 +101,10 @@
 ```python
 # 伪代码：为"当前该发言的角色"构建上下文
 messages = [
-    {"role": "system", "content": actor.system_prompt},        # 私有人设
-    {"role": "system", "content": scene.render_with_options()},# 当前场景（复用现有）
-    *actor.private_memory_context(),                           # 私有记忆检索
-    *world.shared_transcript.render_for(actor),                # 共享剧本（关键）
+    {"role": "system", "content": actor.system_prompt},  # 私有人设
+    {"role": "system", "content": scene.render_with_options()},  # 当前场景（复用现有）
+    *actor.private_memory_context(),  # 私有记忆检索
+    *world.shared_transcript.render_for(actor),  # 共享剧本（关键）
 ]
 ```
 
@@ -115,6 +115,7 @@ messages = [
 ```python
 class WorldStage(Struct):
     """谁在哪个场景。Director 只能从'当前场景在场角色'里选角。"""
+
     # character_id -> scene_id
     locations: dict[str, str] = field(default_factory=dict)
 
@@ -145,8 +146,8 @@ DIRECTOR_DECISION_SCHEMA = {
     "properties": {
         "action": {"enum": ["continue", "switch", "wait_user"]},
         # continue: 当前角色继续说 / switch: 换人 / wait_user: 把话筒交给用户
-        "next_character": {"type": "string"},   # action=switch 时，目标角色 id
-        "reason": {"type": "string"},           # 为什么这么调度（可用于调试/日志）
+        "next_character": {"type": "string"},  # action=switch 时，目标角色 id
+        "reason": {"type": "string"},  # 为什么这么调度（可用于调试/日志）
     },
     "required": ["action", "reason"],
 }
@@ -220,12 +221,12 @@ World.start(protagonist):
 ```python
 class GensokyoWorld:
     def __init__(self, config: WorldConfig):
-        self.model_client = ModelClient(...)        # 共享大脑
-        self.event_bus = EventBus(...)              # 共享事件
-        self.scene_manager = SceneManager(...)      # 共享舞台
-        self.roster: dict[str, Agent] = {}          # 角色花名册（每个是 Actor）
-        self.stage = WorldStage()                   # 谁在哪
-        self.shared_transcript = SharedTranscript() # 共享剧本
+        self.model_client = ModelClient(...)  # 共享大脑
+        self.event_bus = EventBus(...)  # 共享事件
+        self.scene_manager = SceneManager(...)  # 共享舞台
+        self.roster: dict[str, Agent] = {}  # 角色花名册（每个是 Actor）
+        self.stage = WorldStage()  # 谁在哪
+        self.shared_transcript = SharedTranscript()  # 共享剧本
         self.director = Director(self.model_client, self.event_bus)
         self._current_actor_id: str | None = None
 
