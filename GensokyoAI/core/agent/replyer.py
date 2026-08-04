@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 
 from ...utils.logger import logger
 from ..config_schema import CharacterConfig, OocJudgeConfig
@@ -26,6 +27,25 @@ _PRECHECK_VERDICT = OocVerdict(
     copied_inner_monologue=True,
     issues=["疑似照抄内部思考/意图摘要"],
 )
+
+# 预检命中「自我复读」时的合成 verdict：直接进重写
+_REPLAY_VERDICT = OocVerdict(
+    ooc_score=1.0,
+    character_match=0.0,
+    naturalness=0.0,
+    copied_inner_monologue=True,
+    issues=[
+        "复述了自己刚说过的话——把这个提问当作全新问题重新回答，"
+        "不要复读之前的回复内容，也不要保留旧回复里的称呼"
+    ],
+)
+
+# 复读判定的最短归一化长度：短于它的回复（「嗯嗯」「好」）不参与，防误伤
+_REPLAY_MIN_CHARS = 30
+# 整段包含判定的最短长度：20+ 字的逐字照搬（换名复述）已足够定罪
+_REPLAY_SUBSTRING_MIN_CHARS = 20
+
+_LEADING_AT_RUN = re.compile(r"^(?:@\S+\s*)+")
 
 
 class Replyer:
@@ -48,12 +68,20 @@ class Replyer:
             return candidate
         try:
             current = candidate
-            # ① 廉价预检：照抄内部思考/意图摘要 → 免 LLM 直接重写，
-            # 重写产物照旧进有界判定循环（不再盲投零校验版本）
+            # ① 廉价预检（免 LLM 抓最高频失败模式）：
+            # a) 照抄内部思考/意图摘要；b) 自我复读（相似情境下逐字借用自己
+            #    刚说过的话）。命中直接重写，重写产物照旧进有界判定循环
+            precheck_verdict = None
             if self._precheck_is_copy(candidate, context):
-                logger.info(f"[OOC] 预检疑似照抄内部内容（{source}），直接重写")
+                precheck_verdict = _PRECHECK_VERDICT
+            elif self._precheck_is_replay(candidate, context.recent_assistant):
+                precheck_verdict = _REPLAY_VERDICT
+            if precheck_verdict is not None:
+                logger.info(
+                    f"[OOC] 预检命中（{source}）：{precheck_verdict.issues[0][:20]}，直接重写"
+                )
                 rewritten = await self._judge.rewrite(
-                    candidate, character, context, _PRECHECK_VERDICT
+                    candidate, character, context, precheck_verdict
                 )
                 if not rewritten or rewritten.strip() == candidate.strip():
                     logger.debug(f"[OOC] 预检重写失败或无变化，放行原回复（{source}）")
@@ -132,5 +160,30 @@ class Replyer:
                 difflib.SequenceMatcher(None, norm_candidate, norm_ref).ratio()
                 >= self._config.similarity_threshold
             ):
+                return True
+        return False
+
+    def _precheck_is_replay(self, candidate: str, recent_assistant: list[str]) -> bool:
+        """候选回复与自己近期回复雷同 → 判自我复读（免 LLM）。
+
+        两种形态：整体复读（相似度超阈值）；部分复读（旧回复被整段包含——
+        「旧文 + --- + 新答」形态，换名复述也算）。旧消息先剥开头的
+        @昵称 标记（记忆里的归因前缀，不是正文）。短回复不判，防误伤。
+        """
+        norm_candidate = _normalize(candidate)
+        if len(norm_candidate) < _REPLAY_MIN_CHARS:
+            return False
+        for previous in recent_assistant:
+            previous = _LEADING_AT_RUN.sub("", previous)
+            norm_previous = _normalize(previous)
+            if len(norm_previous) < _REPLAY_SUBSTRING_MIN_CHARS:
+                continue
+            if (
+                len(norm_previous) >= _REPLAY_MIN_CHARS
+                and difflib.SequenceMatcher(None, norm_candidate, norm_previous).ratio()
+                >= self._config.similarity_threshold
+            ):
+                return True
+            if norm_previous in norm_candidate:
                 return True
         return False

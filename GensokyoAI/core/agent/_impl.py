@@ -962,6 +962,11 @@ class Agent:
                                     else ""
                                 ),
                                 reply_targets=reply_to,
+                                recent_assistant=[
+                                    str(message.get("content", ""))
+                                    for message in self.working_memory.get_recent(12)
+                                    if message.get("role") == "assistant"
+                                ][-4:],
                             ),
                             source="speak",
                         )

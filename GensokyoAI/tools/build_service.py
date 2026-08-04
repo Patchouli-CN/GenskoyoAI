@@ -234,10 +234,11 @@ class ToolBuildService:
                 f"- {site.site}：{site.desc or '领域知识站点'}" for site in sites
             )
             parts.append(
-                "【知识站点】查角色/作品/设定等特定领域知识时，优先用 fetch_url "
-                "抓取这些权威站点（可用其站内搜索或 API，如 MediaWiki 的 api.php）：\n"
-                f"{site_lines}\n"
-                "与这些领域无关的内容再用 web_search。"
+                "【知识站点】只要问题涉及这些站点覆盖的领域（角色/作品/设定/外貌/剧情等），"
+                "就必须先用 fetch_url 查对应权威站——即使对方说「联网搜」「查了再说」也一样；"
+                "MediaWiki 站可用 api.php?action=query&list=search 先搜词条再抓正文。"
+                "权威站查不到再用 web_search 补充；与领域无关的内容直接用 web_search：\n"
+                f"{site_lines}"
             )
 
         return "\n\n".join(part for part in parts if part)

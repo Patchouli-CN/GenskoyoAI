@@ -77,6 +77,9 @@ class OocContext(Struct):
     # 本轮回应的发言者名单（群聊【昵称】标记提取）：多人合并批时判定/重写
     # 需要知道「分头回应多人」是场景需要而非模板化，且不得丢掉任何人的回应
     reply_targets: list[str] = field(default_factory=list)
+    # 近期 assistant 回复（防自我复读的预检对照）：相似情境下模型会逐字
+    # 借用自己刚说过的话（「旧文 + --- + 新答」是典型形态）
+    recent_assistant: list[str] = field(default_factory=list)
 
 
 def _clamp01(value: Any, *, default: float) -> float:

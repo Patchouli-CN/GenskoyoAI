@@ -196,6 +196,52 @@ class ReplyerTests(unittest.TestCase):
         rewrite_prompt = client.all_messages[1][1][0]["content"]
         self.assertIn("必须保留对每一位的回应", rewrite_prompt)
 
+    def test_whole_replay_goes_to_rewrite(self):
+        # 候选与近期 assistant 回复整体雷同 → 预检判复读直接重写（免 LLM 判定）
+        replyer, client = _make(["全新的回答", _judge_json(0.1)])
+        previous = "紫色的长发，戴着粉色的荷叶边睡帽，穿着粉紫相间的睡袍，手里捧着魔法书"
+        context = OocContext(recent_assistant=[previous])
+        result = self.run_async(
+            replyer.ensure_in_character(previous, character=_character(), context=context)
+        )
+        self.assertEqual(result, "全新的回答")
+        self.assertEqual(client.all_messages[0][0], "ooc_rewrite")  # 预检重写
+        self.assertEqual(client.last_call_context, "ooc_judge")  # 重写产物进判定
+
+    def test_partial_replay_with_separator_goes_to_rewrite(self):
+        # 「旧文 + --- + 新答」形态：旧回复被整段包含（换名复述）也判复读
+        replyer, client = _make(["全新的回答", _judge_json(0.1)])
+        old = "不用查我也知道哦～紫色的长发，戴着粉色的荷叶边睡帽"
+        candidate = f"@Zephaniah {old}\n---\n2011X是 Sonic.EXE 的角色"
+        context = OocContext(recent_assistant=[f"@帕秋莉 {old}"])
+        result = self.run_async(
+            replyer.ensure_in_character(candidate, character=_character(), context=context)
+        )
+        self.assertEqual(result, "全新的回答")
+        self.assertEqual(client.all_messages[0][0], "ooc_rewrite")
+
+    def test_short_reply_not_flagged_as_replay(self):
+        # 短回复不判复读（防「嗯嗯」误伤）：直接进 LLM 判定
+        replyer, client = _make([_judge_json(0.1)])
+        context = OocContext(recent_assistant=["嗯嗯好的～"])
+        result = self.run_async(
+            replyer.ensure_in_character("嗯嗯好的～", character=_character(), context=context)
+        )
+        self.assertEqual(result, "嗯嗯好的～")
+        self.assertEqual(client.all_messages[0][0], "ooc_judge")
+
+    def test_fresh_reply_not_flagged(self):
+        # 与近期回复无关的新内容不误判
+        replyer, client = _make([_judge_json(0.1)])
+        context = OocContext(recent_assistant=["昨天去魔法之森采蘑菇了，收获不错"])
+        result = self.run_async(
+            replyer.ensure_in_character(
+                "博丽神社的赛钱箱还是空空如也呢", character=_character(), context=context
+            )
+        )
+        self.assertEqual(result, "博丽神社的赛钱箱还是空空如也呢")
+        self.assertEqual(client.all_messages[0][0], "ooc_judge")
+
 
 class OocVerdictParseTests(unittest.TestCase):
     def test_parse_valid_json(self):
