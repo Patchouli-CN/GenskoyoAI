@@ -144,6 +144,25 @@ class KnowledgeSiteInstructionTests(unittest.TestCase):
         result = self._build([], ["fetch_url"])
         self.assertNotIn("【知识站点】", result.instructions)
 
+    def test_yaml_dict_items_become_knowledge_site_config(self):
+        """回归：yaml 加载的 knowledge_sites 项必须转成 KnowledgeSiteConfig——
+        msgspec 构造不深度转换 list 项，否则指令渲染取 .site 属性时炸（实机事故）。"""
+        from GensokyoAI.core.config_loader import ConfigLoader
+
+        config = ConfigLoader()._dict_to_config(
+            {
+                "tool": {
+                    "web_search": {
+                        "knowledge_sites": [{"site": "thbwiki.cc", "desc": "东方维基"}]
+                    }
+                }
+            }
+        )
+        item = config.tool.web_search.knowledge_sites[0]
+        self.assertIsInstance(item, KnowledgeSiteConfig)
+        self.assertEqual(item.site, "thbwiki.cc")
+        self.assertEqual(item.desc, "东方维基")
+
 
 if __name__ == "__main__":
     unittest.main()

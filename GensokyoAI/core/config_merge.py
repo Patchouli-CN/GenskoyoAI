@@ -9,6 +9,7 @@ from .config_schema import (
     EmbeddingConfig,
     HealthConfig,
     InitiativeTimerConfig,
+    KnowledgeSiteConfig,
     LogLevel,
     MemoryConfig,
     ModelConfig,
@@ -331,9 +332,17 @@ class ConfigMerger:
         if isinstance(web_search_data, dict):
             web_search_data = dict(web_search_data)
             api_data = web_search_data.pop("api", None)
+            sites_data = web_search_data.pop("knowledge_sites", None)
             web_search_config = WebSearchToolConfig(**web_search_data)
             if isinstance(api_data, dict):
                 web_search_config.api = WebSearchAPIConfig(**api_data)
+            if isinstance(sites_data, list):
+                # msgspec 构造不深度转换 list 项：KnowledgeSiteConfig 显式建
+                # （否则留在 dict，指令渲染取 .site/.desc 属性时炸）
+                web_search_config.knowledge_sites = [
+                    KnowledgeSiteConfig(**item) if isinstance(item, dict) else item
+                    for item in sites_data
+                ]
             tool_data["web_search"] = web_search_config
         return ToolConfig(**tool_data)
 
