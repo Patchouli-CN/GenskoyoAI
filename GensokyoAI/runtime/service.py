@@ -1993,6 +1993,31 @@ class RuntimeService(WorldOpsMixin):
             raise ValueError(f"Memory does not exist: {memory_id}")
         return {"updated": True, "memory": item}
 
+    async def memory_add(
+        self,
+        content: str,
+        *,
+        topic_name: str | None = None,
+        importance: float = 0.0,
+        emotional_valence: float = 0.0,
+    ) -> dict[str, Any]:
+        """Add one semantic memory（适配器知识学习通道，如 nb2 群黑话）。
+
+        与蒸馏写入同一条 `SemanticMemoryManager.add_async` 路径；
+        topic_name 命中既有话题时直接归入，不走 LLM 归派打分。
+        """
+
+        if not content or not content.strip():
+            raise ValueError("Memory content is required")
+        memory = self._require_semantic_memory()
+        topic = await memory.add_async(
+            content.strip(),
+            importance=importance,
+            emotional_valence=emotional_valence,
+            topic_name=topic_name,
+        )
+        return {"added": topic is not None, "topic": topic.name if topic else None}
+
     async def memory_delete(self, memory_id: str) -> dict[str, Any]:
         """Delete one semantic memory by id."""
 

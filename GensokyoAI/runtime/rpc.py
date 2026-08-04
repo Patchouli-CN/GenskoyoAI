@@ -158,6 +158,7 @@ RPC_METHOD_SPECS: tuple[RpcMethodSpec, ...] = (
     RpcMethodSpec("world.session.delete", "world_session_delete"),
     RpcMethodSpec("world.session.export", "world_session_export"),
     RpcMethodSpec("world.shutdown", "world_shutdown"),
+    RpcMethodSpec("memory.add", "memory_add"),
     RpcMethodSpec("memory.list", "memory_list"),
     RpcMethodSpec("memory.search", "memory_search"),
     RpcMethodSpec("memory.get", "memory_get"),

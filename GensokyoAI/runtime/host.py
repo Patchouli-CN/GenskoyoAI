@@ -185,6 +185,38 @@ class RuntimeHost:
         new_revision = int(((result or {}).get("session") or {}).get("revision") or revision)
         return content, new_revision
 
+    async def add_memory(
+        self,
+        agent_id: str,
+        session_id: str,
+        content: str,
+        *,
+        topic_name: str | None = None,
+        importance: float = 0.0,
+    ) -> bool:
+        """向租户语义记忆写一条（适配器知识学习通道，如 nb2 群黑话）。"""
+        params: dict[str, Any] = {
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "content": content,
+            "importance": importance,
+        }
+        if topic_name:
+            params["topic_name"] = topic_name
+        result = await self._call("memory.add", params)
+        return bool((result or {}).get("added"))
+
+    async def list_memory_topic_names(self, agent_id: str, session_id: str) -> list[str]:
+        """列出租户语义记忆的话题名（黑话去重种子等）；失败返回空。"""
+        try:
+            result = await self._call(
+                "memory.graph", {"agent_id": agent_id, "session_id": session_id}
+            )
+        except Exception:
+            return []
+        nodes = (result or {}).get("nodes") or []
+        return [str(n.get("name")) for n in nodes if isinstance(n, dict) and n.get("name")]
+
     async def generate_meta_text(self, character: str, prompt: str) -> str:
         """一次性脱稿生成（群友印象等）：不建租户、不进任何会话与记忆。
 

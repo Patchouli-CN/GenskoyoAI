@@ -545,6 +545,29 @@ def build_reminder_trigger_context(target_label: str, content: str) -> str:
     )
 
 
+def build_jargon_attention_prompt(text: str, known_terms: list[str]) -> str:
+    """群黑话学习判定（AttentionThings jargon 种类的 judge_prompt）。
+
+    判定全权交给 LLM：从一段群聊里挑出「群黑话」（这个群特有的、外人
+    看不懂的词/梗/固定用法）并给出含义；代码只做解析与去重，不做任何
+    形式判断。拿不准的含义允许标「存疑」（注入时也带着，防幻觉释义）。
+    """
+    known = "、".join(known_terms) if known_terms else "无"
+    return (
+        "下面是一段 QQ 群聊记录，每行开头的【昵称】是说话人。\n"
+        "找出其中的「群黑话」：这个群特有的、外人第一次看看不懂的词、梗、\n"
+        "缩写、口误形成的固定用法。规则：\n"
+        "- 人名/群友昵称不算；全网通行的网络用语（如「绝绝子」「yyds」）不算；\n"
+        "- 只挑需要在这个群待过才懂的；没有就不输出；\n"
+        "- 含义拿不准就在含义里写明「存疑」，不要编造。\n"
+        f"- 已学过的（不要重复）：{known}\n"
+        "只输出 JSON，不要输出任何其他内容：\n"
+        '{"terms": [{"term": "黑话词", "meaning": "在这个群里的含义（一两句话）", '
+        '"example": "它出现过的一句原话"}]，没有则为空数组}\n\n'
+        f"群聊记录：\n{text}"
+    )
+
+
 def build_reply_focus_prompt(text: str) -> str:
     """回应焦点判定（AttentionThings reply_focus 种类的 judge_prompt）。
 

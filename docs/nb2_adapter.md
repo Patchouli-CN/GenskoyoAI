@@ -81,6 +81,7 @@ mkdir -p config/nb2 && cp tmp/nb2.env.example config/nb2/local.env
 | `GSK_NB2_REMINDERS` | `true` | 到点提醒：AttentionThings 判定后**代办登记**（不经工具调用），到点 @ 人用自己的口吻说出 |
 | `GSK_NB2_REMINDER_MAX_PER_TENANT` | `20` | 每个群/私聊的待办提醒上限（防滥用烧 token） |
 | `GSK_NB2_ATTENTION` | `true` | 注意力事务：候选消息经一次性 LLM 判定，待办直接代办登记 |
+| `GSK_NB2_JARGON` | `true` | 群黑话矿工：攒够 40 行群聊且过 30 分钟冷却，LLM 判定一次黑话词条并写入语义记忆 |
 
 ## 注意力事务（AttentionThings）
 
@@ -97,6 +98,7 @@ LLM 判定（脱稿不进会话）→ 命中待办直接代办**。`AttentionKin
 | --- | --- | --- |
 | `reminder` | 三态意图：请求提醒（附 ISO 绝对时间）/ 取消 / 无 | 代办登记/取消提醒（见下节） |
 | `reply_focus` | 本轮的**因果关系**：谁冲着 bot 来（提问/委托/等回应） | QQ 端回复 @ 焦点（真 at 段）；无焦点不 @ |
+| `jargon` | 缓冲的群聊里有没有「群黑话」（群特有的词/梗/固定用法） | 词条写入租户语义记忆（群知识库），随检索注入自动生效 |
 
 成本：每条消息每种类多一次短 JSON 判定调用（用户接受换取零漏判）。
 
@@ -104,6 +106,18 @@ LLM 判定（脱稿不进会话）→ 命中待办直接代办**。`AttentionKin
 > （`quota_warn_yuan` / `quota_crit_yuan`，框架 HealthCenter 消费，静态阈值
 > 重启不漂移）；`/status` 同时展示的日耗是计费计量（单价 × usage），仅观测、
 > 不参与判定。
+
+## 群黑话（Jargon 矿工）
+
+主模型的注意力不会意识到「这词我不认识、该学一下」——jargon 种类替它
+盯：每租户缓冲群聊行数（默认攒 40 行）且过冷却（默认 30 分钟）才跑一次
+LLM 判定，挑「这个群特有的、外人看不懂的词/梗/固定用法」，命中的词条
+**代办写入租户语义记忆**（`memory.add` RPC，话题名=黑话词，内容带
+「群友们的说法，可能待考证」防幻觉释义）。之后现有语义检索会在相关对话
+时自动把释义注入上下文——角色逐渐「听得懂」群里的黑话。私聊不学
+（黑话是群现象）；已学过的话题名不重复学习（memory.graph 种子 + 进程内
+去重）。阈值：`GSK_NB2_JARGON_MIN_LINES` / `GSK_NB2_JARGON_COOLDOWN` /
+`GSK_NB2_JARGON_MAX_LINES`。
 
 ## 到点提醒（Reminder）
 

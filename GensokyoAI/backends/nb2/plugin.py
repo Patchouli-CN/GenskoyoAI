@@ -37,6 +37,7 @@ from nonebot.rule import Rule, to_me
 from ...commands import CommandContext, CommandExecutor
 from ...core.agent.attention import AttentionThings
 from ...core.agent.prompts import (
+    build_jargon_attention_prompt,
     build_member_impression_prompt,
     build_multi_speaker_context,
     build_mute_break_context,
@@ -502,6 +503,48 @@ class _ReplyFocusAttentionKind:
         return {"focus": names[:2]}  # prompt 约定最多两个，截断防模型失控
 
 
+class _JargonAttentionKind:
+    """AttentionThings 的第三个种类：群黑话矿工。
+
+    判定缓冲的群聊里有没有「群黑话」（这个群特有的、外人看不懂的词/
+    梗/固定用法）；命中词条由插件代办写入租户语义记忆（知识库），之后
+    随现有检索注入自动生效。是否值得跑由插件侧的缓冲量/冷却控制——
+    种类只管判定（known_terms 由插件在调用前同步设置：单线程事件循环，
+    设置→judge_prompt 构建之间无 await，不会串租户）。
+    """
+
+    name = "jargon"
+
+    def __init__(self) -> None:
+        self.known_terms: list[str] = []
+
+    def candidate(self, text: str) -> bool:
+        return True
+
+    def judge_prompt(self, text: str) -> str:
+        return build_jargon_attention_prompt(text, self.known_terms)
+
+    def parse(self, raw: str) -> dict[str, Any] | None:
+        try:
+            match = _JSON_OBJECT_PATTERN.search(raw)
+            data = json.loads(match.group(0) if match else raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        terms: list[dict[str, str]] = []
+        for item in data.get("terms") or []:
+            if not isinstance(item, dict):
+                continue
+            term = str(item.get("term") or "").strip().strip("【】")
+            meaning = str(item.get("meaning") or "").strip()
+            if term and meaning and len(term) <= 20:
+                terms.append({"term": term, "meaning": meaning[:120]})
+        if not terms:
+            return None
+        return {"terms": terms[:3]}
+
+
 async def _dispatch_attention(
     verdict: Any, agent_id: str, sender_name: str | None = None
 ) -> str | None:
@@ -605,6 +648,68 @@ def _strip_leading_at_mentions(reply: str) -> str:
     防误伤）。按形态剥（不精确匹配名字）：模型可能把昵称写错成变体。"""
     stripped = _LEADING_AT_RUN_PATTERN.sub("", reply, count=1)
     return stripped or reply
+
+
+# ==================== 群黑话矿工（AttentionThings jargon 种类） ====================
+
+_jargon_kind = _JargonAttentionKind()
+_jargon_buffers: dict[str, list[str]] = {}
+_jargon_last_learn: dict[str, float] = {}
+_jargon_known: dict[str, set[str]] = {}
+
+
+async def _maybe_learn_jargon(agent_id: str, key: str, batch_text: str) -> None:
+    """群黑话矿工：缓冲攒够且过冷却才跑一次 jargon 判定（LLM），命中词条
+    代办写入租户语义记忆——知识库随现有检索注入自动生效。主模型的注意力
+    不会意识到「这词我不认识」，由管线替它记住。后台任务，绝不阻塞回复。
+    """
+    if _attention is None or not _config.jargon_enabled:
+        return
+    if not key.startswith("group:"):
+        return  # 黑话是群现象，私聊不学
+    buffer = _jargon_buffers.setdefault(agent_id, [])
+    buffer.extend(line for line in batch_text.splitlines() if line.strip())
+    now = asyncio.get_running_loop().time()
+    if len(buffer) < _config.jargon_min_lines:
+        return
+    if now - _jargon_last_learn.get(agent_id, 0.0) < _config.jargon_cooldown_seconds:
+        return
+    text = "\n".join(buffer[-_config.jargon_max_lines :])
+    buffer.clear()
+    _jargon_last_learn[agent_id] = now
+
+    entry = _store.get(key)
+    if entry is None:
+        return
+    session_id = str(entry["session_id"])
+    known = _jargon_known.get(agent_id)
+    if known is None:
+        known = set(await _require_host().list_memory_topic_names(agent_id, session_id))
+        _jargon_known[agent_id] = known
+    _jargon_kind.known_terms = sorted(known)
+    try:
+        verdicts = await _attention.inspect(text, only={"jargon"})
+    except Exception as error:
+        logger.debug(f"[nb2] {agent_id} 黑话判定失败（忽略）: {error}")
+        return
+    for verdict in verdicts:
+        for item in verdict.data.get("terms", []):
+            term = item["term"]
+            if term in known:
+                continue
+            content = f"群黑话「{term}」：{item['meaning']}（群友们的说法，可能待考证）"
+            try:
+                added = await _require_host().add_memory(
+                    agent_id, session_id, content, topic_name=term, importance=0.4
+                )
+            except Exception as error:
+                logger.debug(f"[nb2] {agent_id} 黑话写入失败（{term}）: {error}")
+                continue
+            if added:
+                known.add(term)
+                logger.info(
+                    f"[nb2] {agent_id} 学会群黑话：「{term}」= {item['meaning'][:40]}"
+                )
 
 
 async def _generate_for_tenant(
@@ -756,6 +861,7 @@ async def _on_startup() -> None:
         )
         _attention.register(_ReminderAttentionKind())
         _attention.register(_ReplyFocusAttentionKind())
+        _attention.register(_jargon_kind)
     if _config.watchdog_enabled:
         # 启动期引导：10 秒宽限内协议端没连上，就直接复用掉线恢复流程拉起 NapCat
         # （不用手动先启动 NapCat；守护单 flight，与其他触发路径天然去重）
@@ -785,6 +891,7 @@ async def _on_startup() -> None:
         f"掉线守护={'开' if _config.watchdog_enabled else '关'}, "
         f"到点提醒={'开' if _config.reminders_enabled else '关'}, "
         f"注意力事务={'开' if _attention else '关'}, "
+        f"群黑话={'开' if _config.jargon_enabled else '关'}, "
         f"附加要求={_config.extra_prompt[:30] or '无'}, root={_config.root_dir or 'cwd'}"
     )
 
@@ -1079,6 +1186,10 @@ async def _process_batch(
         text, agent_id, batch[-1].member_name, group=key.startswith("group:")
     )
     contexts.extend(attention_notes)
+    # 群黑话矿工：缓冲攒够且过冷却才跑一次判定（后台任务，不阻塞回复）
+    task = asyncio.create_task(_maybe_learn_jargon(agent_id, key, text))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     try:
         reply = await _generate_for_tenant(agent_id, key, text, contexts, idempotency_key)
     except RuntimeRpcError as error:

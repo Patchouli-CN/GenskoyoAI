@@ -123,13 +123,19 @@ class Nb2Config:
     # 掉线守护快速登录用的 bot QQ 号（硬编码 launcher 不带 main.bat 依赖）；
     # 未配置则由首次协议连接的 self_id 兜底
     bot_qq: int | None = None
-    # 到点提醒：角色经 set_reminder 工具接活，到点用自己的口吻 @ 人说出；
+    # 到点提醒：AttentionThings 判定后代办登记，到点用自己的口吻 @ 人说出；
     # nb2_data/reminders.json 持久化（重启不丢），30s tick 扫到点项
     reminders_enabled: bool = True
     reminder_max_per_tenant: int = 20  # 每个群/私聊的待办提醒上限（防滥用烧 token）
     # 注意力事务（AttentionThings）：候选预筛免费，命中才花一次性 LLM 判定，
     # 命中待办直接代办登记（不依赖主模型的工具纪律——群聊噪声下工具漏调的对症）
     attention_enabled: bool = True
+    # 群黑话矿工（jargon 种类）：缓冲够行数且过冷却才跑一次判定，
+    # 命中词条写入租户语义记忆（知识库），随检索注入自动生效
+    jargon_enabled: bool = True
+    jargon_min_lines: int = 40  # 每租户攒够这么多行群聊才触发一次判定
+    jargon_cooldown_seconds: float = 1800.0  # 同一租户两次判定的最小间隔
+    jargon_max_lines: int = 120  # 单次判定送入的最大行数（防 prompt 膨胀）
 
     @classmethod
     def from_env(cls, get: Callable[[str], str | None] = os.environ.get) -> Nb2Config:
@@ -184,6 +190,12 @@ class Nb2Config:
                 get("GSK_NB2_REMINDER_MAX_PER_TENANT"), cls.reminder_max_per_tenant
             ),
             attention_enabled=_parse_bool(get("GSK_NB2_ATTENTION"), cls.attention_enabled),
+            jargon_enabled=_parse_bool(get("GSK_NB2_JARGON"), cls.jargon_enabled),
+            jargon_min_lines=_parse_int(get("GSK_NB2_JARGON_MIN_LINES"), cls.jargon_min_lines),
+            jargon_cooldown_seconds=_parse_float(
+                get("GSK_NB2_JARGON_COOLDOWN"), cls.jargon_cooldown_seconds
+            ),
+            jargon_max_lines=_parse_int(get("GSK_NB2_JARGON_MAX_LINES"), cls.jargon_max_lines),
             bot_qq=(
                 int(bot_qq_raw.strip())
                 if (bot_qq_raw := (get("GSK_NB2_BOT_QQ") or get("ACCOUNT") or "").strip())

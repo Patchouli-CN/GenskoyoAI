@@ -904,6 +904,10 @@ class FakeRuntimeSemanticMemory:
     def get_topic_graph(self):
         return {"nodes": [{"id": "topic-1", "recall_weight": 0.8}], "edges": []}
 
+    async def add_async(self, content, importance=0.0, emotional_valence=0.0, topic_name=None):
+        self.added = {"content": content, "topic_name": topic_name, "importance": importance}
+        return SimpleNamespace(name=topic_name or "新话题")
+
 
 class RuntimeMemoryRpcTests(unittest.TestCase):
     def test_memory_rpc_methods_return_public_memory_payloads(self):
@@ -946,6 +950,23 @@ class RuntimeMemoryRpcTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["error_code"], "runtime.error")
         self.assertIn("Runtime is not initialized", response["error"])
+
+    def test_memory_add_writes_via_semantic_memory(self):
+        service = RuntimeService()
+        memory = FakeRuntimeSemanticMemory()
+        cast(Any, service.state).agent = SimpleNamespace(semantic_memory=memory)
+
+        result = asyncio.run(
+            service.handle(
+                "memory.add",
+                {"content": "群黑话「结芬」：结婚口误梗", "topic_name": "结芬", "importance": 0.4},
+            )
+        )
+
+        self.assertTrue(result["added"])
+        self.assertEqual(result["topic"], "结芬")
+        self.assertEqual(memory.added["topic_name"], "结芬")
+        self.assertEqual(memory.added["importance"], 0.4)
 
 
 class RuntimeSessionRpcTests(unittest.TestCase):
