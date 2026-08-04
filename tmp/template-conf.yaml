@@ -248,7 +248,7 @@ ooc_judge:
 # 工具配置
 tool:
   enabled: true
-  builtin_tools: ["time", "moon", "system"] # 内置工具白名单；可加入 "web_search" 开启自有联网搜索工具注入
+  builtin_tools: ["time", "moon", "system"] # 内置工具白名单；可加入 "web_search" 开启自有联网搜索工具注入、"fetch_url" 开启网页抓取工具
   custom_tools_path: null
   web_search:
     enabled: false           # 自有 web_search 工具总开关；默认关闭，避免隐私和成本风险
@@ -260,6 +260,9 @@ tool:
     freshness_keywords: ["今天", "今日", "现在", "当前", "最新", "新闻", "价格", "版本", "发布", "更新", "today", "latest", "news", "price", "version"]
     prefer_for_characters: [] # 角色名命中时，引导其优先联网核验
     prefer_for_scenarios: []  # system_contexts 场景关键词命中时，引导联网核验
+    knowledge_sites: []      # 权威知识站点（[{site: thbwiki.cc, desc: "东方 Project 中文维基"}]）：
+                             # 配置后渲染进工具指令，领域知识优先用 fetch_url 抓这些站，
+                             # 无关内容再走 provider 搜索；需在 builtin_tools 加入 "fetch_url"
     user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     region: null             # 例如 zh-CN / en-US，用于 Accept-Language
     safe_search: "moderate"  # 预留：off / moderate / strict

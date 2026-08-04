@@ -234,6 +234,13 @@ class WebSearchAPIConfig(Struct):
     published_at_path: str | None = None
 
 
+class KnowledgeSiteConfig(Struct):
+    """权威知识站点（fetch_url 优先抓取的领域知识源）。"""
+
+    site: str  # 域名或主站 URL，如 thbwiki.cc
+    desc: str = ""  # 站点内容说明（渲染给模型选路用，如「东方 Project 中文维基」）
+
+
 class WebSearchToolConfig(Struct):
     """自有 Web search 工具配置。"""
 
@@ -264,6 +271,9 @@ class WebSearchToolConfig(Struct):
     )
     prefer_for_characters: list[str] = field(default_factory=list)
     prefer_for_scenarios: list[str] = field(default_factory=list)
+    # 权威知识站点（角色/作品/设定等领域知识优先用 fetch_url 抓这些站，
+    # 无关内容再走 provider 搜索）——渲染进工具指令供模型选路
+    knowledge_sites: list[KnowledgeSiteConfig] = field(default_factory=list)
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"

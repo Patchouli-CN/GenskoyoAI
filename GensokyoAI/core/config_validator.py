@@ -767,6 +767,7 @@ class ConfigValidator:
                         "cache_ttl_seconds",
                         "trigger_strategy",
                         "freshness_keywords",
+                        "knowledge_sites",
                         "prefer_for_characters",
                         "prefer_for_scenarios",
                         "user_agent",

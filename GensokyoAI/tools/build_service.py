@@ -53,6 +53,7 @@ class ToolBuildService:
         "moon": ("get_moon_phase",),
         "system": ("get_system_info",),
         "web_search": ("web_search",),
+        "fetch_url": ("fetch_url",),
         "scene": ("scene_switch", "get_current_scene"),
     }
 
@@ -223,6 +224,20 @@ class ToolBuildService:
             parts.append(
                 "【联网搜索策略】当前模型已启用 Provider 内置联网搜索；"
                 "遇到需要实时信息的问题时，优先依赖模型内置搜索能力。"
+            )
+
+        # 权威知识站点表：fetch_url 可用且配置了站点时渲染——模型据此选路
+        # （领域知识抓站点、无关内容走搜索），代码不做任何路由判断
+        sites = context.tool_config.web_search.knowledge_sites
+        if sites and any(tool.name == "fetch_url" for tool in tools):
+            site_lines = "\n".join(
+                f"- {site.site}：{site.desc or '领域知识站点'}" for site in sites
+            )
+            parts.append(
+                "【知识站点】查角色/作品/设定等特定领域知识时，优先用 fetch_url "
+                "抓取这些权威站点（可用其站内搜索或 API，如 MediaWiki 的 api.php）：\n"
+                f"{site_lines}\n"
+                "与这些领域无关的内容再用 web_search。"
             )
 
         return "\n\n".join(part for part in parts if part)

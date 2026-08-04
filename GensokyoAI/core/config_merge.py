@@ -430,6 +430,9 @@ class ConfigMerger:
             freshness_keywords=choose(
                 "freshness_keywords", override.freshness_keywords or base.freshness_keywords
             ),
+            knowledge_sites=choose(
+                "knowledge_sites", override.knowledge_sites or base.knowledge_sites
+            ),
             prefer_for_characters=choose(
                 "prefer_for_characters",
                 override.prefer_for_characters or base.prefer_for_characters,
