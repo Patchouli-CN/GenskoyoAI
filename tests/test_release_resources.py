@@ -44,7 +44,10 @@ class ReleaseResourceTests(unittest.TestCase):
             character = root / "characters" / "zh_cn" / "KirisameMarisa.yaml"
             character.parent.mkdir(parents=True)
             character.write_text("name: override\n", encoding="utf-8")
-            self.assertEqual(find_character_resource("KirisameMarisa", root), character)
+            self.assertEqual(
+                find_character_resource("KirisameMarisa", root).resolve(),
+                character.resolve(),
+            )
 
     def test_character_identifier_rejects_absolute_and_parent_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
