@@ -173,6 +173,7 @@ class OocJudge:
             candidate,
             verdict.issues,
             context.emotion_line,
+            context.context_text,
         )
         try:
             max_tok = max(self.config.rewrite_max_tokens, DECISION_MIN_MAX_TOKENS)

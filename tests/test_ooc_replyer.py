@@ -20,6 +20,7 @@ class _FakeModelClient:
         self.last_messages = None
         self.last_options = None
         self.last_call_context = None
+        self.all_messages: list = []
         self.structured_output = structured_output
 
     def supports(self, capability) -> bool:
@@ -30,6 +31,7 @@ class _FakeModelClient:
         self.last_messages = messages
         self.last_options = options
         self.last_call_context = call_context
+        self.all_messages.append((call_context, messages))
         text = self.responses.pop(0)
         return UnifiedResponse(message=UnifiedMessage(role="assistant", content=text))
 
@@ -108,26 +110,43 @@ class ReplyerTests(unittest.TestCase):
         self.assertEqual(client.call_count, 2)
 
     def test_bounded_retries_no_third_round(self):
+        # 轮数耗尽：退回已判定版本中分数最低的一版，且最后一轮不再做
+        # 无人能判定的重写（审查轮：不再投递未判定版本）
         replyer, client = _make(
-            [_judge_json(0.9), "重写1", _judge_json(0.9), "重写2"],
+            [_judge_json(0.9), "重写1", _judge_json(0.7), "重写2"],
             config=OocJudgeConfig(max_retries=1),
         )
         context = OocContext(context_text="user: 你好")
         result = self.run_async(
             replyer.ensure_in_character("原始", character=_character(), context=context)
         )
-        self.assertEqual(result, "重写2")
-        self.assertEqual(client.call_count, 4)  # 2 轮，每轮 判定+重写
+        self.assertEqual(result, "重写1")  # 0.7 < 0.9，最低分版本胜出
+        self.assertEqual(client.call_count, 3)  # 判定+重写+重判；最后的「重写2」不再发生
 
-    def test_precheck_copy_skips_judge(self):
-        replyer, client = _make(["我也好想你呀"])
+    def test_exhaustion_returns_original_when_it_scored_lowest(self):
+        # 原稿分数就是最低（重写反而更糟）时，轮尽退回原稿
+        replyer, client = _make(
+            [_judge_json(0.7), "重写1", _judge_json(0.9)],
+            config=OocJudgeConfig(max_retries=1),
+        )
+        context = OocContext(context_text="user: 你好")
+        result = self.run_async(
+            replyer.ensure_in_character("原始", character=_character(), context=context)
+        )
+        self.assertEqual(result, "原始")
+        self.assertEqual(client.call_count, 3)
+
+    def test_precheck_copy_rewrites_then_judges(self):
+        # 预检命中照抄：免判定直接重写，但重写产物必须进有界判定（不再盲投）
+        replyer, client = _make(["我也好想你呀", _judge_json(0.1)])
         context = OocContext(pending_summary="我好想见你")
         result = self.run_async(
             replyer.ensure_in_character("我好想见你", character=_character(), context=context)
         )
         self.assertEqual(result, "我也好想你呀")
-        self.assertEqual(client.call_count, 1)
-        self.assertEqual(client.last_call_context, "ooc_rewrite")  # 免 LLM 判定，直接重写
+        self.assertEqual(client.call_count, 2)
+        self.assertEqual(client.all_messages[0][0], "ooc_rewrite")  # 先预检重写
+        self.assertEqual(client.last_call_context, "ooc_judge")  # 再判定重写产物
 
     def test_copied_inner_monologue_flag_triggers_rewrite(self):
         # 候选与 pending_summary 不像（不走预检），但判定标了照抄 → 走重写
@@ -138,6 +157,16 @@ class ReplyerTests(unittest.TestCase):
         )
         self.assertEqual(result, "自然表达")
         self.assertEqual(client.call_count, 3)  # 判定(照抄) + 重写 + 重判(通过)
+
+    def test_rewrite_prompt_carries_context(self):
+        # rewrite 必须带近期对话上下文（保持回应连贯，不只改语气）
+        replyer, client = _make([_judge_json(0.9), "重写后的自然回复", _judge_json(0.1)])
+        context = OocContext(context_text="user: 周末去爬山吗")
+        self.run_async(
+            replyer.ensure_in_character("模板化回复", character=_character(), context=context)
+        )
+        rewrite_messages = client.all_messages[1][1]
+        self.assertIn("周末去爬山吗", rewrite_messages[0]["content"])
 
 
 class OocVerdictParseTests(unittest.TestCase):

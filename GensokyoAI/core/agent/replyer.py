@@ -47,27 +47,42 @@ class Replyer:
         if not self._config.enabled or not candidate or not candidate.strip():
             return candidate
         try:
-            # ① 廉价预检：照抄内部思考/意图摘要 → 免 LLM 直接重写
+            current = candidate
+            # ① 廉价预检：照抄内部思考/意图摘要 → 免 LLM 直接重写，
+            # 重写产物照旧进有界判定循环（不再盲投零校验版本）
             if self._precheck_is_copy(candidate, context):
                 logger.info(f"[OOC] 预检疑似照抄内部内容（{source}），直接重写")
                 rewritten = await self._judge.rewrite(
                     candidate, character, context, _PRECHECK_VERDICT
                 )
-                return rewritten or candidate
+                if not rewritten or rewritten.strip() == candidate.strip():
+                    logger.debug(f"[OOC] 预检重写失败或无变化，放行原回复（{source}）")
+                    return candidate
+                logger.trace(f"[OOC] 预检重写: {candidate[:40]!r} → {rewritten[:40]!r}")
+                current = rewritten
 
-            # ② 有界 判定 → 重写 → 重判（每轮 1 判定 + 1 重写）
-            current = candidate
-            for _ in range(self._config.max_retries + 1):
+            # ② 有界 判定 → 重写 → 重判。跟踪已判定版本的最低分：
+            # 轮数耗尽时退回最低分版本（可能是原稿），绝不投递未经判定的
+            # 最后一版重写（它可能比原稿更糟）；最后一轮仍超标则不再重写
+            # （其产物无人能判定），直接走最低分回退。
+            best_text = current
+            best_score: float | None = None
+            rounds = self._config.max_retries + 1
+            for round_index in range(rounds):
                 verdict = await self._judge.judge(current, character, context)
                 if verdict is None:  # 判定失败：放行
-                    logger.debug(f"[OOC] 判定失败，放行原回复（{source}）")
+                    logger.debug(f"[OOC] 判定失败，放行当前回复（{source}）")
                     return current
+                if best_score is None or verdict.ooc_score < best_score:
+                    best_score, best_text = verdict.ooc_score, current
                 if not self._needs_rewrite(verdict):  # 通过：放行
                     logger.debug(
                         f"[OOC] 判定通过（{source}，OOC 分 {verdict.ooc_score:.2f} "
                         f"< 阈值 {self._config.threshold}）"
                     )
                     return current
+                if round_index == rounds - 1:
+                    break  # 最后一轮仍超标：跳出走最低分回退
                 issues = "、".join(verdict.issues[:3]) or "无明细"
                 logger.info(
                     f"[OOC] 判出戏（{source}，OOC 分 {verdict.ooc_score:.2f} "
@@ -79,8 +94,12 @@ class Replyer:
                     return current  # 重写失败/无变化：放行
                 logger.trace(f"[OOC] 重写: {current[:40]!r} → {rewritten[:40]!r}")
                 current = rewritten
-            logger.info(f"[OOC] 重写重判轮数耗尽，接受最后结果（{source}）")
-            return current  # 轮数耗尽：接受最后结果（有界）
+            if best_text is not current:
+                logger.info(
+                    f"[OOC] 重写轮数耗尽，退回已判定的最低分版本"
+                    f"（{best_score:.2f}，{source}）"
+                )
+            return best_text
         except Exception as error:
             logger.warning(f"[OOC] 回复管线异常，放行原回复: {error}")
             return candidate

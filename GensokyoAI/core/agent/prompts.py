@@ -686,9 +686,11 @@ def build_ooc_rewrite_prompt(
     candidate: str,
     issues: list[str],
     emotion_line: str,
+    context_text: str = "",
 ) -> str:
     """OOC 重写（解析方：core.agent.ooc_judge.OocJudge.rewrite）。"""
     issue_lines = "\n".join(f"- {issue}" for issue in issues) or "- 无"
+    context_section = f"【近期对话（保持回应连贯，别答非所问）】\n{context_text}\n\n" if context_text else ""
     return (
         f"你是 {character_name} 的润色师。下面这条回复有脱角色问题，请按人设重写它：\n"
         "- 保留原回复的意图、回应对象与信息量，不要删掉要表达的事。\n"
@@ -697,6 +699,7 @@ def build_ooc_rewrite_prompt(
         "  「系统」等幕后词汇；不要用「也罢」「既然……」这类承接内心思考的过渡开头。\n"
         "- 只输出重写后的正文：不加角色引号、不加 *动作* 装饰、不加解释、不加任何前后缀。\n\n"
         f"【角色人设】\n{persona_text[:1200]}\n\n"
+        f"{context_section}"
         f"【候选回复（原样）】\n{candidate}\n\n"
         f"【判定指出的问题】\n{issue_lines}\n\n"
         f"【当前情绪状态】{emotion_line or '平稳'}\n\n"
