@@ -168,6 +168,34 @@ class ReplyerTests(unittest.TestCase):
         rewrite_messages = client.all_messages[1][1]
         self.assertIn("周末去爬山吗", rewrite_messages[0]["content"])
 
+    def test_copied_version_never_wins_best_of_fallback(self):
+        # 硬否决版本按最差分计：照抄独白但 ooc_score 更低的原稿不得被回退
+        # 捞回来（审查轮：回退绕过恰是该功能要治的病）
+        replyer, client = _make(
+            [_judge_json(0.5, copied=True), "重写1", _judge_json(0.8)],
+            config=OocJudgeConfig(max_retries=1),
+        )
+        context = OocContext(pending_summary="内心想法")
+        result = self.run_async(
+            replyer.ensure_in_character("照抄内心想法的原稿", character=_character(), context=context)
+        )
+        self.assertEqual(result, "重写1")  # 原稿 effective=1.0 > 重写1 的 0.8
+        self.assertEqual(client.call_count, 3)
+
+    def test_multi_target_prompts_carry_hard_constraints(self):
+        # 合并批：judge prompt 说明多人回应不算模板化；rewrite prompt 硬约束
+        # 必须保留每一位发言者的回应
+        replyer, client = _make([_judge_json(0.9), "重写后", _judge_json(0.1)])
+        context = OocContext(context_text="【甲】问A\n【乙】问B", reply_targets=["甲", "乙"])
+        self.run_async(
+            replyer.ensure_in_character("甲：答A\n乙：答B", character=_character(), context=context)
+        )
+        judge_system = client.all_messages[0][1][0]["content"]
+        self.assertIn("不算模板化", judge_system)
+        self.assertIn("甲、乙", judge_system)
+        rewrite_prompt = client.all_messages[1][1][0]["content"]
+        self.assertIn("必须保留对每一位的回应", rewrite_prompt)
+
 
 class OocVerdictParseTests(unittest.TestCase):
     def test_parse_valid_json(self):

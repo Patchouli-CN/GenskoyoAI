@@ -646,16 +646,26 @@ def build_ooc_judge_prompts(
     pending_summary: str,
     thought: str,
     emotion_line: str,
+    reply_targets: list[str] | None = None,
 ) -> tuple[str, str]:
     """OOC 判定（解析方：core.agent.ooc_judge.OocJudge._parse_ooc_verdict）。
 
     输出 JSON 字段契约：ooc_score / character_match / naturalness /
     copied_inner_monologue / issues——改字段必须与解析方同步。
     """
+    # 群聊合并批：分头回应多人、多个 @ 是场景需要，不判为模板化
+    multi_target_note = (
+        "注意：候选回复同时回应多位群友（"
+        + "、".join(reply_targets)
+        + "），分头回应、带多个 @ 是群聊场景需要，不算模板化/过度结构化。\n\n"
+        if reply_targets
+        else ""
+    )
     system = (
         "你是 GensokyoAI 的回复质检员。判断一段要发给用户的回复：\n"
         f"（1）是否符合 {character_name} 的人设；（2）是否自然口语、是否模板化；\n"
         "（3）是否照抄了内部思考或待表达摘要。\n\n"
+        f"{multi_target_note}"
         f"【角色人设】\n{persona_text[:1200]}\n\n"
         "【打分标准】\n"
         "- ooc_score（0~1，越高越脱角色）：第三人称旁白、AI/旁观者口吻、出现\n"
@@ -687,13 +697,22 @@ def build_ooc_rewrite_prompt(
     issues: list[str],
     emotion_line: str,
     context_text: str = "",
+    reply_targets: list[str] | None = None,
 ) -> str:
     """OOC 重写（解析方：core.agent.ooc_judge.OocJudge.rewrite）。"""
     issue_lines = "\n".join(f"- {issue}" for issue in issues) or "- 无"
     context_section = f"【近期对话（保持回应连贯，别答非所问）】\n{context_text}\n\n" if context_text else ""
+    # 群聊合并批硬约束：多位发言者的回应一个都不许丢
+    multi_target_rule = (
+        "- 本回复同时回应多位发言者（" + "、".join(reply_targets) + "）："
+        "必须保留对每一位的回应，不得合并、省略或漏掉任何人。\n"
+        if reply_targets
+        else ""
+    )
     return (
         f"你是 {character_name} 的润色师。下面这条回复有脱角色问题，请按人设重写它：\n"
         "- 保留原回复的意图、回应对象与信息量，不要删掉要表达的事。\n"
+        f"{multi_target_rule}"
         f"- 用 {character_name} 的第一人称口吻，口语、自然、句式多样。\n"
         "- 不要复述/提及「内部整理」「待表达摘要」；不要出现「定时器」「主动开口」\n"
         "  「系统」等幕后词汇；不要用「也罢」「既然……」这类承接内心思考的过渡开头。\n"

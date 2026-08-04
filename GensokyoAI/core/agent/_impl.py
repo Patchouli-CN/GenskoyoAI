@@ -934,6 +934,9 @@ class Agent:
                 # error_fallback（生成异常无产出）不写 MESSAGE_SENT——兜底文案
                 # 只投递给用户，不进工作记忆污染历史（02#1）。
                 self._half_completion = None
+                # 本轮回应的发言者（群聊【昵称】标记）：OOC 判定/重写与记忆
+                # 归因标记共用——多人合并批需要知道「分头回应」是场景需要
+                reply_to = extract_speaker_tags(text_input)
                 # OOC 投递前自查（Replyer）：full_response 拼完后、MESSAGE_SENT 前。
                 # 判定/重写失败一律放行原回复（增强绝不能拖垮主回复）。
                 # 跳过两类：World 回合（舞台旁白/动作是正当格式，QQ 口语标准会误改）；
@@ -958,6 +961,7 @@ class Agent:
                                     if self._think_engine is not None
                                     else ""
                                 ),
+                                reply_targets=reply_to,
                             ),
                             source="speak",
                         )
@@ -970,10 +974,9 @@ class Agent:
                         f"OOC 判定跳过（{'World 回合' if world_turn else '流式实时消费'}）"
                     )
                 data: dict[str, Any] = {"content": full_response}
-                # 回复对象标记：触发消息带【昵称】前缀（nb2 群聊）时一并传给
-                # 记忆写入，助手消息在工作记忆里带「@昵称」前缀——多人快节奏
+                # 回复对象标记：记忆写入时助手消息带「@昵称」前缀——多人快节奏
                 # 对话中模型据此归因「我刚才那句话是回谁的」，防张冠李戴。
-                if reply_to := extract_speaker_tags(text_input):
+                if reply_to:
                     data["reply_to"] = reply_to
                 # reasoning_content 对 DeepSeek thinking mode 是多轮协议状态，
                 # 不是调试展示内容；是否显示仍由 UI/日志层的 debug_silent_output 控制。

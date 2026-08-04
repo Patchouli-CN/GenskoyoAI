@@ -74,6 +74,9 @@ class OocContext(Struct):
     pending_summary: str = ""  # 主动发言的意图摘要
     thought: str = ""  # 说话前思考
     emotion_line: str = ""  # emotion_state.context_line()，空 = 平稳
+    # 本轮回应的发言者名单（群聊【昵称】标记提取）：多人合并批时判定/重写
+    # 需要知道「分头回应多人」是场景需要而非模板化，且不得丢掉任何人的回应
+    reply_targets: list[str] = field(default_factory=list)
 
 
 def _clamp01(value: Any, *, default: float) -> float:
@@ -121,6 +124,7 @@ class OocJudge:
             context.pending_summary,
             context.thought,
             context.emotion_line,
+            context.reply_targets,
         )
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
@@ -174,6 +178,7 @@ class OocJudge:
             verdict.issues,
             context.emotion_line,
             context.context_text,
+            context.reply_targets,
         )
         try:
             max_tok = max(self.config.rewrite_max_tokens, DECISION_MIN_MAX_TOKENS)

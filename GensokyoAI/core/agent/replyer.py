@@ -65,6 +65,9 @@ class Replyer:
             # 轮数耗尽时退回最低分版本（可能是原稿），绝不投递未经判定的
             # 最后一版重写（它可能比原稿更糟）；最后一轮仍超标则不再重写
             # （其产物无人能判定），直接走最低分回退。
+            # 排序键与判定键同源（effective）：copied_inner_monologue 硬否决
+            # 的版本按最差分计——否则照抄独白但分数低的版本会被回退捞回来，
+            # 恰好是该功能要治的病。
             best_text = current
             best_score: float | None = None
             rounds = self._config.max_retries + 1
@@ -73,8 +76,9 @@ class Replyer:
                 if verdict is None:  # 判定失败：放行
                     logger.debug(f"[OOC] 判定失败，放行当前回复（{source}）")
                     return current
-                if best_score is None or verdict.ooc_score < best_score:
-                    best_score, best_text = verdict.ooc_score, current
+                effective = self._effective_score(verdict)
+                if best_score is None or effective < best_score:
+                    best_score, best_text = effective, current
                 if not self._needs_rewrite(verdict):  # 通过：放行
                     logger.debug(
                         f"[OOC] 判定通过（{source}，OOC 分 {verdict.ooc_score:.2f} "
@@ -105,7 +109,12 @@ class Replyer:
             return candidate
 
     def _needs_rewrite(self, verdict: OocVerdict) -> bool:
-        return verdict.ooc_score >= self._config.threshold or verdict.copied_inner_monologue
+        return self._effective_score(verdict) >= self._config.threshold
+
+    @staticmethod
+    def _effective_score(verdict: OocVerdict) -> float:
+        """排序/判定共用标量：copied_inner_monologue 硬否决按最差分（1.0）计。"""
+        return 1.0 if verdict.copied_inner_monologue else verdict.ooc_score
 
     def _precheck_is_copy(self, candidate: str, context: OocContext) -> bool:
         """候选回复与 pending_summary/thought 归一化后高度相似 → 判照抄（免 LLM）。"""
