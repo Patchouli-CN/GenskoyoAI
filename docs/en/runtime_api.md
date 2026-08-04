@@ -5,7 +5,7 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 ## Versioning and Compatibility
 
 - Current package version: `2026.7.30.0`
-- Current protocol version: `2.1.0`
+- Current protocol version: `2.2.0`
 - Current protocol major version: `2`
 - Compatibility policy: within the same major version, new fields and methods may be added; removing fields, changing semantics, or changing error structures requires a breaking change.
 - Clients should call `runtime.info` first, then decide available features based on `protocol_version`, `capabilities`, `methods`, `legacy_methods`, and `method_specs`.
@@ -38,10 +38,10 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
   "name": "GensokyoAI Runtime",
   "package_version": "2026.7.30.0",
   "protocol": "gensokyo-runtime-rpc",
-  "protocol_version": "2.1.0",
+  "protocol_version": "2.2.0",
   "protocol_major_version": 2,
   "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.add", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -139,7 +139,7 @@ Non-legacy methods grouped by current namespace:
 - `dependency.status`, `dependency.install`
 - `external_tool.status`
 - `initiative_timer.current`, `initiative_timer.update`, `initiative_timer.cancel`, `initiative_timer.trigger` (`initiative_timer.hesitation` / `initiative_timer.hesitation.set` are deprecated legacy)
-- `memory.list`, `memory.search`, `memory.get`, `memory.update`, `memory.delete`, `memory.graph`
+- `memory.add`, `memory.list`, `memory.search`, `memory.get`, `memory.update`, `memory.delete`, `memory.graph`
 - `media.list`, `media.delete`
 - `scene.current`, `scene.list`, `scene.get`, `scene.switch`, `scene.graph`
 
@@ -774,6 +774,8 @@ Returns `items`, `total`, `limit`, `offset`. Each memory contains `id`, `content
 Returns `score`, `keyword_score`, optional `embedding_score`, `matched_by`, and `diagnostics` for each result. When the embedding provider is not configured, unavailable, or call fails, Runtime automatically falls back to keyword / topic retrieval, explaining the reason in `diagnostics.embedding_fallback` and `diagnostics.embedding_error`.
 
 `memory.get`, `memory.update`, `memory.delete` respectively read, update, and delete current session semantic memories by `memory_id`. `memory.update` supports updating `content`, `importance`, `tags`.
+
+`memory.add` writes one semantic memory into the current session (adapter knowledge-learning channel, e.g. nb2 group jargon): params `content` (required), `topic_name`, `importance`, `emotional_valence`; when `topic_name` hits an existing topic the memory is assigned directly (no LLM scoring), returning `{"added": true, "topic": "topic name"}`.
 
 `memory.graph` returns the current session topic graph:
 

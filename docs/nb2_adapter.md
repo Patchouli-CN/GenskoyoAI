@@ -107,6 +107,16 @@ LLM 判定（脱稿不进会话）→ 命中待办直接代办**。`AttentionKin
 > 重启不漂移）；`/status` 同时展示的日耗是计费计量（单价 × usage），仅观测、
 > 不参与判定。
 
+## 网页抓取与权威知识站点（fetch_url / knowledge_sites）
+
+角色查领域知识（如东方设定、角色外貌/剧情）不走通用爬虫——内置 `fetch_url`
+工具抓取权威站点正文（aiohttp，SSRF 校验、HTML 剥标签、4000 字截断，
+失败只给模型干净人话）。`config/local.yaml` 的 `tool.web_search.knowledge_sites`
+配置的站点表（site + desc）渲染进每轮工具指令，模型自行选路：领域知识
+fetch_url 权威站（MediaWiki 可用 api.php 搜词条）、无关内容 web_search。
+启用：`tool.builtin_tools` 加入 `"fetch_url"`，并在 knowledge_sites 配置站点
+（如 thbwiki.cc）。
+
 ## 群黑话（Jargon 矿工）
 
 主模型的注意力不会意识到「这词我不认识、该学一下」——jargon 种类替它

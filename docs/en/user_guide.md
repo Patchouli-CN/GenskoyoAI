@@ -550,6 +550,23 @@ tool:
 - `provider: "mixed"`: runs `ddg` and `api` in parallel, then deduplicates, ranks, and truncates results by source priority and quality.
 - `provider: "bing"`: Bing HTML search, kept for compatibility.
 
+### 11.7 Web Fetch and Curated Knowledge Sites (fetch_url / knowledge_sites)
+
+The built-in `fetch_url` tool fetches a URL's text content (aiohttp; SSRF validation, HTML stripping, 4000-char truncation; failures return a clean message to the model, technical details go to logs). Combined with curated **knowledge sites** under `tool.web_search.knowledge_sites`, the character prefers these authoritative sites for domain questions (e.g. lore, character profiles) and falls back to `web_search` only for unrelated topics:
+
+```yaml
+tool:
+  builtin_tools: ["time", "moon", "system", "web_search", "fetch_url"]
+  web_search:
+    enabled: true
+    knowledge_sites:
+      - site: thbwiki.cc
+        desc: THBWiki (Chinese Touhou wiki) — characters, lore; MediaWiki API available
+```
+
+- The site table (`site` + `desc`) is rendered into the per-round tool instructions; the model itself chooses "fetch_url on the authoritative site" vs "web_search". MediaWiki sites can be queried via `api.php?action=query&list=search` before fetching the article.
+- `fetch_url` must be whitelisted in `tool.builtin_tools` as `"fetch_url"` to be injected.
+
 On success, the search tool returns JSON containing `items` and `diagnostics`; diagnostic failures such as disabled config, unsupported provider, provider failure, or no results are returned as structured tool errors like `web_search.disabled`, `web_search.unsupported_provider`, `web_search.provider_failed`, and `web_search.no_results`.
 
 ## 12. Runtime / HTTP Entry Point

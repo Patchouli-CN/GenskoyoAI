@@ -10,8 +10,8 @@
 
 简要规则：
 
-- 对外版本和 changelog 使用 `vYYYY.M.D.N`；当前正式 release 为 `v2026.7.30.0`，首个正式 release 是 `v2026.5.13.0`。
-- [`pyproject.toml`](../pyproject.toml) 中的 package version 不带 `v`，当前为 `2026.7.30.0`。
+- 对外版本和 changelog 使用 `vYYYY.M.D.N`；当前正式 release 为 `v2026.8.4.0`，首个正式 release 是 `v2026.5.13.0`。
+- [`pyproject.toml`](../pyproject.toml) 中的 package version 不带 `v`，当前为 `2026.8.4.0`。
 - Runtime protocol version 使用独立语义版本且不带 `v`，当前开发分支为 `2.0.0`、major 为 `2`；客户端兼容性优先看 `protocol_major_version`。
 - schema version 继续使用整数，例如 `1`、`2`、`3`。
 
@@ -147,6 +147,8 @@
 
 正式发布记录从 `v2026.5.13.0` 开始。6.x 与 `v2026.7.4.0` 文件是未发布开发快照或候选记录，不应视作正式版本：
 
+- [`v2026.8.4.0.md`](changelog/v2026.8.4.0.md)：正式发布，群黑话矿工 + fetch_url 权威知识站点 + OOC 管线审查加固 + 工具追问轮。
+- [`v2026.8.3.0.md`](changelog/v2026.8.3.0.md)：正式发布，nb2 适配器生产化（提醒代办/掉线守护/注意力管线）+ 情绪系统/记忆蒸馏/OOC 判定等。
 - [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md)：正式发布，多角色 GensokyoWorld 完整落地与 Runtime 健壮性记录。
 - [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md)：自首个正式基线 `v2026.5.13.0` 以来的累计正式发布。
 - [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md)：首个正式 release，首个公开 Alpha 基线。

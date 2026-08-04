@@ -5,7 +5,7 @@
 ## 版本与兼容性
 
 - 当前 package 版本：`2026.7.30.0`
-- 当前协议版本：`2.1.0`
+- 当前协议版本：`2.2.0`
 - 当前协议主版本：`2`
 - 兼容性策略：同一主版本内可以新增字段和方法；删除字段、修改语义或改变错误结构需要进入 breaking changes。
 - 客户端应优先调用 `runtime.info`，再根据 `protocol_version`、`capabilities`、`methods`、`legacy_methods` 与 `method_specs` 决定可用功能。
@@ -46,10 +46,10 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
   "name": "GensokyoAI Runtime",
   "package_version": "2026.7.14.0",
   "protocol": "gensokyo-runtime-rpc",
-  "protocol_version": "2.1.0",
+  "protocol_version": "2.2.0",
   "protocol_major_version": 2,
   "capabilities": ["agent.lifecycle", "agent.messaging", "agent.reasoning.public", "agent.streaming", "character.discovery", "character.validation", "character_package.management", "dependency.management", "external_tool.status", "memory.management", "memory.search", "memory.graph", "media.upload", "media.image_input", "message.operation_status", "model.discovery", "config.validation", "migration.diagnostics", "resource_control.runtime_gates", "runtime.events", "runtime.health", "runtime.readiness", "runtime.graceful_drain", "runtime.multi_user", "runtime.rbac", "runtime.transport_discovery", "runtime.versioning", "session.management", "initiative_timer.management", "world.orchestration"],
-  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
+  "methods": ["runtime.info", "runtime.health", "runtime.ready", "runtime.shutdown", "config.validate", "character.validate", "character_package.validate", "character_package.preview", "character_package.import", "character_package.export", "agent.init", "agent.list", "agent.delete", "agent.send_message", "agent.send_message_stream", "message.status", "character.list", "model.list", "model.info", "session.create", "session.list", "session.current", "session.resume", "session.delete", "session.export", "session.rename", "session.messages", "session.replace_messages", "session.regenerate_from", "session.rollback", "dependency.status", "dependency.install", "external_tool.status", "initiative_timer.current", "initiative_timer.update", "initiative_timer.cancel", "initiative_timer.trigger", "memory.add", "memory.list", "memory.search", "memory.get", "memory.update", "memory.delete", "memory.graph", "media.list", "media.delete", "scene.current", "scene.list", "scene.get", "scene.switch", "scene.graph", "world.init", "world.start", "world.send_message", "world.send_message_stream", "world.state", "world.roster", "world.transcript", "world.move", "world.session.create", "world.session.list", "world.session.resume", "world.session.delete", "world.session.export", "world.shutdown"],
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
@@ -147,7 +147,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
 - `dependency.status`、`dependency.install`
 - `external_tool.status`
 - `initiative_timer.current`、`initiative_timer.update`、`initiative_timer.cancel`、`initiative_timer.trigger`（`initiative_timer.hesitation` / `initiative_timer.hesitation.set` 已废弃为 legacy）
-- `memory.list`、`memory.search`、`memory.get`、`memory.update`、`memory.delete`、`memory.graph`
+- `memory.add`、`memory.list`、`memory.search`、`memory.get`、`memory.update`、`memory.delete`、`memory.graph`
 - `media.list`、`media.delete`
 - `scene.current`、`scene.list`、`scene.get`、`scene.switch`、`scene.graph`
 
@@ -797,6 +797,8 @@ SSE `/events` 会推送 Runtime 事件。事件字段会经过敏感信息清洗
 返回每条结果的 `score`、`keyword_score`、可选 `embedding_score`、`matched_by` 与 `diagnostics`。当 embedding provider 未配置、不可用或调用失败时，Runtime 会自动降级到关键词 / 话题检索，并在 `diagnostics.embedding_fallback` 和 `diagnostics.embedding_error` 中说明原因。
 
 `memory.get`、`memory.update`、`memory.delete` 分别按 `memory_id` 读取、更新和删除当前会话语义记忆。`memory.update` 支持更新 `content`、`importance`、`tags`。
+
+`memory.add` 向当前会话语义记忆写入一条（适配器知识学习通道，如 nb2 群黑话）：参数 `content`（必填）、`topic_name`、`importance`、`emotional_valence`；`topic_name` 命中既有话题时直接归入（不走 LLM 归派打分），返回 `{"added": true, "topic": "话题名"}`。
 
 `memory.graph` 返回当前会话话题图：
 

@@ -10,8 +10,8 @@ For version format, where to use `v` and where not, and the difference between R
 
 Brief rules:
 
-- Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.7.30.0`, and the first official release was `v2026.5.13.0`.
-- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.7.30.0`.
+- Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.8.4.0`, and the first official release was `v2026.5.13.0`.
+- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.8.4.0`.
 - Runtime protocol version uses independent semantic versioning without `v`; the current development branch uses `2.0.0` with major `2`; client compatibility prioritizes `protocol_major_version`.
 - Schema versions continue to use integers, e.g. `1`, `2`, `3`.
 
@@ -147,6 +147,8 @@ Use one or two sentences to explain the most important changes in this version, 
 
 Official release records start at `v2026.5.13.0`. The 6.x and `v2026.7.4.0` files are unpublished development snapshots or candidate notes and must not be treated as official versions:
 
+- [`v2026.8.4.0.md`](changelog/v2026.8.4.0.md): official release — group jargon miner, fetch_url + curated knowledge sites, OOC pipeline hardening, tool follow-up rounds.
+- `v2026.8.3.0` (Chinese only: [`../changelog/v2026.8.3.0.md`](../changelog/v2026.8.3.0.md)): official release — nb2 adapter productionization (proxy reminders, watchdog, attention pipeline), emotion system, memory distillation, OOC judging.
 - [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md): official release covering the completed multi-character GensokyoWorld and Runtime robustness.
 - [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md): cumulative official release since the first official baseline `v2026.5.13.0`.
 - [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md): the first official release and first public Alpha baseline.

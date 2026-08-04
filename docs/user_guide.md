@@ -559,6 +559,23 @@ tool:
 - `provider: "mixed"`：并行调用 `ddg` 与 `api`，按来源优先级与结果质量排序、去重、截断。
 - `provider: "bing"`：Bing HTML 搜索，作为兼容保留。
 
+### 11.7 网页抓取与权威知识站点（fetch_url / knowledge_sites）
+
+内置 `fetch_url` 工具抓取指定 URL 的正文（aiohttp，SSRF 校验、HTML 剥标签、4000 字截断；抓取失败只给模型一句干净人话，技术细节进日志）。配合 `tool.web_search.knowledge_sites` 配置的**权威知识站点**，角色在查特定领域知识（如作品设定、角色资料）时会优先抓这些站，与领域无关的内容才走 `web_search`：
+
+```yaml
+tool:
+  builtin_tools: ["time", "moon", "system", "web_search", "fetch_url"]
+  web_search:
+    enabled: true
+    knowledge_sites:
+      - site: thbwiki.cc
+        desc: 东方 Project 中文维基——角色设定、剧情考据；支持 MediaWiki API
+```
+
+- 站点表会渲染进每轮工具指令（`site` + `desc`），由模型自行选择「fetch_url 权威站」还是「web_search 泛搜」；MediaWiki 站（如 THBWiki）可用 `api.php?action=query&list=search` 先搜词条再抓正文。
+- `fetch_url` 需在 `tool.builtin_tools` 白名单中加入 `"fetch_url"` 才注入模型。
+
 搜索工具成功时返回包含 `items` 与 `diagnostics` 的 JSON；配置禁用、Provider 不支持、Provider 失败或无结果时会通过结构化工具错误返回，例如 `web_search.disabled`、`web_search.unsupported_provider`、`web_search.provider_failed`、`web_search.no_results`。
 
 ## 12. Runtime / HTTP 入口

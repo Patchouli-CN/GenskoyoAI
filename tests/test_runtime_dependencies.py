@@ -495,8 +495,8 @@ class PackagingConfigurationTests(unittest.TestCase):
         project = pyproject["project"]
         requirements = set(self._requirements_entries())
 
-        self.assertEqual(project["version"], "2026.7.30.0")
-        self.assertEqual(package_version(), "2026.7.30.0")
+        self.assertEqual(project["version"], "2026.8.4.0")
+        self.assertEqual(package_version(), "2026.8.4.0")
         self.assertEqual(set(project["dependencies"]), requirements)
 
     def test_pyproject_declares_default_all_and_dev_dependency_groups(self):
@@ -617,12 +617,12 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
 
         info = asyncio.run(run())
 
-        self.assertEqual(RUNTIME_PROTOCOL_VERSION, "2.1.0")
+        self.assertEqual(RUNTIME_PROTOCOL_VERSION, "2.2.0")
         self.assertEqual(RUNTIME_PROTOCOL_MAJOR_VERSION, 2)
         self.assertTrue(RUNTIME_BREAKING_CHANGES)
-        self.assertEqual(info["protocol_version"], "2.1.0")
+        self.assertEqual(info["protocol_version"], "2.2.0")
         self.assertEqual(info["protocol_major_version"], 2)
-        self.assertEqual(info["package_version"], "2026.7.30.0")
+        self.assertEqual(info["package_version"], "2026.8.4.0")
         self.assertEqual(info["schema_versions"]["memory"], 2)
         self.assertIn("agent.streaming", info["capabilities"])
         self.assertIn("agent.reasoning.public", info["capabilities"])

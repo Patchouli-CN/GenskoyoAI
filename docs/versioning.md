@@ -353,10 +353,10 @@ docs/
 
 ## 十一、当前状态
 
-`v2026.5.13.0` 是此前唯一正式 release；当前累计正式发布状态：
+当前累计正式发布状态：
 
-- package version 当前见 [`pyproject.toml`](../pyproject.toml)，应为 `2026.7.14.0`。
-- Runtime protocol version 当前见 [`rpc.py`](../GensokyoAI/runtime/rpc.py)，应为 `2.0.0`，major 为 `2`。
-- schema versions 当前见 [`schema_versions.py`](../GensokyoAI/core/schema_versions.py)：memory 为 `2`，其余公开 schema 为 `1`。
-- release changelog 为 [`docs/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md)。
-- 对应 Git tag 为 `v2026.7.14.0`；发布准备阶段不创建 tag。
+- package version 当前见 [`pyproject.toml`](../pyproject.toml)，应为 `2026.8.4.0`。
+- Runtime protocol version 当前见 [`rpc.py`](../GensokyoAI/runtime/rpc.py)，应为 `2.2.0`，major 为 `2`。
+- schema versions 当前见 [`schema_versions.py`](../GensokyoAI/core/schema_versions.py)：memory 为 `2`，session 为 `2`，其余公开 schema 为 `1`。
+- release changelog 为 [`docs/changelog/v2026.8.4.0.md`](changelog/v2026.8.4.0.md)。
+- 对应 Git tag 为 `v2026.8.4.0`；发布准备阶段不创建 tag。
