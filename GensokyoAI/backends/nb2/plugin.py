@@ -109,6 +109,23 @@ _EXTRA_CONTEXTS = (
     [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
 )
 
+# 认主：主人专属提示词（GSK_NB2_OWNER_QQ + GSK_NB2_OWNER_PROMPT_PATH 同时配置才启用）。
+# 只对主人发言时注入——角色认出主人、对主人有专属设定/口吻，其他人看不到。
+_owner_prompt: str | None = None
+if _config.owner_qq and _config.owner_prompt_path:
+    _owner_prompt_path = _config.owner_prompt_path
+    if not _owner_prompt_path.is_absolute():
+        _owner_prompt_path = (_config.root_dir or Path.cwd()) / _owner_prompt_path
+    try:
+        _owner_prompt = _owner_prompt_path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        logger.warning(f"[nb2] 主人提示词文件读取失败，认主功能停用: {_owner_prompt_path} ({error})")
+        _owner_prompt = None
+    if _owner_prompt:
+        logger.info(
+            f"[nb2] 认主插件已启用：主人 {sorted(_config.owner_qq)}，提示词文件 {_owner_prompt_path}"
+        )
+
 # 指令执行器（框架 commands 体系）：本地注册表，解析/权限/执行/日志统一
 _command_executor = CommandExecutor(mode="smart", registry=NB2_COMMANDS)
 
@@ -1001,6 +1018,9 @@ async def _chat(
         # 群聊多对单：注入说话人标记，让角色在历史里分清每轮是谁说的
         text = f"【{sender_name}】{text}"
     contexts = list(_EXTRA_CONTEXTS)
+    # 认主：主人专属提示词只对 owner_qq 注入（认主语义，其他人看不到）
+    if member_qq is not None and member_qq in _config.owner_qq and _owner_prompt:
+        contexts.insert(0, f"【主人专属设定】\n{_owner_prompt}")
     if _config.member_memory and member_qq is not None and member_name:
         impression = _members.get(member_qq)
         if impression:
