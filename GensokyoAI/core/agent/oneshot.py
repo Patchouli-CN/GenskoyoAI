@@ -9,6 +9,7 @@ ThinkEngine / 后台管理器 / 语义记忆 / 持久化（2026-08-02 用户拍�
 无会话、无工作记忆、无思考引擎——调用即走，成本只在当次。
 """
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +20,18 @@ from ..release_resources import find_character_resource, resolve_resource_path
 from .model_client import ModelClient
 from .prompts import build_roleplay_system_prompt
 
+# 缓存 TTL（秒）：到期重装配——改 key/模型/人设后无需重启进程即可生效
+# （此前永久缓存，改配置只能重启，04#13）
+_CACHE_TTL_SECONDS = 300.0
+
 
 class OneShotGenerator:
     """按角色缓存的一次性脱稿生成器（system 角色提示词 + user 任务提示词）。"""
 
     def __init__(self, root_dir: Path) -> None:
         self._root_dir = root_dir
-        self._cache: dict[str, tuple[ModelClient, str]] = {}  # character -> (client, system_prompt)
+        # character -> (client, system_prompt, cached_at)
+        self._cache: dict[str, tuple[ModelClient, str, float]] = {}
 
     async def generate(self, character: str, prompt: str) -> str:
         """以角色口吻对 prompt 做一次性生成；失败抛给调用方（不静默兜底）。"""
@@ -50,7 +56,9 @@ class OneShotGenerator:
     def _resolve(self, character: str) -> tuple[ModelClient, str]:
         cached = self._cache.get(character)
         if cached is not None:
-            return cached
+            client, system_prompt, cached_at = cached
+            if time.monotonic() - cached_at < _CACHE_TTL_SECONDS:
+                return client, system_prompt
         loader = ConfigLoader()
         app_config = loader.load(self._config_path(), resource_root=self._root_dir)
         character_config = self._load_character(loader, character)
@@ -59,9 +67,8 @@ class OneShotGenerator:
             character_config.name, character_config.system_prompt
         )
         logger.info(f"一次性脱稿生成器已装配（角色: {character_config.name}）")
-        entry = (client, system_prompt)
-        self._cache[character] = entry
-        return entry
+        self._cache[character] = (client, system_prompt, time.monotonic())
+        return client, system_prompt
 
     def _config_path(self) -> Path:
         """本地配置优先，发行模板兜底（与 runtime service 同一约定）。"""

@@ -32,6 +32,7 @@ from ..scene.manager import SceneManager
 from ..utils.helpers import build_world_memory_root
 from ..utils.logger import logger
 from ..utils.path_security import sanitize_path_id
+from ..utils.tasks import tracked_task
 from .director import Director
 from .initiative import WorldInitiativeLoop
 from .memory_projector import WorldMemoryProjector
@@ -719,53 +720,62 @@ class GensokyoWorld:
         }
 
         content_parts: list[str] = []
-        async for chunk in agent.send_world_turn_stream(trigger_text, contexts):
-            # 错误块（超时/失败）不进演出与剧本；工具调用块属演员私域，不转发
-            if chunk.type == "error" or not chunk.content:
-                continue
-            content_parts.append(chunk.content)
-            self._publish(
-                SystemEvent.WORLD_ACTOR_TURN_CHUNK,
-                {"actor_id": actor_id, "content": chunk.content},
-            )
-            yield {
-                "type": STREAM_ACTOR_CHUNK,
-                "actor_id": actor_id,
-                "content": chunk.content,
-            }
-        content = "".join(content_parts)
-
-        # 回合中演员可能用 scene_switch 移动——以其最终所在场景落剧本。
-        # 舞台联动（_on_scene_switched）经事件工作器异步落位，正文记录时可能
-        # 还没执行；演员自己的 SceneManager 由 scene_switch 同步更新，回合内
-        # 自移场景以此为准（世界外力移动舞台已同步，仍以舞台为准）。
-        final_scene = self._stage.scene_of(actor_id) or scene_id
-        agent_scene = agent.scene_manager.current_scene_id
-        if agent_scene and agent_scene != scene_id:
-            final_scene = agent_scene
-        if content.strip():
-            self._transcript.add(
+        aborted = False
+        try:
+            async for chunk in agent.send_world_turn_stream(trigger_text, contexts):
+                # 错误块（超时/失败）不进演出与剧本；工具调用块属演员私域，不转发
+                if chunk.type == "error" or not chunk.content:
+                    continue
+                content_parts.append(chunk.content)
+                self._publish(
+                    SystemEvent.WORLD_ACTOR_TURN_CHUNK,
+                    {"actor_id": actor_id, "content": chunk.content},
+                )
+                yield {
+                    "type": STREAM_ACTOR_CHUNK,
+                    "actor_id": actor_id,
+                    "content": chunk.content,
+                }
+        except BaseException:
+            aborted = True
+            raise
+        finally:
+            content = "".join(content_parts)
+            # 中断（消费端断开/取消/异常）也把已流出正文落进剧本——用户看到的
+            # 不能是舞台没记下的：后续导演决策、记忆投影、resume 全建在这份
+            # 历史上（L2）。abort 时只做落盘副作用，不再 yield（防 GeneratorExit）
+            # 回合中演员可能用 scene_switch 移动——以其最终所在场景落剧本。
+            # 舞台联动（_on_scene_switched）经事件工作器异步落位，正文记录时可能
+            # 还没执行；演员自己的 SceneManager 由 scene_switch 同步更新，回合内
+            # 自移场景以此为准（世界外力移动舞台已同步，仍以舞台为准）。
+            final_scene = self._stage.scene_of(actor_id) or scene_id
+            agent_scene = agent.scene_manager.current_scene_id
+            if agent_scene and agent_scene != scene_id:
+                final_scene = agent_scene
+            if content.strip():
+                self._transcript.add(
+                    scene_id=final_scene,
+                    speaker_kind=SpeakerKind.CHARACTER,
+                    speaker_id=actor_id,
+                    speaker_name=brief.display_name,
+                    content=content,
+                )
+            completed = WorldActorTurnPayload(
+                actor_id=actor_id,
+                actor_name=brief.display_name,
                 scene_id=final_scene,
-                speaker_kind=SpeakerKind.CHARACTER,
-                speaker_id=actor_id,
-                speaker_name=brief.display_name,
                 content=content,
+                turn_index=turn_index,
             )
-        completed = WorldActorTurnPayload(
-            actor_id=actor_id,
-            actor_name=brief.display_name,
-            scene_id=final_scene,
-            content=content,
-            turn_index=turn_index,
-        )
-        self._publish(SystemEvent.WORLD_ACTOR_TURN_COMPLETED, completed)
-        yield {
-            "type": STREAM_ACTOR_COMPLETED,
-            "actor_id": actor_id,
-            "actor_name": brief.display_name,
-            "scene_id": final_scene,
-            "content": content,
-        }
+            self._publish(SystemEvent.WORLD_ACTOR_TURN_COMPLETED, completed)
+            if not aborted:
+                yield {
+                    "type": STREAM_ACTOR_COMPLETED,
+                    "actor_id": actor_id,
+                    "actor_name": brief.display_name,
+                    "scene_id": final_scene,
+                    "content": content,
+                }
 
     async def _decide(
         self,
@@ -967,6 +977,9 @@ class GensokyoWorld:
             initiative_summary=plan.summary,
         ):
             pass  # 主动表演不挂流式输出；world.* 事件已广播到 World 总线
+        # 主动段落同样落存档（L1：此前四条段落路径里唯一不落，
+        # 崩溃窗口内主动段的剧本/当前演员/等待状态丢失）
+        await self._save_record()
 
     async def _plan_initiative_after_segment(self) -> None:
         """段落结束后让 World 主循环统一规划下一次世界主动。"""
@@ -1032,36 +1045,46 @@ class GensokyoWorld:
     # ==================== 记忆投影 ====================
 
     def _schedule_projection(self) -> None:
-        """段落结束后后台启动一次记忆投影（不阻塞用户回复）。"""
+        """段落结束后后台启动一次记忆投影（不阻塞用户回复）。
+
+        定格在段落结束时刻：场景与在场角色此刻定下，「谁能记住这段」是
+        可审计的事实，而不是投影执行时刻的时序抽奖（M3）——此后 stage 的
+        任何变化（用户跟随/移动）都不影响本段的投影对象。
+        """
         if self._projector is None or self._shutdown:
             return
-        task = asyncio.create_task(self._project_segment())
-        self._projection_tasks.add(task)
-        task.add_done_callback(self._projection_tasks.discard)
+        scene_id = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
+        participants = set(self._stage.characters_in(scene_id))
+        tracked_task(
+            self._project_segment(scene_id, participants), self._projection_tasks
+        )
 
     async def flush_projections(self) -> None:
         """等待所有未完成的记忆投影（关机与测试用）。"""
         if self._projection_tasks:
             await asyncio.gather(*self._projection_tasks, return_exceptions=True)
 
-    async def _project_segment(self) -> None:
-        """把本段新增公开剧本投影为各在场角色的私有视角记忆。"""
+    async def _project_segment(self, scene_id: str, participant_ids: set[str]) -> None:
+        """把本段新增公开剧本投影为各在场角色的私有视角记忆。
+
+        scene_id 与 participant_ids 在段落结束时刻定格（_schedule_projection），
+        不按投影执行时刻的 stage 现查——「谁能记住这段」在段尾已定案。
+        """
         if self._projector is None:
             return
         try:
-            scene_id = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
             cursor = self._projection_cursors.get(scene_id, 0)
             new_entries, new_cursor = self._transcript.new_entries_since(scene_id, cursor)
             self._projection_cursors[scene_id] = new_cursor
             if not new_entries:
                 return
 
-            # 只给亲历/在场角色写入：本段发言者 ∪ 当前在场角色
+            # 只给亲历/在场角色写入：本段发言者 ∪ 段落结束时刻定格的在场角色
             participant_ids = {
                 entry.speaker_id
                 for entry in new_entries
                 if entry.speaker_kind is SpeakerKind.CHARACTER
-            } | set(self._stage.characters_in(scene_id))
+            } | participant_ids
             participants = [
                 self._briefs[aid] for aid in sorted(participant_ids) if aid in self._actors
             ]

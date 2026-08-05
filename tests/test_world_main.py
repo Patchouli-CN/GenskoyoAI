@@ -13,6 +13,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from GensokyoAI.core.agent.providers import ProviderFactory
 from GensokyoAI.core.agent.providers.base import BaseProvider
@@ -497,6 +498,34 @@ class WorldMainTests(unittest.IsolatedAsyncioTestCase):
                 SystemEvent.WORLD_DIRECTOR_DECISION,
             ):
                 self.assertIn(expected, bus_events)
+
+
+    async def test_aborted_actor_stream_still_lands_in_transcript(self):
+        """L2 回归：演员流中途异常，已流出正文也必须落剧本——用户看到的
+        不能是舞台没记下的（后续导演决策/记忆投影/resume 全建在这份历史上）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_characters(tmp)
+            world = await self._boot(tmp)
+
+            class _AbortingAgent:
+                scene_manager = SimpleNamespace(current_scene_id=None)
+
+                async def send_world_turn_stream(self, trigger_text, contexts):
+                    yield SimpleNamespace(type="content", content="说到一半的台词")
+                    raise ConnectionError("mid-stream abort")
+
+            world._actors["marisa"] = _AbortingAgent()
+            with self.assertRaises(ConnectionError):
+                async for _event in world._run_actor_turn_stream(
+                    "marisa", "开场", turn_index=1
+                ):
+                    pass
+
+            history = world._transcript.history(DEFAULT_SCENE_ID)
+            self.assertTrue(
+                any("说到一半的台词" in entry.content for entry in history),
+                "中断时已流出正文必须落进共享剧本",
+            )
 
 
 if __name__ == "__main__":
