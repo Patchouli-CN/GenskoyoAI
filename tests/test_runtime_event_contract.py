@@ -83,6 +83,24 @@ class RuntimeEventContractTests(unittest.TestCase):
         self.assertEqual(cleaned["nested"]["safe"], "ok")
         self.assertEqual(cleaned["items"][0]["client_secret"], REDACTED_VALUE)
 
+    def test_sanitizer_keeps_token_metric_fields(self):
+        """03#1 回归：契约承诺的计量字段（含 token 字样）不得被脱敏。"""
+        cleaned = sanitize_event_payload(
+            {
+                "first_token_ms": 320,
+                "total_tokens": 1500,
+                "prompt_tokens": 900,
+                "completion_tokens": 600,
+                "cost_yuan": 0.012,
+                "access_token": "secret-token",  # 真敏感仍要抹
+            }
+        )
+        self.assertEqual(cleaned["first_token_ms"], 320)
+        self.assertEqual(cleaned["total_tokens"], 1500)
+        self.assertEqual(cleaned["prompt_tokens"], 900)
+        self.assertEqual(cleaned["cost_yuan"], 0.012)
+        self.assertEqual(cleaned["access_token"], REDACTED_VALUE)
+
     def test_model_client_publishes_runtime_model_events_and_redacts_retry_payload(self):
         event_bus = _CollectingEventBus()
         client = ModelClient.__new__(ModelClient)

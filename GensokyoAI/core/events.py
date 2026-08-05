@@ -13,6 +13,7 @@ from msgspec import Struct, field
 
 from ..utils.helpers import utc_now
 from ..utils.logger import logger
+from ..utils.tasks import tracked_task
 
 
 class EventPriority(Enum):
@@ -194,6 +195,8 @@ class EventBus:
         self._running = False
         self._event_queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=max_queue_size)
         self._worker_task: asyncio.Task | None = None
+        # fire-and-forget 任务强引用集合（immediate 事件处理；防 GC 回收，done 自清）
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._stats = {
             "published": 0,
             "delivered": 0,
@@ -381,7 +384,7 @@ class EventBus:
             )
 
         if immediate:
-            asyncio.create_task(self._process_event(event))
+            tracked_task(self._process_event(event), self._background_tasks)
         else:
             try:
                 self._event_queue.put_nowait(event)

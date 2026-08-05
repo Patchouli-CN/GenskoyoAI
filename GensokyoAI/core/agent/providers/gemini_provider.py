@@ -159,11 +159,24 @@ class GeminiProvider(BaseProvider):
         genai_types = self._load_genai_types()
         config, gemini_contents = self._build_content_config(messages, tools, options, genai_types)
 
+        last_usage: dict[str, Any] | None = None
         async for chunk in self._client.aio.models.generate_content_stream(
             model=model,
             contents=gemini_contents,
             config=config,
         ):
+            # usage_metadata 随流式块携带（常在末块），先取再过 candidates 守卫
+            usage_meta = getattr(chunk, "usage_metadata", None)
+            if usage_meta is not None:
+                prompt_tokens = getattr(usage_meta, "prompt_token_count", None)
+                completion_tokens = getattr(usage_meta, "candidates_token_count", None)
+                if prompt_tokens is not None or completion_tokens is not None:
+                    last_usage = {
+                        "prompt_tokens": prompt_tokens or 0,
+                        "completion_tokens": completion_tokens or 0,
+                        "total_tokens": getattr(usage_meta, "total_token_count", None)
+                        or (prompt_tokens or 0) + (completion_tokens or 0),
+                    }
             if not chunk.candidates:
                 continue
 
@@ -199,6 +212,7 @@ class GeminiProvider(BaseProvider):
                 yield StreamChunk(
                     type="finish",
                     finish_reason=str(finish_reason),
+                    usage=last_usage,
                     web_search_references=references,
                     web_search_diagnostics=self._build_web_search_diagnostics(options, references),
                 )

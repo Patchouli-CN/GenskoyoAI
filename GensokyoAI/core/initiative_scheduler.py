@@ -111,6 +111,10 @@ class InitiativeScheduler:
     async def _discard_locked(self, *, reason: str) -> dict[str, Any] | None:
         state = self._state
         if state is None:
+            # fired-pending（计划已被 fire 清掉、回调在锁外等待执行）也要让
+            # 在途 fire 失效——否则取消/重规划后，锁外等待的过期回调凭旧
+            # fire id 仍会执行（M1：stale fire 竞态）
+            self._active_fire_id = None
             return None
         self._generation += 1
         self._state = None

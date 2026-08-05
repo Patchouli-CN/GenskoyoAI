@@ -16,15 +16,30 @@ class SharedTranscript:
     def __init__(self, max_entries_per_scene: int = 500) -> None:
         self._max_entries_per_scene = max_entries_per_scene
         self._by_scene: dict[str, list[TranscriptEntry]] = {}
+        # 每场景单调递增的追加总数（截断不减）——投影游标按它追踪才截断安全
+        self._total_appended: dict[str, int] = {}
 
     def append(self, entry: TranscriptEntry) -> TranscriptEntry:
         """追加一条记录到其所属场景分片，超限时从头截断。"""
         bucket = self._by_scene.setdefault(entry.scene_id, [])
         bucket.append(entry)
+        self._total_appended[entry.scene_id] = self._total_appended.get(entry.scene_id, 0) + 1
         if len(bucket) > self._max_entries_per_scene:
             # 保留最近 max 条，丢弃最旧的
             del bucket[: len(bucket) - self._max_entries_per_scene]
         return entry
+
+    def new_entries_since(self, scene_id: str, cursor: int) -> tuple[list[TranscriptEntry], int]:
+        """返回 (游标之后的新记录, 新游标)。
+
+        游标按「追加总数」计而非当前分片下标：分片截断后绝对下标整体前移，
+        按下标追踪会永久停摆（M2：饱和场景的记忆投影静默死亡）。
+        """
+        bucket = self._by_scene.get(scene_id, [])
+        total = self._total_appended.get(scene_id, 0)
+        trimmed = total - len(bucket)
+        start = max(0, cursor - trimmed)
+        return list(bucket[start:]), total
 
     def add(
         self,

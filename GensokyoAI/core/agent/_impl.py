@@ -18,6 +18,7 @@ from ...utils.content_security import detect_prompt_injection
 from ...utils.helpers import extract_speaker_tags, safe_get
 from ...utils.logger import logger
 from ...utils.path_security import sanitize_path_id
+from ...utils.tasks import tracked_task
 from ..config import AppConfig, ConfigLoader
 from ..event_listeners import (
     CoreListeners,
@@ -79,6 +80,8 @@ class Agent:
         # 被流式消费（chunk 已实时投递给用户）的请求 id：OOC 判定对这类请求
         # 必须跳过——重写只改进记忆的版本会造成「用户看到的 ≠ 角色记住的」分叉
         self._live_stream_request_ids: set[str] = set()
+        # fire-and-forget 后台任务强引用集合（防 GC 回收，done 自清）
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._init_config(config, config_file, character_file)
         self._init_infrastructure()
         self._init_core_components()
@@ -997,7 +1000,10 @@ class Agent:
                 # 后台调度主动定时器，不阻塞 complete_response 和用户输入；
                 # World Actor 不各自持有定时器（对话主循环在 World 侧）
                 if self._manage_initiative_timer:
-                    asyncio.create_task(self._initiative_coordinator.schedule_bg(full_response))
+                    tracked_task(
+                        self._initiative_coordinator.schedule_bg(full_response),
+                        self._background_tasks,
+                    )
                 # 定期记忆蒸馏（§8.29）：挂在主动机制总闸上——
                 # 元租户（enabled=False）与 World Actor（manage=False）天然不触发
                 if (

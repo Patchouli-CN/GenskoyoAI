@@ -253,6 +253,8 @@ class OpenAIProvider(BaseProvider):
         }
         if stream:
             call_kwargs["stream"] = True
+            # OpenAI 兼容流式：末块携带 usage 需要显式 include_usage（成本采样数据源）
+            call_kwargs["stream_options"] = {"include_usage": True}
 
         # 应用 extra_body（如 thinking 模式控制）
         if extra_body:
@@ -355,6 +357,7 @@ class OpenAIProvider(BaseProvider):
         tool_calls_acc: dict[int, dict] = {}
 
         if self._uses_custom_http():
+            stream_state: dict[str, Any] = {}
             async for chunk_data in post_sse(
                 endpoint_url(self._endpoint),
                 call_kwargs,
@@ -362,14 +365,27 @@ class OpenAIProvider(BaseProvider):
                 self.config.timeout,
             ):
                 async for stream_chunk in self._convert_stream_chunk_dict(
-                    chunk_data, tool_calls_acc
+                    chunk_data, tool_calls_acc, stream_state
                 ):
                     yield stream_chunk
+            # usage 末块晚于 finish_reason 块：合并成一个 finish chunk 发出
+            if stream_state.get("finish_reason") or stream_state.get("usage"):
+                yield StreamChunk(
+                    type="finish",
+                    finish_reason=stream_state.get("finish_reason"),
+                    usage=stream_state.get("usage"),
+                )
             return
 
         stream = await self._client.chat.completions.create(**call_kwargs)
 
+        last_usage: dict[str, Any] | None = None
+        pending_finish: str | None = None
         async for chunk in stream:
+            # usage 挂在末块（include_usage 的独立块 choices 为空），必须在
+            # delta 守卫之前取并与 finish 合并发出——守卫跳过则成本采样没样本
+            if usage := self._usage_to_dict(getattr(chunk, "usage", None)):
+                last_usage = usage
             delta = chunk.choices[0].delta if chunk.choices else None
             if not delta:
                 continue
@@ -396,11 +412,10 @@ class OpenAIProvider(BaseProvider):
             if delta.content:
                 yield StreamChunk(content=delta.content)
 
-            # 检查结束
+            # 检查结束（usage 末块晚于 finish_reason 块：合并到流尾统一发）
             finish_reason = chunk.choices[0].finish_reason if chunk.choices else None
-            usage = self._usage_to_dict(getattr(chunk, "usage", None))
             if finish_reason and finish_reason != "tool_calls":
-                yield StreamChunk(type="finish", finish_reason=finish_reason, usage=usage)
+                pending_finish = finish_reason
             if finish_reason == "tool_calls" and tool_calls_acc:
                 import json
 
@@ -435,8 +450,14 @@ class OpenAIProvider(BaseProvider):
                     is_tool_call=True,
                     tool_info=tool_info,
                     finish_reason=finish_reason,
-                    usage=usage,
+                    usage=last_usage,
                 )
+        if pending_finish or last_usage:
+            yield StreamChunk(
+                type="finish",
+                finish_reason=pending_finish,
+                usage=last_usage,
+            )
 
     async def image_generation(
         self,
@@ -575,9 +596,19 @@ class OpenAIProvider(BaseProvider):
         self,
         chunk: dict[str, Any],
         tool_calls_acc: dict[int, dict],
+        stream_state: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """将原始 Chat Completions SSE JSON chunk 转换为 StreamChunk。"""
+        """将原始 Chat Completions SSE JSON chunk 转换为 StreamChunk。
+
+        finish/usage 不立即发出——写进 stream_state（finish_reason/usage 键），
+        由调用方在流尾合并成一个 finish chunk（usage 末块晚于 finish_reason 块）。
+        """
         choices = chunk.get("choices") or []
+        if stream_state is not None:
+            if usage := self._usage_to_dict(chunk.get("usage")):
+                stream_state["usage"] = usage
+            if choices and choices[0].get("finish_reason"):
+                stream_state["finish_reason"] = choices[0].get("finish_reason")
         if not choices:
             return
         choice = choices[0]
@@ -597,7 +628,7 @@ class OpenAIProvider(BaseProvider):
             yield StreamChunk(content=delta.get("content") or "")
         finish_reason = choice.get("finish_reason")
         usage = self._usage_to_dict(chunk.get("usage"))
-        if finish_reason and finish_reason != "tool_calls":
+        if stream_state is None and finish_reason and finish_reason != "tool_calls":
             yield StreamChunk(type="finish", finish_reason=finish_reason, usage=usage)
         if finish_reason == "tool_calls" and tool_calls_acc:
             import json

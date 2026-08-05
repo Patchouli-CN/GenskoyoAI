@@ -1050,10 +1050,9 @@ class GensokyoWorld:
             return
         try:
             scene_id = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
-            entries = self._transcript.history(scene_id)
             cursor = self._projection_cursors.get(scene_id, 0)
-            new_entries = entries[cursor:]
-            self._projection_cursors[scene_id] = len(entries)
+            new_entries, new_cursor = self._transcript.new_entries_since(scene_id, cursor)
+            self._projection_cursors[scene_id] = new_cursor
             if not new_entries:
                 return
 

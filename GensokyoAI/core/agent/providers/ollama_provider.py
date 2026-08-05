@@ -143,9 +143,21 @@ class OllamaProvider(BaseProvider):
 
             done = bool(getattr(chunk, "done", False))
             if done:
+                # Ollama 的 usage 在 done 块（prompt_eval_count/eval_count）——
+                # 映射进 finish chunk，成本采样才有样本
+                prompt_tokens = getattr(chunk, "prompt_eval_count", None)
+                completion_tokens = getattr(chunk, "eval_count", None)
+                usage = None
+                if prompt_tokens is not None or completion_tokens is not None:
+                    usage = {
+                        "prompt_tokens": prompt_tokens or 0,
+                        "completion_tokens": completion_tokens or 0,
+                        "total_tokens": (prompt_tokens or 0) + (completion_tokens or 0),
+                    }
                 yield StreamChunk(
                     type="finish",
                     finish_reason=getattr(chunk, "done_reason", None) or "stop",
+                    usage=usage,
                 )
 
     async def list_models(self) -> list[ModelInfo]:

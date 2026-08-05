@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ...utils.logger import logger
+
 
 @dataclass
 class PendingChat:
@@ -44,7 +46,11 @@ class PendingChatQueue:
         queue = self._queues.setdefault(key, [])
         queue.append(item)
         if len(queue) > self._max_pending:
-            del queue[: len(queue) - self._max_pending]
+            dropped = len(queue) - self._max_pending
+            del queue[:dropped]
+            logger.warning(
+                f"[nb2-pending] {key} 待发超上限（{self._max_pending}），丢弃最老 {dropped} 条"
+            )
         if key in self._active:
             return False
         self._active.add(key)

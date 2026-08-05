@@ -308,6 +308,15 @@ async def _judge_mute_break(member_label: str, text: str) -> str:
     return "ignore"
 
 
+def _pick_bot(bots: dict[str, Bot]) -> Bot:
+    """选一个协议端投递：多 bot 并存时按守护记录的 bot QQ 匹配
+    （`next(iter(bots.values()))` 任选会静默用错账号——02#6）。"""
+    known_qq = _watchdog._bot_qq or _config.bot_qq
+    if known_qq is not None and str(known_qq) in bots:
+        return bots[str(known_qq)]
+    return next(iter(bots.values()))
+
+
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
     """Runtime 主动消息事件 → QQ 投递（普通回复已由 RPC 响应投递，这里只发主动的）。"""
     if payload.get("type") != "message.sent":
@@ -323,7 +332,7 @@ async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
     if not bots:
         logger.warning(f"[nb2] 协议端未连接，{agent_id} 的主动消息暂缓投递")
         return
-    bot = next(iter(bots.values()))
+    bot = _pick_bot(bots)
     kind, target_id = target
 
     async def _send(message: Message) -> None:
@@ -751,7 +760,7 @@ async def _fire_reminder(reminder: Reminder) -> None:
             logger.warning(f"[nb2] 提醒 {reminder.id} 协议端长期未连接，放弃投递")
             _reminders.mark_done(reminder.id)
         return
-    bot = next(iter(bots.values()))
+    bot = _pick_bot(bots)
     target_label = f"【{reminder.remind_name}】" if reminder.remind_name else "对方"
     # 该会话正被用户消息处理中：本轮跳过（下个 tick 再投），避免与用户消息
     # 并发生成同一会话（revision 乐观锁兜底但有额外开销，旧 CODE_INF 08#6）

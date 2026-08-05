@@ -137,6 +137,27 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         # 触发完成后 fire id 已失效
         self.assertFalse(scheduler.is_active_fire(fire_id))
 
+    async def test_cancel_invalidates_pending_fire(self):
+        """M1 回归：fire 已发生但回调还在锁外等待（fired-pending）时，
+        cancel/discard 必须让在途 fire 失效——否则过期回调凭旧 fire id 仍会执行。"""
+        gate = asyncio.Event()
+
+        async def _blocking_trigger(plan: InitiativePlan, fire_id: str):
+            await gate.wait()  # 模拟回调在锁外等待（持锁的用户消息等）
+
+        scheduler = InitiativeScheduler(
+            min_delay_seconds=0, trigger_callback=_blocking_trigger
+        )
+        payload = await scheduler.schedule(
+            InitiativePlan(should_schedule=True, delay_seconds=0, summary="触发")
+        )
+        fire_id = payload["timer_id"]
+        await asyncio.sleep(0.1)  # 等到点：state 已清、fire id 已设、回调卡在 gate
+        await scheduler.cancel()  # fired-pending 时取消
+        self.assertFalse(scheduler.is_active_fire(fire_id))  # 在途 fire 必须失效
+        gate.set()
+        await scheduler.shutdown()
+
     async def test_events_published(self):
         bus = EventBus(enable_trace=False)
         await bus.start()

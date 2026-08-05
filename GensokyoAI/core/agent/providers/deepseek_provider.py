@@ -204,16 +204,21 @@ class DeepSeekProvider(OpenAIProvider):
     ) -> AsyncIterator[StreamChunk]:
         """流式调用 DeepSeek API，捕获 reasoning_content 和 tool_calls。"""
         call_kwargs = self._build_call_kwargs(model, messages, tools, options, stream=True)
-        # OpenAI 兼容流式：末块携带 usage 需要显式 include_usage（成本采样数据源）
-        call_kwargs["stream_options"] = {"include_usage": True}
+        # stream_options(include_usage) 由基类 _build_call_kwargs 统一注入（成本采样）
 
         tool_calls_acc: dict[int, dict] = {}
         content_acc = ""
         reasoning_acc = ""
+        last_usage: dict[str, Any] | None = None
+        pending_finish: str | None = None
 
         stream = await self._client.chat.completions.create(**call_kwargs)
 
         async for chunk in stream:
+            # usage 挂在末块（include_usage 的独立块 choices 为空），必须在
+            # delta 守卫之前取并与 finish 合并发出——守卫跳过则成本采样没样本
+            if usage := self._usage_to_dict(getattr(chunk, "usage", None)):
+                last_usage = usage
             delta = chunk.choices[0].delta if chunk.choices else None
             if not delta:
                 continue
@@ -282,11 +287,14 @@ class DeepSeekProvider(OpenAIProvider):
                     finish_reason=finish_reason,
                 )
             elif finish_reason:
-                yield StreamChunk(
-                    type="finish",
-                    finish_reason=finish_reason,
-                    usage=self._usage_to_dict(getattr(chunk, "usage", None)),
-                )
+                pending_finish = finish_reason
+        # usage 末块晚于 finish_reason 块：合并成一个 finish chunk（成本采样取流尾 usage）
+        if pending_finish or last_usage:
+            yield StreamChunk(
+                type="finish",
+                finish_reason=pending_finish,
+                usage=last_usage,
+            )
 
     def _convert_response(self, response) -> UnifiedResponse:
         """将 DeepSeek ChatCompletion 转换为 UnifiedResponse。"""

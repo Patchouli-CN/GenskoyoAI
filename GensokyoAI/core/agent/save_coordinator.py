@@ -3,11 +3,12 @@
 # GensokyoAI/core/agent/save_coordinator.py
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...background import BackgroundManager, TaskPriority
 from ...background.types import TaskResult
 from ...utils.logger import logger
+from ...utils.tasks import tracked_task
 
 if TYPE_CHECKING:
     from ...core.config import SessionConfig
@@ -44,6 +45,8 @@ class SaveCoordinator:
 
         # 后台管理器引用
         self._background_manager: BackgroundManager | None = None
+        # fire-and-forget 后台任务强引用集合（防 GC 回收，done 自清）
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._bg_started = False
         self._shutting_down = False
 
@@ -146,7 +149,7 @@ class SaveCoordinator:
             session = self._session_manager.get_current_session()
             if session is not None:
                 working_memory = self._session_manager.get_working_memory(session.session_id)
-                asyncio.create_task(self.save_async(working_memory))
+                tracked_task(self.save_async(working_memory), self._background_tasks)
 
     async def start_background_manager(self) -> None:
         """启动后台管理器"""
@@ -155,7 +158,7 @@ class SaveCoordinator:
             return
 
         if not self._bg_started and not self._shutting_down:
-            asyncio.create_task(self._background_manager.start())
+            tracked_task(self._background_manager.start(), self._background_tasks)
             self._bg_started = True
             logger.debug("后台管理器已启动")
 

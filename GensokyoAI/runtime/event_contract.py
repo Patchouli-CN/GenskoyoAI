@@ -193,6 +193,19 @@ RUNTIME_EVENT_CONTRACT: dict[str, RuntimeEventSpec] = {
 }
 
 
+def _is_sensitive_key(key_text: str) -> bool:
+    """敏感键判定：精确名 + `_token` 后缀 + api_key/secret/password 子串。
+
+    「token」不用裸子串匹配——`total_tokens`/`first_token_ms` 等计量字段
+    是事件契约承诺给订阅者的，误伤后订阅者拿不到（03#1）。
+    """
+    if key_text in SENSITIVE_FIELD_NAMES:
+        return True
+    if key_text.endswith("_token"):
+        return True
+    return any(part in key_text for part in ("api_key", "secret", "password"))
+
+
 def sanitize_event_payload(payload: Any) -> Any:
     """递归清洗 Runtime 事件 payload 中的敏感字段。"""
 
@@ -200,9 +213,7 @@ def sanitize_event_payload(payload: Any) -> Any:
         cleaned: dict[Any, Any] = {}
         for key, value in payload.items():
             key_text = str(key).lower()
-            if key_text in SENSITIVE_FIELD_NAMES or any(
-                part in key_text for part in ("api_key", "token", "secret", "password")
-            ):
+            if _is_sensitive_key(key_text):
                 cleaned[key] = REDACTED_VALUE
             else:
                 cleaned[key] = sanitize_event_payload(value)

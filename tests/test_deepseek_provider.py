@@ -123,6 +123,66 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(message.tool_calls[0].function.name, "get_current_time")
         self.assertEqual(message.tool_calls[0].function.arguments, {})
 
+    def test_chat_stream_merges_usage_tail_chunk_into_finish(self):
+        """OpenAI 兼容流式：usage 挂在空 choices 的独立末块——必须被捕获并
+        合并进 finish chunk，不能被 delta 守卫跳过（成本采样数据源）。"""
+        with patch.dict(
+            sys.modules,
+            {"openai": SimpleNamespace(AsyncOpenAI=lambda **kwargs: SimpleNamespace())},
+        ):
+            provider = DeepSeekProvider(
+                ModelConfig(
+                    provider="deepseek",
+                    name="deepseek-v4-pro",
+                    api_key="test-key",
+                )
+            )
+        provider._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock()))
+        )
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=_AsyncStream(
+                [
+                    _chunk(
+                        SimpleNamespace(
+                            reasoning_content=None, content="你好", tool_calls=None
+                        )
+                    ),
+                    _chunk(
+                        SimpleNamespace(
+                            reasoning_content=None, content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    ),
+                    SimpleNamespace(
+                        choices=[],
+                        usage=SimpleNamespace(
+                            prompt_tokens=10, completion_tokens=5, total_tokens=15
+                        ),
+                    ),
+                ]
+            )
+        )
+
+        async def collect():
+            chunks = []
+            async for chunk in provider.chat_stream(
+                model="deepseek-v4-pro",
+                messages=[{"role": "user", "content": "hi"}],
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        chunks = asyncio.run(collect())
+
+        finish_chunks = [chunk for chunk in chunks if chunk.type == "finish"]
+        self.assertEqual(len(finish_chunks), 1)  # 合并成一个，不双发
+        self.assertEqual(finish_chunks[0].finish_reason, "stop")
+        self.assertEqual(
+            finish_chunks[0].usage,
+            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
     def test_chat_uses_deepseek_thinking_defaults(self):
         with patch.dict(
             sys.modules,

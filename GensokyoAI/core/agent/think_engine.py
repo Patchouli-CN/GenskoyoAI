@@ -24,6 +24,7 @@ from ...memory.semantic import SemanticMemoryManager
 from ...memory.types import Topic
 from ...utils.helpers import utc_now
 from ...utils.logger import logger
+from ...utils.tasks import tracked_task
 from ..config import InitiativeTimerConfig, ThinkEngineConfig
 from ..config_schema import MotivationWeightsConfig
 from ..events import Event, EventBus, SystemEvent
@@ -164,6 +165,8 @@ class ThinkEngine:
         self.emotion_state = EmotionState(emotion_baseline)
         # 定期记忆蒸馏的轮次计数（§8.29）
         self._distill_pending_turns = 0
+        # fire-and-forget 后台任务强引用集合（防 GC 回收，done 自清）
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
         # 长期思考状态
         self._running = False
@@ -389,7 +392,7 @@ class ThinkEngine:
         if self._distill_pending_turns < getattr(memory_config, "distill_turns", 10):
             return
         self._distill_pending_turns = 0
-        asyncio.create_task(self.distill_memories(recent_messages))
+        tracked_task(self.distill_memories(recent_messages), self._background_tasks)
 
     async def distill_memories(self, recent_messages: list[dict[str, Any]]) -> int:
         """从近期工作记忆提炼「珍贵记忆」写入语义记忆；返回写入条数。"""
@@ -687,7 +690,7 @@ class ThinkEngine:
             motivation=motivation,
             emotion=self.emotion_state.current,
             message=message,
-            delay_seconds=delay if isinstance(delay, (int, float)) and delay > 0 else 300,
+            delay_seconds=int(delay) if isinstance(delay, (int, float)) and delay > 0 else 300,
             enthusiasm=_clamp01(enthusiasm) if isinstance(enthusiasm, int | float) else 0.5,
             reason=str(data.get("reason") or "").strip(),
         )

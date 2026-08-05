@@ -9,6 +9,7 @@ import sys
 from collections.abc import Awaitable, Callable
 
 from ...utils.logger import logger
+from ...utils.tasks import tracked_task
 
 
 class LifecycleManager:
@@ -32,6 +33,8 @@ class LifecycleManager:
         self._shutting_down = False
         self._shutdown_event = asyncio.Event()
         self._on_shutdown = on_shutdown
+        # fire-and-forget 任务强引用集合（防 GC 回收，done 自清）
+        self._background_tasks: set[asyncio.Task] = set()
 
     # ==================== 状态管理 ====================
 
@@ -58,7 +61,7 @@ class LifecycleManager:
             for sig_num in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(
                     sig_num,
-                    lambda s=sig_num: asyncio.create_task(self._handle_signal(s)),
+                    lambda s=sig_num: tracked_task(self._handle_signal(s), self._background_tasks),
                 )
             logger.debug("信号处理器已设置")
         except NotImplementedError:
