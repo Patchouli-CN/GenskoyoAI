@@ -17,7 +17,6 @@
 [**🚀 新手快速上手 QUICKSTART**](./QUICKSTART.md)
 [**使用指南**](./docs/user_guide.md)
 [**项目设计**](./docs/project_design.md)
-[**多角色扮演设计（草案）**](./docs/multi_character_design.md)
 [**Runtime API 契约**](./docs/runtime_api.md)
 [**版本管理说明**](./docs/versioning.md)
 [**Changelog 模板**](./docs/changelog.md)
