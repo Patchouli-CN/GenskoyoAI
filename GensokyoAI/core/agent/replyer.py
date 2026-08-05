@@ -128,8 +128,7 @@ class Replyer:
                 current = rewritten
             if best_text is not current:
                 logger.info(
-                    f"[OOC] 重写轮数耗尽，退回已判定的最低分版本"
-                    f"（{best_score:.2f}，{source}）"
+                    f"[OOC] 重写轮数耗尽，退回已判定的最低分版本（{best_score:.2f}，{source}）"
                 )
             return best_text
         except Exception as error:

@@ -29,16 +29,12 @@ class Nb2ConfigOwnerPromptTests(unittest.TestCase):
         self.assertEqual(config2.owner_qq, frozenset())
         self.assertEqual(config2.owner_prompt_path, Path("config/nb2/owner_prompt.txt"))
         # 全空 env → 两字段都默认
-        config3 = Nb2Config.from_env(
-            _env(GSK_NB2_OWNER_QQ="", GSK_NB2_OWNER_PROMPT_PATH="").get
-        )
+        config3 = Nb2Config.from_env(_env(GSK_NB2_OWNER_QQ="", GSK_NB2_OWNER_PROMPT_PATH="").get)
         self.assertEqual(config3.owner_qq, frozenset())
         self.assertIsNone(config3.owner_prompt_path)
 
     def test_multiple_owner_qq(self):
-        config = Nb2Config.from_env(
-            _env(GSK_NB2_OWNER_QQ="10001, 10002").get
-        )
+        config = Nb2Config.from_env(_env(GSK_NB2_OWNER_QQ="10001, 10002").get)
         self.assertEqual(config.owner_qq, frozenset({10001, 10002}))
 
 

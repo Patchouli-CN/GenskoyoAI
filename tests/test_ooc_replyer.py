@@ -177,7 +177,9 @@ class ReplyerTests(unittest.TestCase):
         )
         context = OocContext(pending_summary="内心想法")
         result = self.run_async(
-            replyer.ensure_in_character("照抄内心想法的原稿", character=_character(), context=context)
+            replyer.ensure_in_character(
+                "照抄内心想法的原稿", character=_character(), context=context
+            )
         )
         self.assertEqual(result, "重写1")  # 原稿 effective=1.0 > 重写1 的 0.8
         self.assertEqual(client.call_count, 3)
@@ -245,7 +247,9 @@ class ReplyerTests(unittest.TestCase):
 
 class OocVerdictParseTests(unittest.TestCase):
     def test_parse_valid_json(self):
-        judge = OocJudge(model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x")
+        judge = OocJudge(
+            model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x"
+        )
         verdict = judge._parse_ooc_verdict(
             '前文 {"ooc_score": 0.8, "character_match": 0.2, "naturalness": 0.3, '
             '"copied_inner_monologue": true, "issues": ["模板化", "照抄"]} 后文'
@@ -257,12 +261,16 @@ class OocVerdictParseTests(unittest.TestCase):
         self.assertEqual(verdict.issues, ["模板化", "照抄"])
 
     def test_parse_garbage_returns_none(self):
-        judge = OocJudge(model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x")
+        judge = OocJudge(
+            model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x"
+        )
         self.assertIsNone(judge._parse_ooc_verdict("完全不是 JSON"))
         self.assertIsNone(judge._parse_ooc_verdict(""))
 
     def test_parse_missing_ooc_score_defaults_high(self):
-        judge = OocJudge(model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x")
+        judge = OocJudge(
+            model_client=_FakeModelClient([]), config=OocJudgeConfig(), character_name="x"
+        )
         verdict = judge._parse_ooc_verdict('{"issues": []}')
         self.assertIsNotNone(verdict)
         assert verdict is not None

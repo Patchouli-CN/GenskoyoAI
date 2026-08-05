@@ -748,9 +748,7 @@ class ConfigMerger:
             enabled=choose("enabled", override.enabled or base.enabled),
             threshold=choose(
                 "threshold",
-                override.threshold
-                if override.threshold != defaults.threshold
-                else base.threshold,
+                override.threshold if override.threshold != defaults.threshold else base.threshold,
             ),
             max_retries=choose(
                 "max_retries",

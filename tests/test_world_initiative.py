@@ -145,9 +145,7 @@ class SchedulerTests(unittest.IsolatedAsyncioTestCase):
         async def _blocking_trigger(plan: InitiativePlan, fire_id: str):
             await gate.wait()  # 模拟回调在锁外等待（持锁的用户消息等）
 
-        scheduler = InitiativeScheduler(
-            min_delay_seconds=0, trigger_callback=_blocking_trigger
-        )
+        scheduler = InitiativeScheduler(min_delay_seconds=0, trigger_callback=_blocking_trigger)
         payload = await scheduler.schedule(
             InitiativePlan(should_schedule=True, delay_seconds=0, summary="触发")
         )

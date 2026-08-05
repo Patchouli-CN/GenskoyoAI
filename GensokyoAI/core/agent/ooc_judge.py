@@ -86,7 +86,7 @@ def _clamp01(value: Any, *, default: float) -> float:
     """钳制到 [0, 1]；非数值回落 default。"""
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     return max(0.0, min(1.0, number))
 
@@ -209,7 +209,7 @@ class OocJudge:
             return None
         try:
             data = json.loads(match.group(0))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
         if not isinstance(data, dict):
             return None

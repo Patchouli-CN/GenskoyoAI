@@ -144,14 +144,10 @@ class DeepSeekProviderTests(unittest.TestCase):
             return_value=_AsyncStream(
                 [
                     _chunk(
-                        SimpleNamespace(
-                            reasoning_content=None, content="你好", tool_calls=None
-                        )
+                        SimpleNamespace(reasoning_content=None, content="你好", tool_calls=None)
                     ),
                     _chunk(
-                        SimpleNamespace(
-                            reasoning_content=None, content=None, tool_calls=None
-                        ),
+                        SimpleNamespace(reasoning_content=None, content=None, tool_calls=None),
                         finish_reason="stop",
                     ),
                     SimpleNamespace(

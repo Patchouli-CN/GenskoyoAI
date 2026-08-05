@@ -33,9 +33,7 @@ class TrackedTaskTests(unittest.IsolatedAsyncioTestCase):
         否则一律走 tracked_task。"""
         violations = []
         for path in _PACKAGE_ROOT.rglob("*.py"):
-            for lineno, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if "asyncio.create_task(" not in line:
                     continue
                 if (

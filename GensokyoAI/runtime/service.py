@@ -1534,12 +1534,18 @@ class RuntimeService(WorldOpsMixin):
                         else await agent.send(resolved_message, system_contexts)
                     )
                     content = response.content if response else ""
+                    # 多模态 parts 折成纯文本，供 finalize 按内容定位本轮 assistant
+                    expected_text = (
+                        content
+                        if isinstance(content, str)
+                        else "".join(part.text or "" for part in content if part.type == "text")
+                    )
                     message_payload = await self._finalize_message_operation(
                         agent,
                         operation_session_id,
                         idempotency_key,
                         generation_id=generation_id,
-                        expected_content=content,
+                        expected_content=expected_text or None,
                     )
                     session = agent.session_manager.get_current_session()
                     result = {
@@ -2273,9 +2279,7 @@ class RuntimeService(WorldOpsMixin):
             )
             for result, service in zip(results, services, strict=False):
                 if isinstance(result, Exception):
-                    logger.error(
-                        f"[Runtime] 租户 {service._tenant_key} shutdown 失败: {result}"
-                    )
+                    logger.error(f"[Runtime] 租户 {service._tenant_key} shutdown 失败: {result}")
             # 租户订阅所有者随租户服务一起失效：不清会在后续清理对已 shutdown
             # 租户调 close 报错（03#7）
             self._tenant_subscription_owners.clear()

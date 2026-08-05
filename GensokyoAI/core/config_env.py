@@ -19,7 +19,7 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         config.model.name = os.getenv("GENSOKYOAI_MODEL")  # type: ignore
     if os.getenv("GENSOKYOAI_API_KEY"):
         config.model.api_key = os.getenv("GENSOKYOAI_API_KEY")  # type: ignore
-    if (base_url := os.getenv("GENSOKYOAI_BASE_URL")):
+    if base_url := os.getenv("GENSOKYOAI_BASE_URL"):
         config.model.base_url = base_url  # type: ignore
         # SSRF 校验对齐 YAML 层（config_validator 518-528）：本地 ollama 由 provider spec 放行
         model_spec = (
@@ -35,7 +35,7 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
     if os.getenv("GENSOKYOAI_AUTH_TYPE"):
         config.model.auth = config.model.auth or AuthConfig()
         config.model.auth.auth_type = os.getenv("GENSOKYOAI_AUTH_TYPE")  # type: ignore
-    if (token_url := os.getenv("GENSOKYOAI_TOKEN_URL")):
+    if token_url := os.getenv("GENSOKYOAI_TOKEN_URL"):
         config.model.auth = config.model.auth or AuthConfig()
         config.model.auth.token_url = token_url  # type: ignore
         # OAuth token 端点同样是 URL，过 SSRF 校验（YAML 层尚未覆盖，此处补 env 路径）
@@ -74,7 +74,7 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         config.embedding.name = os.getenv("GENSOKYOAI_EMBEDDING_MODEL")  # type: ignore
     if os.getenv("GENSOKYOAI_EMBEDDING_API_KEY"):
         config.embedding.api_key = os.getenv("GENSOKYOAI_EMBEDDING_API_KEY")  # type: ignore
-    if (embedding_base_url := os.getenv("GENSOKYOAI_EMBEDDING_BASE_URL")):
+    if embedding_base_url := os.getenv("GENSOKYOAI_EMBEDDING_BASE_URL"):
         config.embedding.base_url = embedding_base_url  # type: ignore
         # 与 YAML 层一致（config_validator 660-665）：embedding base_url 恒禁私网/内网
         validate_external_url(embedding_base_url)
@@ -86,7 +86,7 @@ def apply_env_overrides(config: AppConfig) -> AppConfig:
         config.embedding.timeout = int(os.getenv("GENSOKYOAI_EMBEDDING_TIMEOUT"))  # type: ignore
     if embedding_use_proxy := os.getenv("GENSOKYOAI_EMBEDDING_USE_PROXY"):
         config.embedding.use_proxy = embedding_use_proxy.lower() == "true"
-    if (log_level_env := os.getenv("GENSOKYOAI_LOG_LEVEL")):
+    if log_level_env := os.getenv("GENSOKYOAI_LOG_LEVEL"):
         config.log_level = LogLevel(log_level_env.upper())  # 小写 debug 也认，不再 ValueError
     if os.getenv("GENSOKYOAI_LOG_CONSOLE"):
         config.log_console = os.getenv("GENSOKYOAI_LOG_CONSOLE").lower() == "true"  # type: ignore

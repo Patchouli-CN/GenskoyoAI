@@ -127,10 +127,12 @@ class ReminderStore:
             for entry in self._entries.values():
                 try:
                     due = _as_aware(datetime.fromisoformat(entry["due"]))
-                except (KeyError, TypeError, ValueError):
+                except KeyError, TypeError, ValueError:
                     # 手改 JSON 混入非法 due：跳过不崩，坏条目不占位也不删（下次还来，
                     # 但绝不拖垮整个 due()/tick）
-                    logger.warning(f"[nb2] 坏提醒条目已跳过（due 非法）: {entry.get('content', '')[:30]}")
+                    logger.warning(
+                        f"[nb2] 坏提醒条目已跳过（due 非法）: {entry.get('content', '')[:30]}"
+                    )
                     continue
                 if due <= now:
                     items.append(Reminder.from_dict(entry))

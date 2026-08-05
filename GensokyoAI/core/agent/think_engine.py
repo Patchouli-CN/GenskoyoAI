@@ -302,7 +302,9 @@ class ThinkEngine:
             neighbors = list(current.related_topics.keys())
             if self.config.walk_visit_dedup:
                 neighbors = [
-                    n for n in neighbors if n not in visited and store.get_topic_by_id(n) is not None
+                    n
+                    for n in neighbors
+                    if n not in visited and store.get_topic_by_id(n) is not None
                 ]
             if neighbors:
                 weights = [current.related_topics[n] for n in neighbors]

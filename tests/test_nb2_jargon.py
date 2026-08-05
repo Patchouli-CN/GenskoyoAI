@@ -73,8 +73,13 @@ class _FakeHost:
 
     async def add_memory(self, agent_id, session_id, content, *, topic_name=None, importance=0.0):
         self.added.append(
-            {"agent_id": agent_id, "session_id": session_id, "content": content,
-             "topic_name": topic_name, "importance": importance}
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "content": content,
+                "topic_name": topic_name,
+                "importance": importance,
+            }
         )
         return True
 
@@ -93,9 +98,7 @@ class MaybeLearnJargonTests(unittest.IsolatedAsyncioTestCase):
         plugin._jargon_buffers.clear()
         plugin._jargon_last_learn.clear()
         plugin._jargon_known.clear()
-        self.store = SimpleNamespace(
-            get=lambda key: {"session_id": "sess-1", "revision": 0}
-        )
+        self.store = SimpleNamespace(get=lambda key: {"session_id": "sess-1", "revision": 0})
         self._store_patch = patch.object(plugin, "_store", self.store)
         self._store_patch.start()
 
@@ -109,14 +112,20 @@ class MaybeLearnJargonTests(unittest.IsolatedAsyncioTestCase):
     def _wire(self, verdicts):
         attention = _FakeAttention(verdicts)
         host = _FakeHost()
-        return attention, host, (
-            patch.object(plugin, "_attention", attention),
-            patch.object(plugin, "_host", host),
+        return (
+            attention,
+            host,
+            (
+                patch.object(plugin, "_attention", attention),
+                patch.object(plugin, "_host", host),
+            ),
         )
 
     async def test_buffer_triggers_learn_and_writes_memory(self):
         verdicts = [
-            SimpleNamespace(kind="jargon", data={"terms": [{"term": "结芬", "meaning": "结婚口误梗"}]})
+            SimpleNamespace(
+                kind="jargon", data={"terms": [{"term": "结芬", "meaning": "结婚口误梗"}]}
+            )
         ]
         attention, host, patches = self._wire(verdicts)
         with patches[0], patches[1]:

@@ -706,7 +706,7 @@ def build_ooc_judge_prompts(
         f"内部整理：{thought or '无'}\n"
         f"待表达摘要：{pending_summary or '无'}\n\n"
         f"【当前情绪状态】{emotion_line or '平稳'}\n\n"
-        '输出必须且只能是下面的 JSON 对象：\n'
+        "输出必须且只能是下面的 JSON 对象：\n"
         '{"ooc_score": 0.0, "character_match": 0.0, "naturalness": 0.0, '
         '"copied_inner_monologue": false, "issues": []}'
     )
@@ -724,7 +724,9 @@ def build_ooc_rewrite_prompt(
 ) -> str:
     """OOC 重写（解析方：core.agent.ooc_judge.OocJudge.rewrite）。"""
     issue_lines = "\n".join(f"- {issue}" for issue in issues) or "- 无"
-    context_section = f"【近期对话（保持回应连贯，别答非所问）】\n{context_text}\n\n" if context_text else ""
+    context_section = (
+        f"【近期对话（保持回应连贯，别答非所问）】\n{context_text}\n\n" if context_text else ""
+    )
     # 群聊合并批硬约束：多位发言者的回应一个都不许丢
     multi_target_rule = (
         "- 本回复同时回应多位发言者（" + "、".join(reply_targets) + "）："

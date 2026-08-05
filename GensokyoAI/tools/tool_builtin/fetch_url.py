@@ -43,9 +43,10 @@ async def fetch_url(url: str) -> dict:
     except UnsafeUrlError as error:
         return {"ok": False, "error": f"这个地址不允许访问（{error.reason}）"}
     try:
-        async with aiohttp.ClientSession(
-            timeout=_FETCH_TIMEOUT, headers=_USER_AGENT
-        ) as session, session.get(url, allow_redirects=True) as response:
+        async with (
+            aiohttp.ClientSession(timeout=_FETCH_TIMEOUT, headers=_USER_AGENT) as session,
+            session.get(url, allow_redirects=True) as response,
+        ):
             status = response.status
             content_type = response.headers.get("Content-Type", "")
             raw = await response.content.read(_MAX_BYTES + 1)

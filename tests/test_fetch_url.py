@@ -67,7 +67,8 @@ class FetchUrlTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_html_stripped(self):
         response = _FakeResponse(
-            200, "text/html; charset=utf-8",
+            200,
+            "text/html; charset=utf-8",
             "<html><head><style>x{}</style></head><body><p>幽幽子</p><script>bad()</script><b>西行寺</b>&amp;妖梦</body></html>".encode(),
         )
         with _patch_session(response):
@@ -135,9 +136,7 @@ class KnowledgeSiteInstructionTests(unittest.TestCase):
         self.assertIn("fetch_url", result.enabled_tool_names)
 
     def test_not_rendered_without_fetch_url(self):
-        result = self._build(
-            [KnowledgeSiteConfig(site="thbwiki.cc", desc="x")], ["time"]
-        )
+        result = self._build([KnowledgeSiteConfig(site="thbwiki.cc", desc="x")], ["time"])
         self.assertNotIn("【知识站点】", result.instructions)
 
     def test_not_rendered_without_sites(self):
@@ -152,9 +151,7 @@ class KnowledgeSiteInstructionTests(unittest.TestCase):
         config = ConfigLoader()._dict_to_config(
             {
                 "tool": {
-                    "web_search": {
-                        "knowledge_sites": [{"site": "thbwiki.cc", "desc": "东方维基"}]
-                    }
+                    "web_search": {"knowledge_sites": [{"site": "thbwiki.cc", "desc": "东方维基"}]}
                 }
             }
         )

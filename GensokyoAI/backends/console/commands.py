@@ -280,7 +280,9 @@ async def cmd_timer(ctx: CommandContext, cmd=None) -> CommandResult:
 _ALLOWED_HISTORY_ROLES = {"system", "user", "assistant", "tool"}
 
 
-async def _current_session_and_messages(ctx: CommandContext) -> tuple[Any, str, list[dict[str, Any]]]:
+async def _current_session_and_messages(
+    ctx: CommandContext,
+) -> tuple[Any, str, list[dict[str, Any]]]:
     manager = ctx.agent_inst.session_manager
     session = manager.get_current_session()
     if session is None:

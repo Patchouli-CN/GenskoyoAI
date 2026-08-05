@@ -1055,9 +1055,7 @@ class GensokyoWorld:
             return
         scene_id = self._stage.scene_of(USER_OCCUPANT_ID) or DEFAULT_SCENE_ID
         participants = set(self._stage.characters_in(scene_id))
-        tracked_task(
-            self._project_segment(scene_id, participants), self._projection_tasks
-        )
+        tracked_task(self._project_segment(scene_id, participants), self._projection_tasks)
 
     async def flush_projections(self) -> None:
         """等待所有未完成的记忆投影（关机与测试用）。"""

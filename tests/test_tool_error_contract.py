@@ -360,8 +360,10 @@ class ToolErrorModelMessageTests(unittest.TestCase):
             status="failed",
             fallback_reason="ddg: ddg: error sending request for url "
             "(https://www.startpage.com/) > operation timed out",
-            errors={"ddg": "ddg: error sending request for url "
-            "(https://www.startpage.com/) > operation timed out"},
+            errors={
+                "ddg": "ddg: error sending request for url "
+                "(https://www.startpage.com/) > operation timed out"
+            },
         )
         error = _result_to_tool_error(result)
         self.assertEqual(error.model_message, "搜索服务暂时不可用，稍后再试。")

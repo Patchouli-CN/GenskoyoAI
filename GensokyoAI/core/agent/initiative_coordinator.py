@@ -254,11 +254,13 @@ class InitiativeCoordinator:
 
         # OOC 投递前自查（Replyer）：主动消息发出去前检测照抄内心独白/模板化。
         # context 带 pending_summary/thought，预检可免 LLM 抓住照抄。失败放行。
-        if agent._replyer is not None:
+        # 无人设卡可对照时不判定（与 SPEAK 路径同一跳过规则）。
+        character = agent.config.character
+        if agent._replyer is not None and character is not None:
             try:
                 message = await agent._replyer.ensure_in_character(
                     message,
-                    character=agent.config.character,
+                    character=character,
                     context=OocContext(
                         context_text=recent_context,
                         pending_summary=pending_summary,

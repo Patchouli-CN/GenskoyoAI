@@ -133,7 +133,9 @@ class SaveCoordinator:
         operation = result.result.get("operation") if isinstance(result.result, dict) else None
         if operation not in {"save_messages", "save_session"}:
             return
-        result_session = result.result.get("session_id") if isinstance(result.result, dict) else None
+        result_session = (
+            result.result.get("session_id") if isinstance(result.result, dict) else None
+        )
         if self._save_session_id is None or result_session != self._save_session_id:
             logger.trace(f"忽略非当前提交的保存结果（{result_session}）{self._log_suffix}")
             return

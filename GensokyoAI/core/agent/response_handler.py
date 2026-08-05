@@ -208,9 +208,7 @@ class ResponseHandler:
                     continuation_contexts, ephemeral_input=continuation_input
                 )
             else:
-                current_messages = self._message_builder.build_continuation(
-                    continuation_contexts
-                )
+                current_messages = self._message_builder.build_continuation(continuation_contexts)
 
     # ==================== 私有容错方法 ====================
 

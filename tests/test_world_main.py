@@ -499,7 +499,6 @@ class WorldMainTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIn(expected, bus_events)
 
-
     async def test_aborted_actor_stream_still_lands_in_transcript(self):
         """L2 回归：演员流中途异常，已流出正文也必须落剧本——用户看到的
         不能是舞台没记下的（后续导演决策/记忆投影/resume 全建在这份历史上）。"""
@@ -516,9 +515,7 @@ class WorldMainTests(unittest.IsolatedAsyncioTestCase):
 
             world._actors["marisa"] = _AbortingAgent()
             with self.assertRaises(ConnectionError):
-                async for _event in world._run_actor_turn_stream(
-                    "marisa", "开场", turn_index=1
-                ):
+                async for _event in world._run_actor_turn_stream("marisa", "开场", turn_index=1):
                     pass
 
             history = world._transcript.history(DEFAULT_SCENE_ID)

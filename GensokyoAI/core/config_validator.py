@@ -1417,7 +1417,9 @@ class ConfigValidator:
             minimum=0,
             maximum=1,
         )
-        self._validate_field_type("ooc_judge.max_retries", data.get("max_retries"), int, diagnostics)
+        self._validate_field_type(
+            "ooc_judge.max_retries", data.get("max_retries"), int, diagnostics
+        )
         self._validate_field_type("ooc_judge.enabled", data.get("enabled"), bool, diagnostics)
 
     @staticmethod

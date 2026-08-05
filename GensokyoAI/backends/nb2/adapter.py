@@ -104,9 +104,11 @@ class Nonebot2Adapter(RuntimeAdapter):
         # bind 失败/启动异常落在 task future 里，默认 "Task exception was never retrieved"；
         # 显式收集并告警，避免「适配器已启动」假成功
         self._server_task.add_done_callback(
-            lambda task: logger.error(f"[nb2] uvicorn 服务异常退出: {task.exception()}")
-            if task.exception()
-            else None
+            lambda task: (
+                logger.error(f"[nb2] uvicorn 服务异常退出: {task.exception()}")
+                if task.exception()
+                else None
+            )
         )
         logger.info(
             f"[nb2] OneBot 反向 WS 监听中: ws://{driver.config.host}:{driver.config.port}/onebot/v11/ws"

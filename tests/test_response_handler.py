@@ -129,16 +129,46 @@ class ToolFollowupRoundTests(unittest.TestCase):
         executor = _FakeToolExecutor()
         handler, _ = self._make_handler(
             [
-                [StreamChunk(is_tool_call=True, tool_info={
-                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
-                        ToolCall(id="c1", provider="openai",
-                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
-                    ])})],
-                [StreamChunk(is_tool_call=True, tool_info={
-                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
-                        ToolCall(id="c2", provider="openai",
-                                 function=ToolCallFunction(name="fetch_url", arguments={}, provider="openai"))
-                    ])})],
+                [
+                    StreamChunk(
+                        is_tool_call=True,
+                        tool_info={
+                            "message": UnifiedMessage(
+                                role="assistant",
+                                content="",
+                                tool_calls=[
+                                    ToolCall(
+                                        id="c1",
+                                        provider="openai",
+                                        function=ToolCallFunction(
+                                            name="web_search", arguments={}, provider="openai"
+                                        ),
+                                    )
+                                ],
+                            )
+                        },
+                    )
+                ],
+                [
+                    StreamChunk(
+                        is_tool_call=True,
+                        tool_info={
+                            "message": UnifiedMessage(
+                                role="assistant",
+                                content="",
+                                tool_calls=[
+                                    ToolCall(
+                                        id="c2",
+                                        provider="openai",
+                                        function=ToolCallFunction(
+                                            name="fetch_url", arguments={}, provider="openai"
+                                        ),
+                                    )
+                                ],
+                            )
+                        },
+                    )
+                ],
                 [StreamChunk(content="查到了，灵梦是红白巫女。")],
             ],
             executor,
@@ -155,23 +185,68 @@ class ToolFollowupRoundTests(unittest.TestCase):
     def test_tool_calls_beyond_budget_are_dropped_with_text_kept(self):
         handler, _ = self._make_handler(
             [
-                [StreamChunk(is_tool_call=True, tool_info={
-                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
-                        ToolCall(id="c1", provider="openai",
-                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
-                    ])})],
-                [StreamChunk(is_tool_call=True, tool_info={
-                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
-                        ToolCall(id="c2", provider="openai",
-                                 function=ToolCallFunction(name="fetch_url", arguments={}, provider="openai"))
-                    ])})],
+                [
+                    StreamChunk(
+                        is_tool_call=True,
+                        tool_info={
+                            "message": UnifiedMessage(
+                                role="assistant",
+                                content="",
+                                tool_calls=[
+                                    ToolCall(
+                                        id="c1",
+                                        provider="openai",
+                                        function=ToolCallFunction(
+                                            name="web_search", arguments={}, provider="openai"
+                                        ),
+                                    )
+                                ],
+                            )
+                        },
+                    )
+                ],
+                [
+                    StreamChunk(
+                        is_tool_call=True,
+                        tool_info={
+                            "message": UnifiedMessage(
+                                role="assistant",
+                                content="",
+                                tool_calls=[
+                                    ToolCall(
+                                        id="c2",
+                                        provider="openai",
+                                        function=ToolCallFunction(
+                                            name="fetch_url", arguments={}, provider="openai"
+                                        ),
+                                    )
+                                ],
+                            )
+                        },
+                    )
+                ],
                 # 第三轮仍想调工具，但带着正文：正文投递、tool_calls 丢弃
-                [StreamChunk(content="就查到这吧。"),
-                 StreamChunk(is_tool_call=True, tool_info={
-                    "message": UnifiedMessage(role="assistant", content="", tool_calls=[
-                        ToolCall(id="c3", provider="openai",
-                                 function=ToolCallFunction(name="web_search", arguments={}, provider="openai"))
-                    ])})],
+                [
+                    StreamChunk(content="就查到这吧。"),
+                    StreamChunk(
+                        is_tool_call=True,
+                        tool_info={
+                            "message": UnifiedMessage(
+                                role="assistant",
+                                content="",
+                                tool_calls=[
+                                    ToolCall(
+                                        id="c3",
+                                        provider="openai",
+                                        function=ToolCallFunction(
+                                            name="web_search", arguments={}, provider="openai"
+                                        ),
+                                    )
+                                ],
+                            )
+                        },
+                    ),
+                ],
             ],
             _FakeToolExecutor(),
         )

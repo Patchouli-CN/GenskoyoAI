@@ -14,14 +14,15 @@ import asyncio
 import contextlib
 import json
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from nonebot import get_bots, get_driver, on_message, on_notice
+from nonebot.adapters import Bot as BaseBot
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
@@ -120,7 +121,9 @@ if _config.owner_qq and _config.owner_prompt_path:
     try:
         _owner_prompt = _owner_prompt_path.read_text(encoding="utf-8").strip()
     except OSError as error:
-        logger.warning(f"[nb2] 主人提示词文件读取失败，认主功能停用: {_owner_prompt_path} ({error})")
+        logger.warning(
+            f"[nb2] 主人提示词文件读取失败，认主功能停用: {_owner_prompt_path} ({error})"
+        )
         _owner_prompt = None
     if _owner_prompt:
         logger.info(
@@ -308,13 +311,17 @@ async def _judge_mute_break(member_label: str, text: str) -> str:
     return "ignore"
 
 
-def _pick_bot(bots: dict[str, Bot]) -> Bot:
+def _pick_bot(bots: Mapping[str, BaseBot]) -> Bot:
     """选一个协议端投递：多 bot 并存时按守护记录的 bot QQ 匹配
-    （`next(iter(bots.values()))` 任选会静默用错账号——02#6）。"""
+    （`next(iter(bots.values()))` 任选会静默用错账号——02#6）。
+    get_bots() 返回的是基类字典；nb2 只接 OneBot v11 协议端，返回处收窄。"""
     known_qq = _watchdog._bot_qq or _config.bot_qq
+    chosen: BaseBot
     if known_qq is not None and str(known_qq) in bots:
-        return bots[str(known_qq)]
-    return next(iter(bots.values()))
+        chosen = bots[str(known_qq)]
+    else:
+        chosen = next(iter(bots.values()))
+    return cast(Bot, chosen)
 
 
 async def _deliver_initiative(agent_id: str, payload: dict[str, Any]) -> None:
@@ -716,9 +723,7 @@ async def _maybe_learn_jargon(agent_id: str, key: str, batch_text: str) -> None:
                 continue
             if added:
                 known.add(term)
-                logger.info(
-                    f"[nb2] {agent_id} 学会群黑话：「{term}」= {item['meaning'][:40]}"
-                )
+                logger.info(f"[nb2] {agent_id} 学会群黑话：「{term}」= {item['meaning'][:40]}")
 
 
 async def _generate_for_tenant(
