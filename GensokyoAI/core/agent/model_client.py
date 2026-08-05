@@ -61,7 +61,7 @@ class ModelClient:
         # 最近模型调用耗时滚动窗口（(context, duration_ms)，供 /status 等观测入口）
         self._latency_samples: deque[tuple[str, float]] = deque(maxlen=50)
         # 单次调用成本滚动窗口（(wall_ts, 元)，按配置单价 × usage 估算；
-        # 时间戳供 quota_health.compute_burn_rate 折算日耗；未配单价则始终为空）
+        # 时间戳供 health.compute_burn_rate 折算日耗；未配单价则始终为空）
         self._cost_samples: deque[tuple[float, float]] = deque(maxlen=100)
         logger.debug(f"ModelClient 初始化完成，Provider: {config.provider}, 模型: {config.name}")
 
@@ -105,7 +105,7 @@ class ModelClient:
     def cost_stats(self) -> dict[str, Any]:
         """本客户端消耗速率统计（元/天，近 24h 滚动窗口）。
 
-        与全局额度健康同一算法（quota_health.compute_burn_rate）；
+        与全局日耗统计同一算法（health.compute_burn_rate，纯观测）；
         无样本时 {"count": 0}。
         """
         return compute_burn_rate(getattr(self, "_cost_samples", ()))
@@ -316,8 +316,8 @@ class ModelClient:
         if not hasattr(self, "_latency_samples"):
             self._latency_samples = deque(maxlen=50)
         self._latency_samples.append((timing.context, timing.duration_ms))
-        # 单次成本采样（额度健康动态阈值的数据源；未配单价/无 usage 则无样本。
-        # 带 wall 时间戳，供 quota_health.compute_burn_rate 折算单位时间消耗）
+        # 单次成本采样（纯观测消耗统计的数据源，不参与健康判定；
+        # 未配单价/无 usage 则无样本。带 wall 时间戳，供 health.compute_burn_rate 折算日耗）
         if cost := self._estimate_call_cost(timing.usage):
             if not hasattr(self, "_cost_samples"):
                 self._cost_samples = deque(maxlen=100)
