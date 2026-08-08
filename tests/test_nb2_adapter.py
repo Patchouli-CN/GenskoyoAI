@@ -317,6 +317,37 @@ class StripRpStyleTests(unittest.TestCase):
     def test_plain_text_unchanged(self):
         self.assertEqual(strip_rp_style("Master Spark 天下第一！"), "Master Spark 天下第一！")
 
+    def test_full_line_paren_action_removed(self):
+        text = "幽幽子飘过\n（摇了摇扇子）\n来啦～"
+        self.assertEqual(strip_rp_style(text), "幽幽子飘过\n来啦～")
+
+    def test_full_line_ascii_paren_action_removed(self):
+        self.assertEqual(strip_rp_style("等等\n(waves fan)\n来了"), "等等\n来了")
+
+    def test_inline_paren_kept(self):
+        # 行内括注是 QQ 口语，不是舞台指示
+        self.assertEqual(strip_rp_style("说得对（笑）"), "说得对（笑）")
+
+    def test_long_paren_line_kept(self):
+        # 内容超长的整行括号不剥（防误伤正常长句）
+        line = "（" + "很长的内容" * 10 + "）"
+        self.assertEqual(strip_rp_style(line), line)
+
+    def test_fake_speaker_tag_removed(self):
+        self.assertEqual(strip_rp_style("【幽幽子】今天也很闲呢"), "今天也很闲呢")
+
+    def test_fake_speaker_tag_multiline(self):
+        text = "【幽幽子】第一句\n第二句\n【妖梦】第三句"
+        self.assertEqual(strip_rp_style(text), "第一句\n第二句\n第三句")
+
+    def test_divider_line_removed(self):
+        text = "旧回答\n---\n新回答"
+        self.assertEqual(strip_rp_style(text), "旧回答\n新回答")
+
+    def test_divider_variants_removed(self):
+        for divider in ("———", "===", "＝＝＝", "___"):
+            self.assertEqual(strip_rp_style(f"上\n{divider}\n下"), "上\n下")
+
 
 class SanitizeDisplayNameTests(unittest.TestCase):
     """昵称/群名片净化：防提示词注入、限长。"""

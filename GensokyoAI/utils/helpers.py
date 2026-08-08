@@ -64,6 +64,17 @@ _RP_ACTION_PATTERN = re.compile(r"\*[^*\n]*\*")
 # 行首说话人标记（适配器注入的【昵称】前缀约定，见 nb2 plugin）
 _SPEAKER_TAG_PATTERN = re.compile(r"^【([^【】\r\n]+)】", re.MULTILINE)
 
+# 整行括号舞台指示（（环顾四周）/(waves fan)）：仅整行包裹且内容短才剥，
+# 行内括注（如「说得对（笑）」）是 QQ 口语，不动
+_STAGE_DIRECTION_PATTERN = re.compile(r"^\s*[（(][^（）()\n]{1,30}[）)]\s*$", re.MULTILINE)
+
+# 行首伪说话人标签：【昵称】是适配器给入站消息的注入格式，模型在出站回复里
+# 逐字带出（模仿上下文的格式泄漏）一律剥除——我们的出站格式从不以【开头
+_FAKE_SPEAKER_PATTERN = re.compile(r"^【[^【】\r\n]{1,20}】", re.MULTILINE)
+
+# 独立分隔线（--- / —— / === 等）：换名复读事故的「旧文+分隔线+新答」形态
+_DIVIDER_PATTERN = re.compile(r"^\s*(?:-{3,}|—{2,}|={3,}|＝{2,}|_{3,})\s*$", re.MULTILINE)
+
 
 def extract_speaker_tags(text: str) -> list[str]:
     """提取行首【昵称】说话人标记（去重保序）；无标记返回空列表。
@@ -79,12 +90,18 @@ def extract_speaker_tags(text: str) -> list[str]:
 
 
 def strip_rp_style(text: str) -> str:
-    """去除角色扮演风格标记：星号动作描写（``*动作*``）与「」台词引号。
+    """去除角色扮演风格标记与格式泄漏（发送前确定性清洗，不依赖模型配合）。
 
-    QQ 群聊要求纯对话文本；角色卡与框架提示词都偏向 RP 风格，模型难免漏出，
-    因此在发送前确定性地清洗，不依赖模型配合。清洗后留下的空行会被移除。
+    - 星号动作描写（``*动作*``）与「」台词引号；
+    - 整行括号舞台指示（``（环顾四周）`` / ``(waves)``；行内括注不动）；
+    - 行首伪说话人标签（``【名字】`` 是适配器给入站消息的注入格式，出站带出即泄漏）；
+    - 独立分隔线（``---`` 等，换名复读事故的「旧文+分隔线+新答」形态）。
+    清洗后留下的空行会被移除。
     """
     cleaned = _RP_ACTION_PATTERN.sub("", text)
+    cleaned = _STAGE_DIRECTION_PATTERN.sub("", cleaned)
+    cleaned = _FAKE_SPEAKER_PATTERN.sub("", cleaned)
+    cleaned = _DIVIDER_PATTERN.sub("", cleaned)
     cleaned = cleaned.replace("「", "").replace("」", "")
     lines = [line.strip() for line in cleaned.splitlines()]
     return "\n".join(line for line in lines if line)
