@@ -4,7 +4,7 @@
 
 ## 版本与兼容性
 
-- 当前 package 版本：`2026.7.30.0`
+- 当前 package 版本：`2026.8.8.0`
 - 当前协议版本：`2.2.0`
 - 当前协议主版本：`2`
 - 兼容性策略：同一主版本内可以新增字段和方法；删除字段、修改语义或改变错误结构需要进入 breaking changes。
@@ -44,7 +44,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
 ```json
 {
   "name": "GensokyoAI Runtime",
-  "package_version": "2026.7.14.0",
+  "package_version": "2026.8.8.0",
   "protocol": "gensokyo-runtime-rpc",
   "protocol_version": "2.2.0",
   "protocol_major_version": 2,
@@ -53,7 +53,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
-    {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "2.0.0"}
+    {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "3.0.0"}
   ],
   "schema_versions": {
     "config": 1,
@@ -67,7 +67,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
     {
       "method": "init",
       "replacement": "agent.init",
-      "remove_after": "2.0.0"
+      "remove_after": "3.0.0"
     }
   ],
   "breaking_changes": [
@@ -111,7 +111,7 @@ HTTP/WS 默认关闭 `runtime.shutdown`、`dependency.install`、`character_pack
     {
       "scope": "runtime.rpc.legacy_methods",
       "status": "deprecated",
-      "message": "Legacy non-namespaced RPC methods remain available for compatibility; new clients should use namespaced methods from runtime.info.methods.",
+      "message": "Legacy non-namespaced RPC methods remain available through protocol 2.x and will not be removed before protocol 3.0.0; new clients should use namespaced methods from runtime.info.methods.",
       "replacement": "Use runtime.info.method_specs to map legacy methods to namespaced replacements."
     }
   ],

@@ -38,9 +38,9 @@ Core boundaries:
 
 ## Version Management & Changelog
 
-GensokyoAI release versions use calendar versioning. The latest release is `v2026.7.30.0`; the Python package version omits the `v` prefix: `2026.7.30.0`. The Runtime protocol uses independent semantic versioning, currently `2.1.0` with major version `2`; memory schema is `2`, world session schema is `1`, while all other public schemas remain `1`.
+GensokyoAI release versions use calendar versioning. The latest release is `v2026.8.8.0`; the Python package version omits the `v` prefix: `2026.8.8.0`. The Runtime protocol uses independent semantic versioning, currently `2.2.0` with major version `2`; session and memory schemas are `2`, world session schema is `1`, while all other public schemas remain `1`.
 
-The [Changelog Index](./docs/en/changelog.md) distinguishes official releases from development snapshots; the latest official release notes are in [`docs/en/changelog/v2026.7.30.0.md`](./docs/en/changelog/v2026.7.30.0.md).
+The [Changelog Index](./docs/en/changelog.md) distinguishes public releases from development snapshots; the current release notes are in [`docs/en/changelog/v2026.8.8.0.md`](./docs/en/changelog/v2026.8.8.0.md).
 
 ## Runtime API
 

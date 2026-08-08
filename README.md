@@ -37,9 +37,9 @@ GensokyoAI 是一个 Python 纯后端工具包。它不绑定任何具体 UI、�
 
 ## 版本管理与更新日志
 
-GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.7.30.0`；Python 包版本不带 `v`，为 `2026.7.30.0`。Runtime 协议版本采用独立语义版本，当前为 `2.1.0`、主版本为 `2`；memory schema 当前为 `2`，world session schema 为 `1`，其他公开 schema 为 `1`。
+GensokyoAI 的 release 版本号采用日期版本号，当前 release 为 `v2026.8.8.0`；Python 包版本不带 `v`，为 `2026.8.8.0`。Runtime 协议版本采用独立语义版本，当前为 `2.2.0`、主版本为 `2`；session 与 memory schema 当前为 `2`，world session schema 为 `1`，其他公开 schema 为 `1`。
 
-[Changelog 索引](./docs/changelog.md) 说明正式发布与开发快照；当前最新正式发布记录见 [`docs/changelog/v2026.7.30.0.md`](./docs/changelog/v2026.7.30.0.md)。
+[Changelog 索引](./docs/changelog.md) 说明公开发布与开发快照；当前发布记录见 [`docs/changelog/v2026.8.8.0.md`](./docs/changelog/v2026.8.8.0.md)。
 
 ## Runtime API
 

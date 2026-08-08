@@ -353,10 +353,11 @@ Before each release, check in order:
 
 ## 11. Current Status
 
-`v2026.5.13.0` was the only previous official release. Current cumulative official release status:
+Current Alpha prerelease preparation status:
 
-- Current package version is in [`pyproject.toml`](../pyproject.toml) and is `2026.7.14.0`.
-- Current Runtime protocol version is in [`rpc.py`](../GensokyoAI/runtime/rpc.py) and is `2.0.0`, with major `2`.
-- Current schema versions are in [`schema_versions.py`](../GensokyoAI/core/schema_versions.py): memory is `2`; all other public schemas are `1`.
-- Release changelog is [`docs/en/changelog/v2026.7.14.0.md`](changelog/v2026.7.14.0.md).
-- The corresponding Git tag is `v2026.7.14.0`; release preparation does not create the tag.
+- Current package version is in [`pyproject.toml`](../pyproject.toml) and is `2026.8.8.0`.
+- Current Runtime protocol version is in [`rpc.py`](../GensokyoAI/runtime/rpc.py) and is `2.2.0`, with major `2`.
+- Current schema versions are in [`schema_versions.py`](../GensokyoAI/core/schema_versions.py): session and memory are `2`, world session is `1`, and all other public schemas are `1`.
+- Release changelog is [`docs/en/changelog/v2026.8.8.0.md`](changelog/v2026.8.8.0.md).
+- The corresponding Git tag is `v2026.8.8.0`; release preparation does not create the tag.
+- The channel is a GitHub Alpha prerelease with wheel and sdist only; this release does not publish to PyPI or bundle the desktop client.

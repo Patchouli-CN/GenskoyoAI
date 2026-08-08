@@ -10,9 +10,9 @@ For version format, where to use `v` and where not, and the difference between R
 
 Brief rules:
 
-- Public versions and changelog use `vYYYY.M.D.N`; the current official release is `v2026.8.4.0`, and the first official release was `v2026.5.13.0`.
-- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.8.4.0`.
-- Runtime protocol version uses independent semantic versioning without `v`; the current development branch uses `2.0.0` with major `2`; client compatibility prioritizes `protocol_major_version`.
+- Public versions and changelog use `vYYYY.M.D.N`; the current release is `v2026.8.8.0`, an Alpha prerelease.
+- Package version in [`pyproject.toml`](../pyproject.toml) has no `v`; the current version is `2026.8.8.0`.
+- Runtime protocol version uses independent semantic versioning without `v`; the current version is `2.2.0` with major `2`; client compatibility prioritizes `protocol_major_version`.
 - Schema versions continue to use integers, e.g. `1`, `2`, `3`.
 
 ## Usage
@@ -145,13 +145,14 @@ Use one or two sentences to explain the most important changes in this version, 
 
 ## Current Project Version Records
 
-Official release records start at `v2026.5.13.0`. The 6.x and `v2026.7.4.0` files are unpublished development snapshots or candidate notes and must not be treated as official versions:
+Public GitHub releases start at `v2026.5.13.0`; the channel remains Alpha prerelease. Version files without a matching Git tag and GitHub Release are development snapshots, not published versions:
 
-- [`v2026.8.4.0.md`](changelog/v2026.8.4.0.md): official release — group jargon miner, fetch_url + curated knowledge sites, OOC pipeline hardening, tool follow-up rounds.
-- `v2026.8.3.0` (Chinese only: [`../changelog/v2026.8.3.0.md`](../changelog/v2026.8.3.0.md)): official release — nb2 adapter productionization (proxy reminders, watchdog, attention pipeline), emotion system, memory distillation, OOC judging.
-- [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md): official release covering the completed multi-character GensokyoWorld and Runtime robustness.
-- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md): cumulative official release since the first official baseline `v2026.5.13.0`.
-- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md): the first official release and first public Alpha baseline.
+- [`v2026.8.8.0.md`](changelog/v2026.8.8.0.md): current cumulative Alpha prerelease covering `v2026.7.14.0..v2026.8.8.0`.
+- [`v2026.8.4.0.md`](changelog/v2026.8.4.0.md): unpublished development snapshot covering the jargon miner, fetch_url, OOC hardening, and tool follow-up rounds.
+- `v2026.8.3.0` (Chinese only: [`../changelog/v2026.8.3.0.md`](../changelog/v2026.8.3.0.md)): unpublished development snapshot covering the nb2 adapter, emotion, memory distillation, and OOC judging.
+- [`v2026.7.30.0.md`](changelog/v2026.7.30.0.md): unpublished development snapshot covering GensokyoWorld and Runtime robustness.
+- [`v2026.7.14.0.md`](changelog/v2026.7.14.0.md): previous public Alpha prerelease.
+- [`v2026.5.13.0.md`](changelog/v2026.5.13.0.md): first public Alpha prerelease.
 - [`v2026.6.21.0.md`](../changelog/v2026.6.21.0.md): unpublished development snapshot covering HTTP/WebSocket migration, DDG search, and initiative timers.
 - [`v2026.6.22.0.md`](../changelog/v2026.6.22.0.md): unpublished development snapshot covering security and character openings.
 - [`v2026.6.23.0.md`](../changelog/v2026.6.23.0.md): unpublished development snapshot covering background timers and character data.

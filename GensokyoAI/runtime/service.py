@@ -94,7 +94,7 @@ RUNTIME_COMPATIBILITY_NOTES: tuple[dict[str, str], ...] = (
     {
         "scope": "runtime.rpc.legacy_methods",
         "status": "deprecated",
-        "message": "Legacy non-namespaced RPC methods remain available for compatibility; new clients should use namespaced methods from runtime.info.methods.",
+        "message": "Legacy non-namespaced RPC methods remain available through protocol 2.x and will not be removed before protocol 3.0.0; new clients should use namespaced methods from runtime.info.methods.",
         "replacement": "Use runtime.info.method_specs to map legacy methods to namespaced replacements.",
     },
 )

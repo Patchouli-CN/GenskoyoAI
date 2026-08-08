@@ -353,10 +353,11 @@ docs/
 
 ## 十一、当前状态
 
-当前累计正式发布状态：
+当前 Alpha prerelease 准备状态：
 
-- package version 当前见 [`pyproject.toml`](../pyproject.toml)，应为 `2026.8.4.0`。
+- package version 当前见 [`pyproject.toml`](../pyproject.toml)，应为 `2026.8.8.0`。
 - Runtime protocol version 当前见 [`rpc.py`](../GensokyoAI/runtime/rpc.py)，应为 `2.2.0`，major 为 `2`。
-- schema versions 当前见 [`schema_versions.py`](../GensokyoAI/core/schema_versions.py)：memory 为 `2`，session 为 `2`，其余公开 schema 为 `1`。
-- release changelog 为 [`docs/changelog/v2026.8.4.0.md`](changelog/v2026.8.4.0.md)。
-- 对应 Git tag 为 `v2026.8.4.0`；发布准备阶段不创建 tag。
+- schema versions 当前见 [`schema_versions.py`](../GensokyoAI/core/schema_versions.py)：session 与 memory 为 `2`，world session 为 `1`，其余公开 schema 为 `1`。
+- release changelog 为 [`docs/changelog/v2026.8.8.0.md`](changelog/v2026.8.8.0.md)。
+- 对应 Git tag 为 `v2026.8.8.0`；发布准备阶段不创建 tag。
+- 发布渠道为 GitHub Alpha prerelease，仅附 wheel 与 sdist；本次不上传 PyPI、不捆绑桌面客户端。

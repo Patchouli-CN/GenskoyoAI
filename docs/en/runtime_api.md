@@ -4,7 +4,7 @@ This document describes the stable JSON RPC contract exposed by the GensokyoAI R
 
 ## Versioning and Compatibility
 
-- Current package version: `2026.7.30.0`
+- Current package version: `2026.8.8.0`
 - Current protocol version: `2.2.0`
 - Current protocol major version: `2`
 - Compatibility policy: within the same major version, new fields and methods may be added; removing fields, changing semantics, or changing error structures requires a breaking change.
@@ -36,7 +36,7 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
 ```json
 {
   "name": "GensokyoAI Runtime",
-  "package_version": "2026.7.30.0",
+  "package_version": "2026.8.8.0",
   "protocol": "gensokyo-runtime-rpc",
   "protocol_version": "2.2.0",
   "protocol_major_version": 2,
@@ -45,7 +45,7 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
   "legacy_methods": ["init", "send_message", "send_message_stream", "list_characters", "create_session", "list_sessions", "current_session", "resume_session", "delete_session", "export_session", "rename_session", "rollback_session", "shutdown", "dependency_status", "install_dependencies", "external_tool_status", "initiative_timer.hesitation", "initiative_timer.hesitation.set"],
   "method_specs": [
     {"method": "runtime.info", "handler": "info", "legacy": false, "namespace": "runtime", "deprecated": false, "replacement": null, "remove_after": null},
-    {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "2.0.0"}
+    {"method": "init", "handler": "init", "legacy": true, "namespace": "legacy", "deprecated": true, "replacement": "agent.init", "remove_after": "3.0.0"}
   ],
   "schema_versions": {
     "config": 1,
@@ -59,7 +59,7 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
     {
       "method": "init",
       "replacement": "agent.init",
-      "remove_after": "2.0.0"
+      "remove_after": "3.0.0"
     }
   ],
   "breaking_changes": [
@@ -103,7 +103,7 @@ The file backend writes to `runtime_data/users/<user-hash>/agents/<agent-hash>/`
     {
       "scope": "runtime.rpc.legacy_methods",
       "status": "deprecated",
-      "message": "Legacy non-namespaced RPC methods remain available for compatibility; new clients should use namespaced methods from runtime.info.methods.",
+      "message": "Legacy non-namespaced RPC methods remain available through protocol 2.x and will not be removed before protocol 3.0.0; new clients should use namespaced methods from runtime.info.methods.",
       "replacement": "Use runtime.info.method_specs to map legacy methods to namespaced replacements."
     }
   ],

@@ -37,6 +37,7 @@ from GensokyoAI.runtime.dependencies import (
     packages_for_providers,
 )
 from GensokyoAI.runtime.rpc import (
+    LEGACY_RPC_REMOVE_AFTER,
     RUNTIME_BREAKING_CHANGES,
     RUNTIME_PROTOCOL_MAJOR_VERSION,
     RUNTIME_PROTOCOL_VERSION,
@@ -495,8 +496,8 @@ class PackagingConfigurationTests(unittest.TestCase):
         project = pyproject["project"]
         requirements = set(self._requirements_entries())
 
-        self.assertEqual(project["version"], "2026.8.4.0")
-        self.assertEqual(package_version(), "2026.8.4.0")
+        self.assertEqual(project["version"], "2026.8.8.0")
+        self.assertEqual(package_version(), "2026.8.8.0")
         self.assertEqual(set(project["dependencies"]), requirements)
 
     def test_pyproject_declares_default_all_and_dev_dependency_groups(self):
@@ -622,7 +623,7 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
         self.assertTrue(RUNTIME_BREAKING_CHANGES)
         self.assertEqual(info["protocol_version"], "2.2.0")
         self.assertEqual(info["protocol_major_version"], 2)
-        self.assertEqual(info["package_version"], "2026.8.4.0")
+        self.assertEqual(info["package_version"], "2026.8.8.0")
         self.assertEqual(info["schema_versions"]["memory"], 2)
         self.assertIn("agent.streaming", info["capabilities"])
         self.assertIn("agent.reasoning.public", info["capabilities"])
@@ -646,7 +647,7 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
         legacy_init = next(item for item in info["deprecated_methods"] if item["method"] == "init")
         self.assertTrue(legacy_init["deprecated"])
         self.assertEqual(legacy_init["replacement"], "agent.init")
-        self.assertEqual(legacy_init["remove_after"], "2.0.0")
+        self.assertEqual(legacy_init["remove_after"], LEGACY_RPC_REMOVE_AFTER)
 
         runtime_info = next(
             item for item in info["method_specs"] if item["method"] == "runtime.info"
@@ -664,6 +665,27 @@ class RuntimeRpcDispatchTests(unittest.TestCase):
         for note in runtime_compatibility_notes():
             self.assertIn(note["scope"], text)
             self.assertIn(note["status"], text)
+
+    def test_current_release_documents_match_declared_package_version(self):
+        with open(Path("pyproject.toml"), "rb") as file:
+            version = tomllib.load(file)["project"]["version"]
+        expected_snippets = {
+            "README.md": f"当前 release 为 `v{version}`",
+            "README_en.md": f"latest release is `v{version}`",
+            "docs/runtime_api.md": f"当前 package 版本：`{version}`",
+            "docs/en/runtime_api.md": f"Current package version: `{version}`",
+            "docs/versioning.md": f"应为 `{version}`",
+            "docs/en/versioning.md": f"is `{version}`",
+            "docs/changelog.md": f"当前发布版本为 `v{version}`",
+            "docs/en/changelog.md": f"current release is `v{version}`",
+        }
+
+        for filename, snippet in expected_snippets.items():
+            with self.subTest(filename=filename):
+                self.assertIn(snippet, Path(filename).read_text(encoding="utf-8"))
+
+        self.assertTrue(Path(f"docs/changelog/v{version}.md").is_file())
+        self.assertTrue(Path(f"docs/en/changelog/v{version}.md").is_file())
 
     def test_resolve_rpc_handler_maps_namespaced_and_legacy_methods(self):
         service = RuntimeService()

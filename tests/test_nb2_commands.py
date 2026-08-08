@@ -227,7 +227,7 @@ class StatusCommandTests(unittest.TestCase):
                 "memory": {"topics": 42, "memories": 137},
                 "cost": {"count": 9, "burn_per_day": 1.63, "total_cost": 0.8},
                 "uptime_seconds": 90061.0,
-                "version": {"package": "2026.8.4.0", "protocol": "2.2.0"},
+                "version": {"package": "2026.8.8.0", "protocol": "2.2.0"},
             },
             quota={"available_balance": 36.5, "cash_balance": 30.0, "voucher_balance": 6.5},
             quota_fetched=True,
@@ -241,7 +241,7 @@ class StatusCommandTests(unittest.TestCase):
         )
         self.assertIn("复读防护：2 人冷却中 · 1 人观察中", text)
         self.assertIn("记忆：42 个话题 / 137 条珍贵记忆", text)
-        self.assertIn("版本：v2026.8.4.0（协议 2.2.0） · 已运行 1 天 1 小时", text)
+        self.assertIn("版本：v2026.8.8.0（协议 2.2.0） · 已运行 1 天 1 小时", text)
 
     def test_format_status_minimal_dict_skips_new_lines(self):
         text = _format_status(
