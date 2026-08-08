@@ -22,6 +22,7 @@ from msgspec import Struct, field
 from ...memory.decay import filter_active_topics
 from ...memory.semantic import SemanticMemoryManager
 from ...memory.types import Topic
+from ...utils.generation import GenerationGuard
 from ...utils.helpers import utc_now
 from ...utils.logger import logger
 from ...utils.tasks import tracked_task
@@ -167,6 +168,8 @@ class ThinkEngine:
         self._distill_pending_turns = 0
         # fire-and-forget 后台任务强引用集合（防 GC 回收，done 自清）
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        # 代际令牌：会话切换（update_semantic_memory）后旧代际的异步结果禁写回
+        self._generation_guard = GenerationGuard()
 
         # 长期思考状态
         self._running = False
@@ -177,6 +180,8 @@ class ThinkEngine:
         """会话切换后就地更新语义记忆引用（不中断长期思考循环）。"""
         self.semantic_memory = semantic_memory
         self._distill_pending_turns = 0  # 换会话重新计蒸馏轮次
+        # 翻代：在途的长期思考/蒸馏结果（属于旧会话语料）禁止写回新会话记忆
+        self._generation_guard.bump()
 
     def emotion_context_line(self) -> str:
         """当前情绪状态的一行描述（全平稳时为空串，不注入）。"""
@@ -234,6 +239,7 @@ class ThinkEngine:
 
     async def _long_term_think(self) -> None:
         """随机游走话题图谱，产生联想（长期思考）"""
+        generation = self._generation_guard.capture()  # 会话可能在本轮思考在途时切换
         store = self.semantic_memory.store
         topics = store.get_all_topics()
 
@@ -341,6 +347,8 @@ class ThinkEngine:
             )
 
             thought = response.message.content
+            if thought and not self._generation_guard.if_current(generation, "长期思考写回"):
+                return
             if thought:
                 if self.debug_silent_output:
                     logger.info(
@@ -394,10 +402,17 @@ class ThinkEngine:
         if self._distill_pending_turns < getattr(memory_config, "distill_turns", 10):
             return
         self._distill_pending_turns = 0
-        tracked_task(self.distill_memories(recent_messages), self._background_tasks)
+        # 捕获代际：LLM 调用在途期间会话切换则结果禁写回（旧会话语料不进新会话记忆）
+        generation = self._generation_guard.capture()
+        tracked_task(self.distill_memories(recent_messages, generation), self._background_tasks)
 
-    async def distill_memories(self, recent_messages: list[dict[str, Any]]) -> int:
-        """从近期工作记忆提炼「珍贵记忆」写入语义记忆；返回写入条数。"""
+    async def distill_memories(
+        self, recent_messages: list[dict[str, Any]], generation: int | None = None
+    ) -> int:
+        """从近期工作记忆提炼「珍贵记忆」写入语义记忆；返回写入条数。
+
+        ``generation`` 为发起时的代际令牌：在途期间会话切换则放弃写入。
+        """
         lines = []
         for item in recent_messages:
             role = item.get("role")
@@ -428,6 +443,10 @@ class ThinkEngine:
             return 0
 
         items = self._parse_distill_items(text)
+        if generation is not None and not self._generation_guard.if_current(
+            generation, "蒸馏记忆写回"
+        ):
+            return 0
         written = 0
         for item in items:
             try:

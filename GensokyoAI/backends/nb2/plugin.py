@@ -56,7 +56,12 @@ from ...core.agent.prompts import (
 )
 from ...core.health import HealthCenter
 from ...runtime.host import RuntimeHost, RuntimeRpcError
-from ...utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
+from ...utils.helpers import (
+    clean_display_text,
+    sanitize_display_name,
+    split_reply_segments,
+    strip_rp_style,
+)
 from ...utils.logger import logger
 from .commands import NB2_COMMANDS, resolve_level
 from .config import Nb2Config
@@ -158,7 +163,14 @@ async def _send_segmented(
     mention_map（本群 昵称→QQ）给定时，文本里的 `@昵称` 转成**真 at 段**
     （QQ 显示并提醒）——模型自己写的 @ 也是程序 at，不再是哑文本。
     """
-    cleaned = strip_rp_style(text) if _config.strip_rp_style else text
+    if _config.strip_rp_style:
+        report = clean_display_text(text)
+        if report.stripped:
+            # 剥离物回流：发现「模型新发明了什么格式泄漏」的遥测源
+            logger.debug(f"[nb2] 投递清洗剥除: {'、'.join(report.stripped)}")
+        cleaned = report.text
+    else:
+        cleaned = text
     if not cleaned.strip():
         logger.warning(f"[nb2] 清洗后无文本内容（原文 {len(text)} 字），跳过发送: {text[:60]!r}")
         return

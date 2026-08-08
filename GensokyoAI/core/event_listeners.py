@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
+from ..utils.helpers import clean_memory_text
 from ..utils.logger import logger
 from .events import Event, EventBus, SystemEvent
 
@@ -101,6 +102,14 @@ class CoreListeners:
         """记录助手消息到工作记忆 - 统一入口"""
         response = event.data.get("content", "")
         reasoning_content = event.data.get("reasoning_content")
+        # 记忆档保守清洗：伪说话人标签/分隔线/XML 残留等格式泄漏不进历史
+        # （模型从自己历史学到泄漏格式会回音式复读）；RP 风格内容保留
+        memory_clean = clean_memory_text(response)
+        if memory_clean.stripped:
+            logger.debug(f"记忆写入前剥除格式泄漏: {'、'.join(memory_clean.stripped)}")
+        response = memory_clean.text
+        if not response:
+            return
         # 回复对象标记（触发消息带【昵称】前缀时由 agent 附上）：与 QQ 端
         # 真实 @ 同款写法写进工作记忆帮模型归因；投递文本本体不动。
         # 模型自己开头写了 @目标 时不重复加（模仿 @ 是良性、可读的）

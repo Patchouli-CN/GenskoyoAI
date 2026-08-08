@@ -17,7 +17,12 @@ from GensokyoAI.runtime.host import RuntimeHost, RuntimeRpcError
 from GensokyoAI.runtime.resource_control import ResourceLimitError
 from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService
-from GensokyoAI.utils.helpers import sanitize_display_name, split_reply_segments, strip_rp_style
+from GensokyoAI.utils.helpers import (
+    clean_memory_text,
+    sanitize_display_name,
+    split_reply_segments,
+    strip_rp_style,
+)
 
 
 class SessionStoreTests(unittest.TestCase):
@@ -347,6 +352,37 @@ class StripRpStyleTests(unittest.TestCase):
     def test_divider_variants_removed(self):
         for divider in ("———", "===", "＝＝＝", "___"):
             self.assertEqual(strip_rp_style(f"上\n{divider}\n下"), "上\n下")
+
+
+class CleanMemoryTextTests(unittest.TestCase):
+    """记忆档保守清洗（utils.helpers.clean_memory_text）：只剥格式泄漏。"""
+
+    def test_fake_speaker_tag_removed(self):
+        report = clean_memory_text("【幽幽子】今天也很闲呢")
+        self.assertEqual(report.text, "今天也很闲呢")
+        self.assertEqual(report.stripped, ["fake_speaker_tag"])
+
+    def test_divider_removed(self):
+        self.assertEqual(clean_memory_text("旧回答\n---\n新回答").text, "旧回答\n新回答")
+
+    def test_xml_residue_removed(self):
+        report = clean_memory_text("答案是 4<get_current_time>没了")
+        self.assertEqual(report.text, "答案是 4没了")
+        self.assertEqual(report.stripped, ["xml_residue"])
+
+    def test_rp_style_kept(self):
+        # 记忆档保留 RP 风格内容（World 舞台旁白是正当格式）
+        text = "*轻摇扇子*「差不多吧」\n（看了看庭院的樱花）"
+        report = clean_memory_text(text)
+        self.assertEqual(report.text, text)
+        self.assertEqual(report.stripped, [])
+
+    def test_inline_paren_kept(self):
+        self.assertEqual(clean_memory_text("说得对（笑）").text, "说得对（笑）")
+
+    def test_report_on_clean_text(self):
+        report = clean_memory_text("普通的一句话")
+        self.assertEqual(report.stripped, [])
 
 
 class SanitizeDisplayNameTests(unittest.TestCase):

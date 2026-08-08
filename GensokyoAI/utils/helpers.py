@@ -5,7 +5,7 @@
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .path_security import sanitize_path_id
 
@@ -75,6 +75,16 @@ _FAKE_SPEAKER_PATTERN = re.compile(r"^【[^【】\r\n]{1,20}】", re.MULTILINE)
 # 独立分隔线（--- / —— / === 等）：换名复读事故的「旧文+分隔线+新答」形态
 _DIVIDER_PATTERN = re.compile(r"^\s*(?:-{3,}|—{2,}|={3,}|＝{2,}|_{3,})\s*$", re.MULTILINE)
 
+# 模型意外输出的 XML 标签残留（<get_current_time>、</think> 等协议字节）
+_XML_RESIDUE_PATTERN = re.compile(r"</?[a-z_]+[^>]*>")
+
+
+class StripReport(NamedTuple):
+    """清洗结果：text 为清洗后文本；stripped 是被剥除内容的类别标签（遥测回流）。"""
+
+    text: str
+    stripped: list[str]
+
 
 def extract_speaker_tags(text: str) -> list[str]:
     """提取行首【昵称】说话人标记（去重保序）；无标记返回空列表。
@@ -89,22 +99,61 @@ def extract_speaker_tags(text: str) -> list[str]:
     return tags
 
 
-def strip_rp_style(text: str) -> str:
-    """去除角色扮演风格标记与格式泄漏（发送前确定性清洗，不依赖模型配合）。
+def clean_display_text(text: str) -> StripReport:
+    """投递档（全量清洗）：QQ 群聊要求纯对话文本，发送前确定性清洗。
 
     - 星号动作描写（``*动作*``）与「」台词引号；
     - 整行括号舞台指示（``（环顾四周）`` / ``(waves)``；行内括注不动）；
     - 行首伪说话人标签（``【名字】`` 是适配器给入站消息的注入格式，出站带出即泄漏）；
     - 独立分隔线（``---`` 等，换名复读事故的「旧文+分隔线+新答」形态）。
-    清洗后留下的空行会被移除。
+    清洗后留下的空行会被移除。``stripped`` 记录剥除类别供遥测回流。
     """
-    cleaned = _RP_ACTION_PATTERN.sub("", text)
-    cleaned = _STAGE_DIRECTION_PATTERN.sub("", cleaned)
-    cleaned = _FAKE_SPEAKER_PATTERN.sub("", cleaned)
-    cleaned = _DIVIDER_PATTERN.sub("", cleaned)
-    cleaned = cleaned.replace("「", "").replace("」", "")
+    stripped: list[str] = []
+    cleaned = text
+    if _RP_ACTION_PATTERN.search(cleaned):
+        stripped.append("rp_action")
+        cleaned = _RP_ACTION_PATTERN.sub("", cleaned)
+    if _STAGE_DIRECTION_PATTERN.search(cleaned):
+        stripped.append("stage_direction")
+        cleaned = _STAGE_DIRECTION_PATTERN.sub("", cleaned)
+    if _FAKE_SPEAKER_PATTERN.search(cleaned):
+        stripped.append("fake_speaker_tag")
+        cleaned = _FAKE_SPEAKER_PATTERN.sub("", cleaned)
+    if _DIVIDER_PATTERN.search(cleaned):
+        stripped.append("divider")
+        cleaned = _DIVIDER_PATTERN.sub("", cleaned)
+    if "「" in cleaned or "」" in cleaned:
+        stripped.append("corner_quotes")
+        cleaned = cleaned.replace("「", "").replace("」", "")
     lines = [line.strip() for line in cleaned.splitlines()]
-    return "\n".join(line for line in lines if line)
+    return StripReport("\n".join(line for line in lines if line), stripped)
+
+
+def clean_memory_text(text: str) -> StripReport:
+    """记忆档（保守清洗）：只剥格式泄漏——伪说话人标签、独立分隔线、XML 残留。
+
+    RP 风格内容（*动作*、「」、整行括注）保留：World 舞台旁白是正当格式，
+    QQ 侧的风格问题归 OOC 判定管语义——记忆层只负责不让协议字节/格式泄漏
+    回流进历史（模型从自己历史里学到泄漏格式会回音式复读）。
+    """
+    stripped: list[str] = []
+    cleaned = text
+    if _FAKE_SPEAKER_PATTERN.search(cleaned):
+        stripped.append("fake_speaker_tag")
+        cleaned = _FAKE_SPEAKER_PATTERN.sub("", cleaned)
+    if _DIVIDER_PATTERN.search(cleaned):
+        stripped.append("divider")
+        cleaned = _DIVIDER_PATTERN.sub("", cleaned)
+    if _XML_RESIDUE_PATTERN.search(cleaned):
+        stripped.append("xml_residue")
+        cleaned = _XML_RESIDUE_PATTERN.sub("", cleaned)
+    lines = [line.strip() for line in cleaned.splitlines()]
+    return StripReport("\n".join(line for line in lines if line), stripped)
+
+
+def strip_rp_style(text: str) -> str:
+    """去除角色扮演风格标记（投递档纯文本版，兼容旧调用）。详见 clean_display_text。"""
+    return clean_display_text(text).text
 
 
 def build_world_memory_root(base_path, world_id: str, character_name: str):
