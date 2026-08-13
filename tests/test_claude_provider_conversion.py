@@ -103,6 +103,18 @@ class ClaudeProviderConversionTests(unittest.TestCase):
             [m["role"] for m in claude_messages], ["user", "user"]
         )  # 剩余 user 消息保留
 
+    def test_system_only_messages_get_fallback_user_message(self):
+        """纯 system 请求（记忆蒸馏/长期思考/OOC 重写等）被抽进顶层 system 后
+        messages 为空会 400（MiniMax anthropic 端点错误码 2013），须补一条执行指令兜底。"""
+        system, claude_messages = ClaudeProvider._convert_messages_to_claude(
+            [{"role": "system", "content": "system A"}]
+        )
+
+        self.assertEqual(system, "system A")
+        self.assertEqual(len(claude_messages), 1)
+        self.assertEqual(claude_messages[0]["role"], "user")
+        self.assertTrue(claude_messages[0]["content"])  # 兜底 user 消息内容非空
+
     def test_convert_response_preserves_tool_use_id_and_arguments(self):
         response = SimpleNamespace(
             model="claude-test",

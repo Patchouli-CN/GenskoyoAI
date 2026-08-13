@@ -33,6 +33,10 @@ from .base import BaseProvider
 if TYPE_CHECKING:
     from ...config import ModelConfig
 
+# Anthropic Messages API 要求 messages 非空（MiniMax anthropic 端点错误码 2013）：
+# 纯 system 请求被完整抽进顶层 system 字段后 messages 为空会 400，补一条中性执行指令兜底。
+_SYSTEM_ONLY_FALLBACK = "请根据系统提示完成请求。"
+
 
 class ClaudeProvider(BaseProvider):
     """
@@ -501,6 +505,12 @@ class ClaudeProvider(BaseProvider):
         flush_tool_results()
 
         system_prompt = "\n\n".join(system_parts) if system_parts else ""
+        if not claude_messages:
+            # Anthropic Messages API 要求 messages 非空：调用方只传了系统提示时
+            # （ThinkEngine 长期思考/记忆蒸馏/说话前思考、OOC 重写等纯 system 请求），
+            # 转换后 messages 为空会 400（MiniMax anthropic 端点错误码 2013），
+            # 补一条中性执行指令兜底，正文仍由顶层 system 字段承载。
+            claude_messages.append({"role": "user", "content": _SYSTEM_ONLY_FALLBACK})
         return system_prompt, claude_messages
 
     @classmethod
