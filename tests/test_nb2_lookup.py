@@ -92,6 +92,26 @@ class LookupAttentionParseTests(unittest.TestCase):
         self.assertIn("当前时间", desc)  # 描述来自真实工具定义
 
 
+class LookupResultContextTests(unittest.TestCase):
+    """注入上下文：必须直接说出具体事实，禁止「我看看」托词与幕后词。"""
+
+    def test_context_demands_concrete_fact(self):
+        from GensokyoAI.core.agent.prompts import build_lookup_result_context
+
+        ctx = build_lookup_result_context("get_current_time", "21:35:03")
+        self.assertIn("已查证", ctx)
+        self.assertIn("21:35:03", ctx)
+        self.assertIn("必须", ctx)  # 强制直接回答
+        self.assertIn("我看看", ctx)  # 明确禁止「我看看」类托词
+
+    def test_context_forbids_backstage_words(self):
+        from GensokyoAI.core.agent.prompts import build_lookup_result_context
+
+        ctx = build_lookup_result_context("get_current_dateinfo", "2026-08-13")
+        for banned in ("工具", "查询", "系统"):
+            self.assertIn(banned, ctx)  # 以「不要提」句式禁止
+
+
 class LookupAttentionDispatchTests(_LookupCase):
     """派发：经租户 ToolExecutor 执行白名单工具，注入【已查证】上下文。"""
 
