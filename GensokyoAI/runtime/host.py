@@ -273,6 +273,33 @@ class RuntimeHost:
         for func, name, parallel_safe in self._adapter_tools:
             agent.tool_registry.register(func, name=name, parallel_safe=parallel_safe)
 
+    async def execute_lookup_tool(
+        self, agent_id: str, tool_name: str, arguments: dict[str, Any]
+    ) -> str | None:
+        """注意力管线 lookup 派发：经租户 ToolExecutor 执行白名单工具。
+
+        调用方须先确保租户已装配（AttentionThings 跑在 `_generate_for_tenant`
+        之前时由插件 `_ensure_session` 提前装配）。租户未装配、工具不存在或
+        执行报错一律返回 None——注意力是增强，绝不能拖垮主回复。
+        """
+        agent = self._tenant_agent(agent_id)
+        if agent is None:
+            return None
+        tool_executor = getattr(agent, "tool_executor", None)
+        if tool_executor is None:
+            return None
+        result = await tool_executor.execute(
+            {
+                "id": "attention-lookup",
+                "name": tool_name,
+                "arguments": arguments,
+            }
+        )
+        if not isinstance(result, dict) or result.get("is_error"):
+            return None
+        content = result.get("content")
+        return content if isinstance(content, str) and content else None
+
     def get_app_config(self) -> AppConfig:
         """读取全局 AppConfig（优先取已装配租户 Agent 的配置，否则按兜底链现加载）。
 

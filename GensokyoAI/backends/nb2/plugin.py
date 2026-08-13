@@ -39,6 +39,8 @@ from ...commands import CommandContext, CommandExecutor
 from ...core.agent.attention import AttentionThings
 from ...core.agent.prompts import (
     build_jargon_attention_prompt,
+    build_lookup_attention_prompt,
+    build_lookup_result_context,
     build_member_impression_prompt,
     build_multi_speaker_context,
     build_mute_break_context,
@@ -56,6 +58,8 @@ from ...core.agent.prompts import (
 )
 from ...core.health import HealthCenter
 from ...runtime.host import RuntimeHost, RuntimeRpcError
+from ...tools.base import build_tool_definition, get_tool
+from ...tools.tool_builtin.time import get_current_dateinfo, get_current_time
 from ...utils.helpers import (
     clean_display_text,
     sanitize_display_name,
@@ -115,6 +119,31 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 _EXTRA_CONTEXTS = (
     [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
 )
+
+# 注意力 lookup（工具调用）白名单：LLM 判定只能从这些工具里选，经租户
+# ToolExecutor 执行。只登记无状态、确定性、廉价的查证类工具（当前时间/日期）；
+# 网络/写状态工具不入表，避免阻塞回复路径或污染角色状态（2026-08-13 定稿）。
+_LOOKUP_TOOLS: dict[str, Callable] = {
+    "get_current_time": get_current_time,
+    "get_current_dateinfo": get_current_dateinfo,
+}
+
+
+def _build_lookup_tools_desc() -> str:
+    """按白名单生成 judge_prompt 的工具清单（单源同步）。
+
+    优先取全局工具注册表（@tool 装饰器已登记的定义，含描述与参数 schema）；
+    注册表未填充时（工具模块未加载）回退到从函数签名现场构建，保证可用。
+    """
+    lines = []
+    for name in sorted(_LOOKUP_TOOLS):
+        tool_def = get_tool(name) or build_tool_definition(_LOOKUP_TOOLS[name])
+        params = "、".join(
+            f"{p.name}({p.type.value})" for p in tool_def.parameters.values()
+        ) or "无"
+        lines.append(f"- {name}: {tool_def.description}（参数: {params}）")
+    return "\n".join(lines) or "（无可用工具）"
+
 
 # 认主：主人专属提示词（GSK_NB2_OWNER_QQ + GSK_NB2_OWNER_PROMPT_PATH 同时配置才启用）。
 # 只对主人发言时注入——角色认出主人、对主人有专属设定/口吻，其他人看不到。
@@ -573,6 +602,58 @@ class _JargonAttentionKind:
         return {"terms": terms[:3]}
 
 
+class _LookupAttentionKind:
+    """AttentionThings 的第四个种类：工具查证（lookup）。
+
+    主模型工具纪律差时（人设优先），「现在几点」这类查询不调 get_current_time。
+    本种类判定消息是否需要调用白名单工具，命中后由代码经租户 ToolExecutor
+    确定性执行，结果注入主回复（对齐 reminder 代办哲学，不求主模型调工具）。
+
+    预筛恒真（用户 2026-08-13 定稿「恒真全交 LLM」，与 reminder/reply_focus
+    一致）；工具名必须落在 _LOOKUP_TOOLS 白名单内，表外一律判无效。
+    """
+
+    name = "lookup"
+
+    def candidate(self, text: str) -> bool:
+        return True
+
+    def judge_prompt(self, text: str) -> str:
+        return build_lookup_attention_prompt(text, _build_lookup_tools_desc())
+
+    def parse(self, raw: str) -> dict[str, Any] | None:
+        try:
+            match = _JSON_OBJECT_PATTERN.search(raw)
+            data = json.loads(match.group(0) if match else raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        tool = data.get("tool")
+        if not tool or tool not in _LOOKUP_TOOLS:
+            return None
+        arguments = data.get("arguments")
+        return {
+            "tool": tool,
+            "arguments": arguments if isinstance(arguments, dict) else {},
+        }
+
+
+async def _dispatch_lookup(verdict: Any, agent_id: str) -> str | None:
+    """把 lookup verdict 处置为注入上下文：经租户 ToolExecutor 执行白名单工具。
+
+    租户未装配/工具失败时返回 None（静默跳过，注意力是增强不能拖垮主回复）。
+    """
+    tool = verdict.data.get("tool")
+    arguments = verdict.data.get("arguments") or {}
+    result = await _require_host().execute_lookup_tool(agent_id, tool, arguments)
+    if result is None:
+        logger.debug(f"[nb2] {agent_id} 注意力 lookup 未命中或执行失败: {tool}")
+        return None
+    logger.info(f"[nb2] {agent_id} 注意力 lookup 已查证: {tool} -> {result[:40]}")
+    return build_lookup_result_context(tool, result)
+
+
 async def _dispatch_attention(
     verdict: Any, agent_id: str, sender_name: str | None = None
 ) -> str | None:
@@ -581,6 +662,8 @@ async def _dispatch_attention(
     sender_name：本轮发言者名（群聊【昵称】）——judge 没给目标人时兜底，
     否则提醒会落成「大家」无 @（2026-08-02 实机问题）。
     """
+    if verdict.kind == "lookup":
+        return await _dispatch_lookup(verdict, agent_id)
     if verdict.kind != "reminder":
         return None
     intent = verdict.data.get("intent")
@@ -627,12 +710,15 @@ async def _inspect_attention(
 ) -> tuple[list[str], list[str]]:
     """对本轮文本跑注意力管线，返回 (代办上下文, 回应焦点名单)。
 
-    私聊不跑 reply_focus（@ 无意义，省一次判定调用）。
+    私聊不跑 reply_focus（@ 无意义，省一次判定调用）；lookup（工具查证）
+    私聊同样要跑——私聊问「现在几点」同样常见。
     """
     if _attention is None:
         return [], []
     try:
-        verdicts = await _attention.inspect(text, only=None if group else {"reminder"})
+        verdicts = await _attention.inspect(
+            text, only=None if group else {"reminder", "lookup"}
+        )
     except Exception as error:
         logger.debug(f"[nb2] 注意力判定失败（忽略）: {error}")
         return [], []
@@ -888,6 +974,7 @@ async def _on_startup() -> None:
         _attention.register(_ReminderAttentionKind())
         _attention.register(_ReplyFocusAttentionKind())
         _attention.register(_jargon_kind)
+        _attention.register(_LookupAttentionKind())
     if _config.watchdog_enabled:
         # 启动期引导：10 秒宽限内协议端没连上，就直接复用掉线恢复流程拉起 NapCat
         # （不用手动先启动 NapCat；守护单 flight，与其他触发路径天然去重）
@@ -1093,6 +1180,24 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
     return session_id, revision
 
 
+async def _ensure_session(agent_id: str, key: str) -> None:
+    """幂等地确保租户会话已装配（lookup 派发需要租户 ToolExecutor）。
+
+    与 `_generate_for_tenant` 顶部同款逻辑，但已装配时直接返回；
+    RuntimeRpcError 时降级——log 后返回（lookup 本轮跳过），主生成仍按
+    `_generate_for_tenant` 原逻辑 ensure+retry，错误行为不变。
+    """
+    entry = _store.get(key)
+    if entry is not None and agent_id in _initialized:
+        return
+    try:
+        session_id, revision = await _ensure_agent(agent_id, entry)
+    except RuntimeRpcError as error:
+        logger.warning(f"[nb2] {agent_id} 注意力前置装配失败（lookup 本轮跳过）: {error}")
+        return
+    _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
+
+
 async def _chat(
     matcher: type[Matcher],
     *,
@@ -1206,6 +1311,9 @@ async def _process_batch(
     if len(batch) > 1:
         contexts.append(build_multi_speaker_context(len(batch)))
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
+    # lookup（工具查证）派发需要租户 ToolExecutor：先把租户装配提前
+    # （_generate_for_tenant 会复用已装配会话，净零 RPC 往返）
+    await _ensure_session(agent_id, key)
     # 注意力事务管线：命中待办（如提醒请求）直接代办登记并注入告知上下文
     # （目标人兜底取本轮发言者，防「大家」无 @）
     attention_notes, focus_names = await _inspect_attention(

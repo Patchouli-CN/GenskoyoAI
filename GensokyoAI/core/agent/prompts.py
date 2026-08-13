@@ -661,6 +661,43 @@ def build_reminder_preregistered_context(due_text: str, remind_name: str, conten
     )
 
 
+def build_lookup_attention_prompt(text: str, tools_desc: str) -> str:
+    """工具查证判定（AttentionThings lookup 种类的 judge_prompt）。
+
+    判定全权交给 LLM（对齐 reminder 范式）：给出白名单工具清单，让模型输出
+    需要调用的工具名（必须在清单内）+ 参数；不需要调用时 tool 为 null。
+    `tools_desc` 由插件按白名单从全局工具注册表生成，保持单源同步。
+    """
+    return (
+        "判断下面的聊天消息是否需要调用已登记的工具获取客观事实"
+        "（如当前时间、日期等）。\n"
+        "可用工具（只能从这些里选）：\n"
+        f"{tools_desc}\n"
+        "规则：\n"
+        '1. 消息确实在问这些工具能查到的客观事实（如「现在几点」「今天星期几」'
+        "「几号了」），输出对应工具名与参数（无参工具参数留空对象）；\n"
+        "2. 问的是主观意见、知识问答、其他话题，或工具清单里没有的东西"
+        "（如天气、历史、新闻），输出 null；\n"
+        "3. 看起来像就抓住，不要漏（口语、缩写都算）。\n"
+        "只输出 JSON，不要输出任何其他内容：\n"
+        '{"tool": "<工具名>" 或 null, "arguments": {"参数名": 值}}\n\n'
+        f"消息：\n{text}"
+    )
+
+
+def build_lookup_result_context(tool_name: str, result: str) -> str:
+    """工具查证结果注入（解析方：AttentionThings lookup 处置后随本轮注入 system_contexts）。
+
+    注意力管线已把客观事实查好——角色只需用人设口吻把结果说出来，
+    不得提及「工具」「查询」等幕后词（对齐 reminder 已代办上下文的口吻约束）。
+    """
+    return (
+        f"【已查证】已经查到你要的事实（{tool_name}）：{result}。"
+        "请用自己的口吻把结果自然地告诉对方（一两句话）——"
+        "**不要**提「工具」「查询」「系统」等幕后词。"
+    )
+
+
 def build_ooc_judge_prompts(
     character_name: str,
     persona_text: str,
