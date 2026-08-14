@@ -39,8 +39,6 @@ from ...commands import CommandContext, CommandExecutor
 from ...core.agent.attention import AttentionThings
 from ...core.agent.prompts import (
     build_jargon_attention_prompt,
-    build_lookup_attention_prompt,
-    build_lookup_result_context,
     build_member_impression_prompt,
     build_multi_speaker_context,
     build_mute_break_context,
@@ -601,59 +599,6 @@ class _JargonAttentionKind:
             return None
         return {"terms": terms[:3]}
 
-
-class _LookupAttentionKind:
-    """AttentionThings 的第四个种类：工具查证（lookup）。
-
-    主模型工具纪律差时（人设优先），「现在几点」这类查询不调 get_current_time。
-    本种类判定消息是否需要调用白名单工具，命中后由代码经租户 ToolExecutor
-    确定性执行，结果注入主回复（对齐 reminder 代办哲学，不求主模型调工具）。
-
-    预筛恒真（用户 2026-08-13 定稿「恒真全交 LLM」，与 reminder/reply_focus
-    一致）；工具名必须落在 _LOOKUP_TOOLS 白名单内，表外一律判无效。
-    """
-
-    name = "lookup"
-
-    def candidate(self, text: str) -> bool:
-        return True
-
-    def judge_prompt(self, text: str) -> str:
-        return build_lookup_attention_prompt(text, _build_lookup_tools_desc())
-
-    def parse(self, raw: str) -> dict[str, Any] | None:
-        try:
-            match = _JSON_OBJECT_PATTERN.search(raw)
-            data = json.loads(match.group(0) if match else raw)
-        except Exception:
-            return None
-        if not isinstance(data, dict):
-            return None
-        tool = data.get("tool")
-        if not tool or tool not in _LOOKUP_TOOLS:
-            return None
-        arguments = data.get("arguments")
-        return {
-            "tool": tool,
-            "arguments": arguments if isinstance(arguments, dict) else {},
-        }
-
-
-async def _dispatch_lookup(verdict: Any, agent_id: str) -> str | None:
-    """把 lookup verdict 处置为注入上下文：经租户 ToolExecutor 执行白名单工具。
-
-    租户未装配/工具失败时返回 None（静默跳过，注意力是增强不能拖垮主回复）。
-    """
-    tool = verdict.data.get("tool")
-    arguments = verdict.data.get("arguments") or {}
-    result = await _require_host().execute_lookup_tool(agent_id, tool, arguments)
-    if result is None:
-        logger.debug(f"[nb2] {agent_id} 注意力 lookup 未命中或执行失败: {tool}")
-        return None
-    logger.info(f"[nb2] {agent_id} 注意力 lookup 已查证: {tool} -> {result[:40]}")
-    return build_lookup_result_context(tool, result)
-
-
 async def _dispatch_attention(
     verdict: Any, agent_id: str, sender_name: str | None = None
 ) -> str | None:
@@ -662,8 +607,6 @@ async def _dispatch_attention(
     sender_name：本轮发言者名（群聊【昵称】）——judge 没给目标人时兜底，
     否则提醒会落成「大家」无 @（2026-08-02 实机问题）。
     """
-    if verdict.kind == "lookup":
-        return await _dispatch_lookup(verdict, agent_id)
     if verdict.kind != "reminder":
         return None
     intent = verdict.data.get("intent")
@@ -974,7 +917,6 @@ async def _on_startup() -> None:
         _attention.register(_ReminderAttentionKind())
         _attention.register(_ReplyFocusAttentionKind())
         _attention.register(_jargon_kind)
-        _attention.register(_LookupAttentionKind())
     if _config.watchdog_enabled:
         # 启动期引导：10 秒宽限内协议端没连上，就直接复用掉线恢复流程拉起 NapCat
         # （不用手动先启动 NapCat；守护单 flight，与其他触发路径天然去重）
