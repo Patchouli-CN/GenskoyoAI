@@ -35,14 +35,13 @@ class PromptContractTests(unittest.TestCase):
             self._assertInSource(key)
 
     def test_attention_verdict_keys(self):
-        # nb2 plugin 注意力种类解析：reply_focus / jargon / reminder / lookup
+        # nb2 plugin 注意力种类解析：reply_focus / jargon / reminder
+        # （lookup 种类及其 "tool"/"arguments" 字段已于 de17ed1 删除）
         self._assertInSource('"focus"')
         self._assertInSource('"terms"')
         self._assertInSource('"cancel"')
         self._assertInSource('"due_at"')
         self._assertInSource('"target_name"')
-        self._assertInSource('"tool"')
-        self._assertInSource('"arguments"')
 
     def test_framework_output_conventions(self):
         # 框架规则是清洗器的 prompt 侧约定（strip_rp_style 的存在前提）
