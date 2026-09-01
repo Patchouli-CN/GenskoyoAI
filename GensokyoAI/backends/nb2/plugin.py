@@ -56,8 +56,6 @@ from ...core.agent.prompts import (
 )
 from ...core.health import HealthCenter
 from ...runtime.host import RuntimeHost, RuntimeRpcError
-from ...tools.base import build_tool_definition, get_tool
-from ...tools.tool_builtin.time import get_current_dateinfo, get_current_time
 from ...utils.helpers import (
     clean_display_text,
     sanitize_display_name,
@@ -117,31 +115,6 @@ _background_tasks: set[asyncio.Task[Any]] = set()
 _EXTRA_CONTEXTS = (
     [f"【QQ 聊天场景附加要求】\n{_config.extra_prompt}"] if _config.extra_prompt else []
 )
-
-# 注意力 lookup（工具调用）白名单：LLM 判定只能从这些工具里选，经租户
-# ToolExecutor 执行。只登记无状态、确定性、廉价的查证类工具（当前时间/日期）；
-# 网络/写状态工具不入表，避免阻塞回复路径或污染角色状态（2026-08-13 定稿）。
-_LOOKUP_TOOLS: dict[str, Callable] = {
-    "get_current_time": get_current_time,
-    "get_current_dateinfo": get_current_dateinfo,
-}
-
-
-def _build_lookup_tools_desc() -> str:
-    """按白名单生成 judge_prompt 的工具清单（单源同步）。
-
-    优先取全局工具注册表（@tool 装饰器已登记的定义，含描述与参数 schema）；
-    注册表未填充时（工具模块未加载）回退到从函数签名现场构建，保证可用。
-    """
-    lines = []
-    for name in sorted(_LOOKUP_TOOLS):
-        tool_def = get_tool(name) or build_tool_definition(_LOOKUP_TOOLS[name])
-        params = "、".join(
-            f"{p.name}({p.type.value})" for p in tool_def.parameters.values()
-        ) or "无"
-        lines.append(f"- {name}: {tool_def.description}（参数: {params}）")
-    return "\n".join(lines) or "（无可用工具）"
-
 
 # 认主：主人专属提示词（GSK_NB2_OWNER_QQ + GSK_NB2_OWNER_PROMPT_PATH 同时配置才启用）。
 # 只对主人发言时注入——角色认出主人、对主人有专属设定/口吻，其他人看不到。
@@ -599,6 +572,7 @@ class _JargonAttentionKind:
             return None
         return {"terms": terms[:3]}
 
+
 async def _dispatch_attention(
     verdict: Any, agent_id: str, sender_name: str | None = None
 ) -> str | None:
@@ -653,15 +627,13 @@ async def _inspect_attention(
 ) -> tuple[list[str], list[str]]:
     """对本轮文本跑注意力管线，返回 (代办上下文, 回应焦点名单)。
 
-    私聊不跑 reply_focus（@ 无意义，省一次判定调用）；lookup（工具查证）
-    私聊同样要跑——私聊问「现在几点」同样常见。
+    私聊只跑 reminder：reply_focus 的 @ 在私聊无意义，jargon 是群黑话矿工，
+    两者都省掉一次判定调用。
     """
     if _attention is None:
         return [], []
     try:
-        verdicts = await _attention.inspect(
-            text, only=None if group else {"reminder", "lookup"}
-        )
+        verdicts = await _attention.inspect(text, only=None if group else {"reminder"})
     except Exception as error:
         logger.debug(f"[nb2] 注意力判定失败（忽略）: {error}")
         return [], []
@@ -1123,11 +1095,11 @@ async def _ensure_agent(agent_id: str, entry: dict[str, Any] | None) -> tuple[st
 
 
 async def _ensure_session(agent_id: str, key: str) -> None:
-    """幂等地确保租户会话已装配（lookup 派发需要租户 ToolExecutor）。
+    """幂等地把租户会话提前装配好，供本轮后续步骤复用。
 
-    与 `_generate_for_tenant` 顶部同款逻辑，但已装配时直接返回；
-    RuntimeRpcError 时降级——log 后返回（lookup 本轮跳过），主生成仍按
-    `_generate_for_tenant` 原逻辑 ensure+retry，错误行为不变。
+    与 `_generate_for_tenant` 顶部同款逻辑，但已装配时直接返回，因此提前调用
+    净零 RPC 往返。RuntimeRpcError 时降级——log 后返回，不上抛：装配失败留给
+    `_generate_for_tenant` 按原逻辑 ensure+retry 处置，错误行为不变。
     """
     entry = _store.get(key)
     if entry is not None and agent_id in _initialized:
@@ -1135,7 +1107,7 @@ async def _ensure_session(agent_id: str, key: str) -> None:
     try:
         session_id, revision = await _ensure_agent(agent_id, entry)
     except RuntimeRpcError as error:
-        logger.warning(f"[nb2] {agent_id} 注意力前置装配失败（lookup 本轮跳过）: {error}")
+        logger.warning(f"[nb2] {agent_id} 会话前置装配失败（留给生成路径重试）: {error}")
         return
     _store.put(key, agent_id=agent_id, session_id=session_id, revision=revision)
 
@@ -1253,8 +1225,8 @@ async def _process_batch(
     if len(batch) > 1:
         contexts.append(build_multi_speaker_context(len(batch)))
         logger.info(f"[nb2] {agent_id} 合并 {len(batch)} 条待发消息为一轮处理")
-    # lookup（工具查证）派发需要租户 ToolExecutor：先把租户装配提前
-    # （_generate_for_tenant 会复用已装配会话，净零 RPC 往返）
+    # 把租户装配提前到生成之前：失败时这里降级不抛，留给 _generate_for_tenant
+    # 的 ensure+retry 处置（会复用已装配会话，净零 RPC 往返）
     await _ensure_session(agent_id, key)
     # 注意力事务管线：命中待办（如提醒请求）直接代办登记并注入告知上下文
     # （目标人兜底取本轮发言者，防「大家」无 @）
