@@ -365,7 +365,10 @@ _NETWORK_RESOURCE_LEGACY_METHODS = frozenset(
         "rollback_session",
     }
 )
-_NETWORK_AGENT_ID_EXEMPT_METHODS = frozenset({"agent.init", "agent.list", "init", "world.init"})
+# model.list 只依赖服务端模型配置，建租户前（选模型）即可查询，不强求 agent_id
+_NETWORK_AGENT_ID_EXEMPT_METHODS = frozenset(
+    {"agent.init", "agent.list", "init", "world.init", "model.list"}
+)
 
 _MESSAGE_RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",

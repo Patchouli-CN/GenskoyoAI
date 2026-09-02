@@ -16,6 +16,8 @@
 HTTP、WebSocket 和 SSE 使用 `user_id -> agent_id -> session_id -> message_id` 资源层级。JWT 的 `sub` 是稳定 `user_id`；客户端不能提交或覆盖 `user_id`。同名 `agent_id` 和 `session_id` 在不同用户下完全隔离。
 
 - `agent.init` 与 `world.init` 可传 `agent_id`；省略时由服务生成（结果中返回）。`agent.list` 只返回当前用户的 Agent，`agent.delete` 需要 `admin`。每用户内存中同时装配的租户上限为 `resource_control.tenant_max_agents_per_user`（默认 32）：满员时 Runtime 休眠最久未活跃的租户（数据保留、再发言自动唤醒重建），全部繁忙才返回 `agent.limit_exceeded`。
+- `agent.init` 的配置覆盖参数按角色分级：`config_path`、`character_path`、`embedding_overrides` 仅 `admin` 可用；非 `admin` 可传 `model_overrides` 但仅限安全子集 `name`、`temperature`、`top_p`、`max_tokens`、`think`、`thinking_enabled`、`reasoning_effort`、`stream`，以及 `tool_overrides` 的 `enabled` 总开关；出现子集外的键（如 `provider`、`base_url`、`api_key`）返回 `authorization.forbidden`。`world.init` 不接受任何覆盖参数（非 `admin` 一律拒绝）。值合法性仍按 `ConfigValidator` 规则校验。
+- `model.list` 只依赖服务端模型配置，可省略 `agent_id` 在未装配 Agent 时查询（建会话前选模型）；传 `agent_id` 时按该租户已装配的 Agent 配置应答。
 - 网络侧 Agent / Session RPC 必须传 `agent_id`。所有对话上下文操作必须再传 `session_id`，不使用进程级“当前会话”。
 - `world.*` 多角色编排方法同样按 `user_id -> agent_id` 租户隔离；`world.send_message` / `world.send_message_stream` 必须传 `idempotency_key`（与 Agent 消息共用 `operations.json` 操作账本，账本槽位为 World 存档 id）。World 没有 session revision 概念，写操作不要求 `expected_revision`（World 回合锁已串行化）。
 - 会话写操作必须传读取时取得的 `expected_revision`。冲突返回 `session.revision_conflict`，客户端应重新读取后再合并。

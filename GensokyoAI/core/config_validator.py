@@ -149,6 +149,10 @@ class ConfigValidator:
         "timeout",
         "use_proxy",
     }
+    # 工具覆盖只开放总开关：内置工具清单与 web_search 涉及路径/出站请求，不走 overrides
+    TOOL_OVERRIDE_FIELDS = {
+        "enabled",
+    }
     DEPRECATED_FIELDS: dict[str, tuple[str, str]] = {
         "initiative_timer.fallback_on_no_schedule": (
             "initiative_timer.drive_threshold",
@@ -291,6 +295,22 @@ class ConfigValidator:
         }
         diagnostics: list[ConfigDiagnostic] = []
         self._validate_embedding_values("embedding", data, diagnostics)
+        return diagnostics
+
+    def validate_tool_overrides(self, overrides: dict[str, Any]) -> list[ConfigDiagnostic]:
+        diagnostics: list[ConfigDiagnostic] = []
+        for key, value in overrides.items():
+            if key not in self.TOOL_OVERRIDE_FIELDS or value == "":
+                continue
+            if not isinstance(value, bool):
+                diagnostics.append(
+                    self._error(
+                        f"tool.{key}",
+                        f"tool.{key} must be a boolean",
+                        "工具开关只接受 true/false。",
+                        code="config.type.bool",
+                    )
+                )
         return diagnostics
 
     @staticmethod

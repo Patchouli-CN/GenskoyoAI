@@ -82,13 +82,32 @@ from GensokyoAI.world.world import GensokyoWorld
 from .service_world import WorldOpsMixin
 
 RUNTIME_EVENT_BACKPRESSURE_DROPPED = "runtime.backpressure.dropped"
-# 非 admin 网络调用者禁止注入的自定义配置/路径参数；agent.init 与 world.init 同一道闸门
+# 非 admin 网络调用者禁止注入的自定义配置/路径参数；agent.init 对其中
+# model_overrides / tool_overrides 放行安全子集（见 _check_tenant_agent_init_gate），
+# world.init 仍整组禁止
 _TENANT_ADMIN_ONLY_PARAMS = (
     "config_path",
     "character_path",
     "model_overrides",
     "embedding_overrides",
+    "tool_overrides",
 )
+# 非 admin 在 agent.init 中可覆盖的模型字段安全子集：
+# 只放行模型名与采样/思考/流式行为，端点、密钥、代理、重试、计费类一律禁止
+_TENANT_SAFE_MODEL_OVERRIDE_KEYS = frozenset(
+    {
+        "name",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "think",
+        "thinking_enabled",
+        "reasoning_effort",
+        "stream",
+    }
+)
+# 工具覆盖只开放总开关（admin 当前同样只支持 enabled，见 TOOL_OVERRIDE_FIELDS）
+_TENANT_SAFE_TOOL_OVERRIDE_KEYS = frozenset({"enabled"})
 RUNTIME_DEPRECATED_FIELDS: tuple[dict[str, str | None], ...] = ()
 RUNTIME_COMPATIBILITY_NOTES: tuple[dict[str, str], ...] = (
     {
@@ -238,6 +257,9 @@ class RuntimeService(WorldOpsMixin):
             return await self._init_tenant_agent(principal.user_id, params)
         if method == "world.init":
             return await self._init_tenant_world(principal.user_id, params)
+        if method == "model.list" and params.get("agent_id") is None:
+            # 模型目录只依赖服务端模型配置：建租户前（选模型）允许直查 root 服务
+            return await dispatch_rpc(self, method, params)
 
         if not self._is_tenant_method(method):
             return await dispatch_rpc(self, method, params)
@@ -287,7 +309,7 @@ class RuntimeService(WorldOpsMixin):
     def _check_tenant_admin_gate(
         self, params: dict[str, Any], *, technical: str, user_message: str
     ) -> None:
-        """非 admin 网络调用者禁止注入自定义配置/路径参数（agent/world init 同一道闸门）。"""
+        """非 admin 网络调用者禁止注入自定义配置/路径参数（world.init 整组禁止）。"""
         principal = current_principal()
         if not principal.has_role("admin") and any(
             params.get(name) is not None for name in _TENANT_ADMIN_ONLY_PARAMS
@@ -298,6 +320,54 @@ class RuntimeService(WorldOpsMixin):
                 user_message=user_message,
                 recoverable=False,
                 details={"required_role": "admin"},
+            )
+
+    def _check_tenant_agent_init_gate(self, params: dict[str, Any]) -> None:
+        """agent.init 租户闸门：非 admin 只放行模型/工具覆盖的安全子集。
+
+        config_path、character_path、embedding_overrides 依旧整组禁止；
+        model_overrides 只允许 _TENANT_SAFE_MODEL_OVERRIDE_KEYS，
+        tool_overrides 只允许 enabled。值合法性仍由 ConfigValidator 在应用时校验。
+        """
+        principal = current_principal()
+        if principal.has_role("admin"):
+            return
+
+        def forbidden(technical: str, user_message: str) -> None:
+            raise RpcError(
+                technical,
+                code="authorization.forbidden",
+                user_message=user_message,
+                recoverable=False,
+                details={"required_role": "admin"},
+            )
+
+        if any(
+            params.get(name) is not None
+            for name in _TENANT_ADMIN_ONLY_PARAMS
+            if name not in ("model_overrides", "tool_overrides")
+        ):
+            forbidden(
+                "Custom Agent paths and embedding overrides require the admin role",
+                "普通聊天身份只能从服务端角色目录初始化 Agent。",
+            )
+        model_overrides = params.get("model_overrides")
+        if model_overrides is not None and (
+            not isinstance(model_overrides, dict)
+            or not set(model_overrides) <= _TENANT_SAFE_MODEL_OVERRIDE_KEYS
+        ):
+            forbidden(
+                "Non-admin model_overrides are limited to the safe sampling/thinking subset",
+                "当前身份只能调整模型名与采样、思考、流式开关，不能指定端点或密钥。",
+            )
+        tool_overrides = params.get("tool_overrides")
+        if tool_overrides is not None and (
+            not isinstance(tool_overrides, dict)
+            or not set(tool_overrides) <= _TENANT_SAFE_TOOL_OVERRIDE_KEYS
+        ):
+            forbidden(
+                "Non-admin tool_overrides only allow the enabled switch",
+                "当前身份只能开关工具总开关，不能改工具清单。",
             )
 
     async def _get_or_create_tenant_service(
@@ -337,11 +407,7 @@ class RuntimeService(WorldOpsMixin):
             return service, agent_id, key
 
     async def _init_tenant_agent(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        self._check_tenant_admin_gate(
-            params,
-            technical="Custom Agent paths and model overrides require the admin role",
-            user_message="普通聊天身份只能从服务端角色目录初始化 Agent。",
-        )
+        self._check_tenant_agent_init_gate(params)
         service, agent_id, key = await self._get_or_create_tenant_service(
             user_id, params.pop("agent_id", None)
         )
@@ -919,6 +985,7 @@ class RuntimeService(WorldOpsMixin):
         start: bool = True,
         model_overrides: dict[str, Any] | None = None,
         embedding_overrides: dict[str, Any] | None = None,
+        tool_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Initialize the Agent and prepare a session.
 
@@ -950,6 +1017,7 @@ class RuntimeService(WorldOpsMixin):
                 config.session.save_path.mkdir(parents=True, exist_ok=True)
             self._apply_model_overrides(config.model, model_overrides)
             self._apply_embedding_overrides(config.embedding, embedding_overrides)
+            self._apply_tool_overrides(config.tool, tool_overrides)
             agent = Agent(
                 config=config,
                 config_file=config_file,
@@ -1142,8 +1210,16 @@ class RuntimeService(WorldOpsMixin):
         overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return current runtime model metadata through ModelRegistryService."""
-        agent = self._require_agent()
-        config = agent.config.model
+        agent = self.state.agent
+        if agent is not None:
+            config = agent.config.model
+        else:
+            # 未装配 Agent 时按默认配置列目录：网络侧建会话前选模型走这条路
+            config = (
+                ConfigLoader()
+                .load(self._fallback_config_path(), resource_root=self.state.root_dir)
+                .model
+            )
         models = await self._model_registry.list_models(
             config,
             refresh=refresh,
@@ -2467,6 +2543,14 @@ class RuntimeService(WorldOpsMixin):
             overrides,
             ConfigValidator.EMBEDDING_OVERRIDE_FIELDS,
         )
+
+    @staticmethod
+    def _apply_tool_overrides(tool: Any, overrides: dict[str, Any] | None) -> None:
+        if not overrides:
+            return
+        validator = ConfigValidator()
+        validator.raise_for_errors(validator.validate_tool_overrides(overrides))
+        RuntimeService._apply_overrides(tool, overrides, ConfigValidator.TOOL_OVERRIDE_FIELDS)
 
     @staticmethod
     def _apply_overrides(target: Any, overrides: dict[str, Any], allowed: set[str]) -> None:

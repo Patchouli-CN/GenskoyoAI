@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from GensokyoAI.core.agent.types import ModelInfo, ProviderCapability
+from GensokyoAI.core.config import ToolConfig
 from GensokyoAI.runtime.auth import RuntimePrincipal, reset_current_principal, set_current_principal
 from GensokyoAI.runtime.rpc import RpcError
 from GensokyoAI.runtime.service import RuntimeService
@@ -122,7 +124,7 @@ async def _as_chat_user(
 
 
 def test_world_init_rejects_custom_config_for_non_admin() -> None:
-    """审计修复：world.init 与 agent.init 同一道闸门——非 admin 禁止全部自定义配置参数。"""
+    """world.init 维持整组禁止：非 admin 禁止全部自定义配置参数（含 tool_overrides）。"""
 
     async def run() -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -132,6 +134,7 @@ def test_world_init_rejects_custom_config_for_non_admin() -> None:
                 {"character_path": "char.yaml"},
                 {"model_overrides": {"model": "x"}},
                 {"embedding_overrides": {"model": "x"}},
+                {"tool_overrides": {"enabled": False}},
             ):
                 with pytest.raises(RpcError) as error:
                     await _as_chat_user(
@@ -159,6 +162,139 @@ def test_agent_init_rejects_custom_params_for_non_admin() -> None:
                     {"agent_id": "a1", "model_overrides": {"model": "x"}},
                 )
             assert error.value.code == "authorization.forbidden"
+
+    asyncio.run(run())
+
+
+_SAFE_MODEL_OVERRIDES = {
+    "name": "other-model",
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 512,
+    "think": True,
+    "thinking_enabled": True,
+    "reasoning_effort": "low",
+    "stream": True,
+}
+
+
+def test_agent_init_allows_safe_override_subset_for_chat_user() -> None:
+    """chat 身份可用安全子集：模型名/采样/思考/流式 + 工具总开关。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            with contextlib.suppress(Exception):
+                # 过了闸门后的装配失败（临时目录无配置/角色文件）属预期，
+                # 这里只关心闸门不拦安全子集
+                await _as_chat_user(
+                    service,
+                    "alice",
+                    "agent.init",
+                    {
+                        "agent_id": "a1",
+                        "model_overrides": dict(_SAFE_MODEL_OVERRIDES),
+                        "tool_overrides": {"enabled": False},
+                    },
+                )
+            # 闸门在租户创建之前：被拒就不会留下租户槽位
+            assert ("alice", "a1") in service._tenant_services
+
+    asyncio.run(run())
+
+
+def test_agent_init_rejects_unsafe_override_keys_for_chat_user() -> None:
+    """安全子集外的键（端点/密钥/代理/工具清单）非 admin 一律 authorization.forbidden。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            for forbidden_params in (
+                {"model_overrides": {"api_key": "sk-injected"}},
+                {"model_overrides": {"provider": "openai"}},
+                {"model_overrides": {"base_url": "https://gateway.invalid"}},
+                {"model_overrides": {"temperature": 0.7, "api_path": "/custom"}},
+                {"model_overrides": "not-a-dict"},
+                {"tool_overrides": {"builtin_tools": ["time"]}},
+                {"tool_overrides": {"enabled": False, "web_search": {"enabled": True}}},
+                {"tool_overrides": "yes"},
+                {"config_path": "custom.yaml"},
+                {"embedding_overrides": {"name": "embed-x"}},
+            ):
+                with pytest.raises(RpcError) as error:
+                    await _as_chat_user(
+                        service,
+                        "alice",
+                        "agent.init",
+                        {"agent_id": "a1", **forbidden_params},
+                    )
+                assert error.value.code == "authorization.forbidden"
+            assert service._tenant_services == {}
+
+    asyncio.run(run())
+
+
+def test_agent_init_admin_keeps_full_override_rights() -> None:
+    """admin 不受子集限制：端点/密钥类覆盖照常过闸门。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = RuntimeService(Path(temp_dir))
+            with contextlib.suppress(Exception):
+                await _as_user(
+                    service,
+                    "alice",
+                    "agent.init",
+                    {
+                        "agent_id": "a1",
+                        "model_overrides": {"provider": "openai", "api_key": "sk-test"},
+                        "tool_overrides": {"enabled": False},
+                    },
+                )
+            assert ("alice", "a1") in service._tenant_services
+
+    asyncio.run(run())
+
+
+def test_tool_overrides_apply_only_enabled_switch() -> None:
+    """tool_overrides 只应用 enabled：白名单外的键被忽略，非布尔值报校验错误。"""
+    config = ToolConfig()
+    RuntimeService._apply_tool_overrides(config, {"enabled": False})
+    assert config.enabled is False
+    RuntimeService._apply_tool_overrides(config, {"builtin_tools": ["moon"]})
+    assert config.builtin_tools == ["time", "moon", "memory", "system"]
+    with pytest.raises(ValueError, match="tool.enabled"):
+        RuntimeService._apply_tool_overrides(config, {"enabled": "yes"})
+
+
+class _FakeModelRegistry:
+    async def list_models(self, config, *, refresh=False, overrides=None):
+        return [
+            ModelInfo(
+                id=config.name,
+                name=config.name,
+                capabilities=[ProviderCapability.CHAT],
+                metadata={"source": "fake"},
+            )
+        ]
+
+
+def test_model_list_works_without_agent_for_chat_user() -> None:
+    """建会话前查模型目录：网络侧 model.list 不再要求 agent_id 或已装配 Agent。"""
+
+    async def run() -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "config").mkdir()
+            (root / "config" / "local.yaml").write_text(
+                "model:\n  provider: ollama\n  name: test-model\n", encoding="utf-8"
+            )
+            service = RuntimeService(root)
+            service._model_registry = _FakeModelRegistry()  # type: ignore[assignment]
+            result = await _as_chat_user(service, "alice", "model.list")
+            assert result["provider"] == "ollama"
+            assert result["model"] == "test-model"
+            assert [item["id"] for item in result["models"]] == ["test-model"]
 
     asyncio.run(run())
 
